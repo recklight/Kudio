@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/lib/
+build/bdist*/
+.eggs/
+
+# Virtual environments
+.venv/
+.venv*/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Project artifacts
+runs/
+models/
+*.log
+
+# Internal dev notes (not published)
+docs/V3_CHANGES.md

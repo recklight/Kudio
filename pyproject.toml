@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Kudio"
+description = "Audio toolkit for industrial acoustic inspection: I/O, streaming, feature extraction, noisy-data synthesis, enhancement and evaluation."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE.txt"]
+authors = [{ name = "RL", email = "recognizer.light@gmail.com" }]
+keywords = ["audio", "acoustic", "signal-processing", "speech-enhancement"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Scientific/Engineering",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dynamic = ["version"]
+# Core stays light: numpy + soundfile + librosa cover I/O and features.
+# Heavy or niche deps (plotting, dataframes, metrics, live audio) are extras.
+dependencies = [
+    "numpy>=1.24,<2.5",  # numba (via librosa) does not support numpy 2.5 yet
+    "scipy>=1.10",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "PyYAML>=6.0",
+    "tqdm>=4.60",
+    "PyWavelets>=1.4",
+]
+
+[project.optional-dependencies]
+audio = ["PyAudio>=0.2.13", "sounddevice>=0.4.5"]     # live capture / playback
+eval = ["mir_eval>=0.7", "pystoi>=0.3.3", "pysepm>=0.1"]  # PESQ / STOI / SDR
+viz = ["matplotlib>=3.7"]                              # plotting helpers
+data = ["pandas>=2.0", "openpyxl>=3.1"]                # Excel / dataframe export
+all = ["kudio[audio,eval,viz,data]"]
+dev = ["pytest>=7.0", "kudio[data]"]   # [data] lets the full test suite run
+
+[project.scripts]
+kudio = "kudio.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/recklight/kudio"
+Repository = "https://github.com/recklight/kudio"
+Issues = "https://github.com/recklight/kudio/issues"
+Changelog = "https://github.com/recklight/kudio/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = { attr = "kudio._version.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["kudio*"]
+
+[tool.setuptools.package-data]
+kudio = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
