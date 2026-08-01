@@ -4,6 +4,16 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-07-11
+
+### Fixed
+- Packaging: removed `pysepm` from the `[eval]` extra. `pysepm` is not
+  published on PyPI, so `pip install kudio[eval]` / `kudio[all]` failed to
+  resolve. PESQ is now documented as an optional manual install
+  (`pip install https://github.com/schmiph2/pysepm/archive/master.zip`);
+  `[eval]` keeps `mir_eval` + `pystoi` (STOI/SDR), which the code already
+  degrades around when PESQ is absent.
+
 ## [3.0.0] - 2026-07-11
 
 Major cleanup release: focus kudio into a lightweight, composable audio core.

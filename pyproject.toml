@@ -40,11 +40,13 @@ dependencies = [
 
 [project.optional-dependencies]
 audio = ["PyAudio>=0.2.13", "sounddevice>=0.4.5"]     # live capture / playback
-eval = ["mir_eval>=0.7", "pystoi>=0.3.3", "pysepm>=0.1"]  # PESQ / STOI / SDR
+eval = ["mir_eval>=0.7", "pystoi>=0.3.3"]  # STOI / SDR (PESQ: see note below)
 viz = ["matplotlib>=3.7"]                              # plotting helpers
 data = ["pandas>=2.0", "openpyxl>=3.1"]                # Excel / dataframe export
 all = ["kudio[audio,eval,viz,data]"]
 dev = ["pytest>=7.0", "kudio[data]"]   # [data] lets the full test suite run
+# PESQ back-end (pysepm) is not on PyPI; install it manually if you need PESQ:
+#   pip install https://github.com/schmiph2/pysepm/archive/master.zip
 
 [project.scripts]
 kudio = "kudio.cli:main"
