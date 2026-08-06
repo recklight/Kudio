@@ -132,6 +132,27 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
         raise AudioIOError(f"Could not load audio file: {wav_dir} ({e})") from e
 
 
+def resample(y: np.ndarray, orig_sr: int, target_sr: int,
+             res_type: str = 'soxr_hq') -> np.ndarray:
+    """Resample a waveform already in memory.
+
+    The in-memory counterpart of ``file_load(..., sr=target_sr)``, which can
+    only resample on the way in from disk. Returns *y* untouched when the rates
+    already match, so it is safe to call unconditionally.
+
+    >>> y16 = kudio.resample(y8, orig_sr=8000, target_sr=16000)
+    """
+    if orig_sr <= 0 or target_sr <= 0:
+        raise ValueError(f"sample rates must be > 0, got {orig_sr} -> {target_sr}")
+    y = np.asarray(y)
+    if orig_sr == target_sr or y.size == 0:
+        return y
+    import librosa
+    out = librosa.resample(y.astype(np.float32), orig_sr=orig_sr,
+                           target_sr=target_sr, res_type=res_type)
+    return out.astype(y.dtype, copy=False)
+
+
 def load_wave(wave, num: Optional[int] = None):
     """Load one wave file or a list of them into ``(waveform, sr)`` tuples."""
     info = wave if num is None else wave[num]

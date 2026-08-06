@@ -39,6 +39,10 @@ def record(seconds: float, sr: int = 16000, channels: int = 1,
 
     Returns float32 samples, shape ``(n,)`` for mono else ``(n, channels)``.
     Requires ``kudio[audio]``.
+
+    *device* is a **sounddevice** index — get one from
+    :func:`kudio.list_devices`, not from :class:`kudio.CheckDevice`, which
+    numbers devices through PyAudio for the streaming classes.
     """
     try:
         import sounddevice as sd

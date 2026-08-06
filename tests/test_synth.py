@@ -65,3 +65,64 @@ def test_bad_inputs(clean_noise_dirs, tmp_path):
     syx = Synthesizer(clean, noise, out_path=str(tmp_path / "x"), snr_ratio=[0])
     with pytest.raises(ValueError):
         syx.syn(mode='bogus')
+
+
+# -- sample-rate handling ------------------------------------------------------
+
+def _corpus(tmp_path, clean_sr: int, noise_sr: int):
+    """Clean and noise folders written at explicitly different rates."""
+    from conftest import make_sine, write_wav
+
+    clean = tmp_path / "c"
+    noise = tmp_path / "n"
+    clean.mkdir()
+    noise.mkdir()
+    write_wav(clean / "a.wav", make_sine(220, 1.0, clean_sr), clean_sr)
+    write_wav(noise / "w.wav", make_sine(1000, 1.0, noise_sr), noise_sr)
+    return clean, noise
+
+
+def _rates(out_dir):
+    import soundfile as sf
+    return {sf.info(str(f)).samplerate for f in out_dir.rglob("*.wav")}
+
+
+def test_syn_keeps_the_source_sample_rate(tmp_path):
+    """Default output rate follows the clean file, not a hard-coded 16 kHz."""
+    clean, noise = _corpus(tmp_path, clean_sr=8000, noise_sr=8000)
+    out = tmp_path / "mixed"
+    Synthesizer(clean, noise, out_path=str(out), snr_ratio=[0]).syn(mode='reg')
+
+    assert _rates(out) == {8000}
+
+
+def test_syn_target_sr_resamples(tmp_path):
+    clean, noise = _corpus(tmp_path, clean_sr=8000, noise_sr=8000)
+    out = tmp_path / "mixed"
+    Synthesizer(clean, noise, out_path=str(out), snr_ratio=[0]).syn(
+        mode='reg', target_sr=16000)
+
+    assert _rates(out) == {16000}
+
+
+def test_syn_resamples_noise_to_match_clean(tmp_path):
+    """A noise file at a different rate must not be mixed in as-is."""
+    clean, noise = _corpus(tmp_path, clean_sr=8000, noise_sr=44100)
+    out = tmp_path / "mixed"
+    result = Synthesizer(clean, noise, out_path=str(out), snr_ratio=[0]).syn(mode='reg')
+
+    assert result
+    assert _rates(out) == {8000}
+    y, sr = file_load(next(out.rglob("*.wav")))
+    assert sr == 8000
+    assert np.isfinite(y).all()
+
+
+def test_desired_sample_still_works_but_warns(tmp_path):
+    clean, noise = _corpus(tmp_path, clean_sr=8000, noise_sr=8000)
+    out = tmp_path / "mixed"
+    syx = Synthesizer(clean, noise, out_path=str(out), snr_ratio=[0])
+
+    with pytest.deprecated_call():
+        syx.syn(mode='reg', desired_sample=16000)
+    assert _rates(out) == {16000}

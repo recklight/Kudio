@@ -82,3 +82,62 @@ def test_copy_waves_and_load_audio(wav_dir, tmp_path):
     copy_waves(dst, sorted(wav_dir.glob("*.wav")))
     la = LoadAudio(dst)
     assert len(la) == 3
+
+
+# -- in-memory resampling -------------------------------------------------------
+
+def test_resample_changes_the_length_proportionally():
+    from kudio import resample
+    from conftest import make_sine
+
+    y = make_sine(seconds=1.0, sr=8000)
+    up = resample(y, 8000, 16000)
+
+    assert abs(len(up) - 2 * len(y)) <= 1
+
+
+def test_resample_is_a_noop_at_the_same_rate():
+    from kudio import resample
+    from conftest import make_sine
+
+    y = make_sine(seconds=0.1)
+    assert resample(y, 16000, 16000) is y
+
+
+def test_resample_preserves_the_tone():
+    """A 440 Hz sine stays 440 Hz after a rate change."""
+    import numpy as np
+    from kudio import resample
+    from conftest import make_sine
+
+    y = make_sine(freq=440.0, seconds=0.5, sr=16000)
+    out = resample(y, 16000, 8000)
+
+    spectrum = np.abs(np.fft.rfft(out))
+    peak_hz = np.fft.rfftfreq(len(out), 1 / 8000)[int(np.argmax(spectrum))]
+    assert abs(peak_hz - 440.0) < 10.0
+
+
+def test_resample_matches_load_time_resampling(tmp_path):
+    import numpy as np
+    from kudio import file_load, resample
+    from conftest import make_sine, write_wav
+
+    p = tmp_path / "tone.wav"
+    write_wav(p, make_sine(seconds=0.5, sr=16000), sr=16000)
+
+    native, sr = file_load(p)
+    on_load, _ = file_load(p, sr=8000)
+    in_memory = resample(native, sr, 8000)
+
+    n = min(len(on_load), len(in_memory))
+    assert np.corrcoef(on_load[:n], in_memory[:n])[0, 1] > 0.99
+
+
+def test_resample_rejects_bad_rates():
+    import numpy as np
+    import pytest
+    from kudio import resample
+
+    with pytest.raises(ValueError, match="sample rates must be > 0"):
+        resample(np.zeros(10, dtype=np.float32), 0, 16000)

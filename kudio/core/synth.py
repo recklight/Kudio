@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import warnings
 from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
@@ -64,7 +65,8 @@ class Synthesizer:
 
         self.synWavesList: Optional[list] = None
         self.clean_dir_ = clean
-        self.desired_sample: Optional[int] = None
+        #: target output rate; ``None`` keeps each clean file's own rate
+        self.target_sr: Optional[int] = None
 
     def wave_input(self):
         return self.cleanWaves, self.noiseWaves
@@ -86,6 +88,7 @@ class Synthesizer:
             is_pool: bool = False,
             is_silence: bool = False,
             p_silence: float = 0.02,
+            target_sr: Optional[int] = None,
             desired_sample: Optional[int] = None,
             seed: Optional[int] = None) -> Optional[list]:
         """Generate the noisy dataset.
@@ -94,11 +97,22 @@ class Synthesizer:
         (output count == clean count). mode ``'inc'``/``'increment'``: full
         cartesian product clean x noise x SNR.
 
+        :param target_sr: resample the mixture to this rate. ``None`` (the
+            default) keeps each clean file's own rate; the noise is always
+            resampled to match its clean partner.
+        :param desired_sample: deprecated alias for *target_sr*.
         :param seed: seed the RNG for reproducible noise cropping / sampling.
         """
         if seed is not None:
             np.random.seed(seed)
-        self.desired_sample = desired_sample
+        if desired_sample is not None:
+            warnings.warn(
+                "Synthesizer.syn(desired_sample=...) is deprecated and will be "
+                "removed in a future release; use target_sr=... instead.",
+                DeprecationWarning, stacklevel=2)
+            if target_sr is None:
+                target_sr = desired_sample
+        self.target_sr = target_sr
         log.info("==== Audio synthesizing ====")
         if self.noisyDir.is_dir() and any(self.noisyDir.iterdir()):
             if overwrite:
@@ -203,7 +217,7 @@ class Synthesizer:
         return self.synWavesList
 
     def __syn_pool(self, is_pool: bool, is_silence: bool, p_silence: float = 0.02) -> None:
-        sr_ = self.desired_sample if self.desired_sample else 16000
+        sr_ = self.target_sr          # None -> keep each clean file's own rate
 
         if is_silence and 0 < p_silence < 1:
             # duplicate a random p_silence share as noise-only "silence" class
@@ -226,7 +240,7 @@ class Synthesizer:
                 Synthesizer.syn_waves(wave, is_silence, sr_)
 
     @staticmethod
-    def syn_waves(synWavesList, isSilence: bool, d_sr_: int,
+    def syn_waves(synWavesList, isSilence: bool, target_sr: Optional[int],
                   num: Optional[int] = None) -> None:
         """Mix one ``(save_dir, clean_file, noise_file, snr)`` entry to disk.
 
@@ -235,8 +249,11 @@ class Synthesizer:
         """
         save_dir, clean_file, noise_file, snr = \
             synWavesList if num is None else synWavesList[num]
-        y_clean, sr_clean = librosa.load(str(clean_file), sr=d_sr_)
-        y_noise, _ = librosa.load(str(noise_file), sr=d_sr_)
+        # target_sr=None keeps the clean file's native rate; the noise is then
+        # resampled to whatever the clean file turned out to be, so the two are
+        # never mixed at different rates
+        y_clean, sr_clean = librosa.load(str(clean_file), sr=target_sr)
+        y_noise, _ = librosa.load(str(noise_file), sr=sr_clean)
 
         clean_pwr = np.sum(np.abs(y_clean) ** 2) / len(y_clean)
         if len(y_noise) < len(y_clean):
