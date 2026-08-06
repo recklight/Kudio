@@ -3,6 +3,8 @@
 from kudio.effects.augment import (
     add_noise_snr,
     gain,
+    normalize,
+    normalize_db,
     pitch_shift,
     random_gain,
     reverb,
@@ -16,5 +18,6 @@ __all__ = [
     'trim_silence', 'split_on_silence',
     # augment
     'time_stretch', 'pitch_shift', 'gain', 'random_gain',
+    'normalize', 'normalize_db',
     'add_noise_snr', 'reverb', 'spec_augment',
 ]

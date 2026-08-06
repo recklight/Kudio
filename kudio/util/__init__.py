@@ -7,7 +7,12 @@ kudio`` stays free of matplotlib / pandas:
 * plotting  -> ``kudio.util.visual``   (needs ``kudio[viz]``)
 * Excel/DF  -> ``kudio.util.conv``     (needs ``kudio[data]``)
 """
-from kudio.util.check import CheckDevice, check_device, is_available
+from kudio.util.check import (
+    CheckDevice,
+    check_device,
+    is_available,
+    list_devices,
+)
 from kudio.util.colors import (
     blu,
     color_test,
@@ -35,7 +40,7 @@ from kudio.util.tools import Timer, find_duplicate, timer
 
 __all__ = [
     # check
-    'CheckDevice', 'check_device', 'is_available',
+    'CheckDevice', 'check_device', 'is_available', 'list_devices',
     # colors
     'blu', 'color_test', 'cya', 'dkblu', 'dkcya', 'dkgre', 'dkpur', 'dkred',
     'dkyel', 'error', 'fGre', 'fRed', 'gre', 'h1', 'info', 'pur', 'red',

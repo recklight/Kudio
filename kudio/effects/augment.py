@@ -13,6 +13,7 @@ import numpy as np
 
 __all__ = [
     'time_stretch', 'pitch_shift', 'gain', 'random_gain',
+    'normalize', 'normalize_db',
     'add_noise_snr', 'reverb', 'spec_augment',
 ]
 
@@ -32,6 +33,32 @@ def pitch_shift(y: np.ndarray, sr: int, n_steps: float) -> np.ndarray:
 def gain(y: np.ndarray, db: float) -> np.ndarray:
     """Apply a fixed gain in decibels."""
     return (y * (10.0 ** (db / 20.0))).astype(y.dtype)
+
+
+def normalize(y: np.ndarray, peak: float = 0.99) -> np.ndarray:
+    """Scale so the loudest sample sits at *peak*.
+
+    Silence is returned unchanged rather than divided by zero — the guard
+    everyone writes inline and someone eventually forgets.
+    """
+    if peak <= 0:
+        raise ValueError(f"peak must be > 0, got {peak}")
+    y = np.asarray(y)
+    current = float(np.max(np.abs(y))) if y.size else 0.0
+    if current == 0.0:
+        return y.copy()
+    return (y * (peak / current)).astype(y.dtype)
+
+
+def normalize_db(y: np.ndarray, dbfs: float = -1.0) -> np.ndarray:
+    """Scale so the peak sits at *dbfs* decibels below full scale.
+
+    ``normalize_db(y, -1.0)`` is ``normalize(y, 10 ** (-1 / 20))``; use
+    whichever unit the rest of the pipeline speaks.
+    """
+    if dbfs > 0:
+        raise ValueError(f"dbfs must be <= 0 (full scale), got {dbfs}")
+    return normalize(y, peak=10.0 ** (dbfs / 20.0))
 
 
 def random_gain(y: np.ndarray, db_range: Tuple[float, float] = (-6.0, 6.0),

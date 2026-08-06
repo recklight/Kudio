@@ -4,6 +4,7 @@ and evaluation."""
 from kudio.core.buffer import AudioBuffer, FetchBuffer
 from kudio.core.evaluator import (
     AudioEvaluate,
+    check_metrics_install,
     eval_metrics,
     segmental_snr,
     si_sdr,
@@ -11,16 +12,19 @@ from kudio.core.evaluator import (
 )
 from kudio.core.feature import (
     # canonical (v3)
+    Standardizer,
     denoise_spec2wav,
     denoise_wav2spec,
     features2matrix,
     file_to_spectrogram,
+    frame_windows,
     logspec_from_files,
     melspectrogram,
     mfcc,
     mfcc_from_files,
     save_spectrogram_as_wave,
     spectrogram_to_waveform,
+    stack_context,
     waveform_to_spectrogram,
     wave_separate,
     wave_slicing,
@@ -49,10 +53,12 @@ from kudio.core.io import (
     copy_waves,
     file_load,
     load_wave,
+    resample,
     load_waves,
     save_wave,
 )
 from kudio.core.manager import AudioDataManager
+from kudio.core.stft import STFT
 from kudio.core.stream import (
     LocalStreamReader,
     Recorder,
@@ -68,8 +74,10 @@ __all__ = [
     # buffer
     'AudioBuffer', 'FetchBuffer',
     # evaluator + lightweight metrics
-    'AudioEvaluate', 'eval_metrics', 'si_sdr', 'snr', 'segmental_snr',
+    'AudioEvaluate', 'check_metrics_install', 'eval_metrics', 'si_sdr', 'snr',
+    'segmental_snr',
     # feature (canonical)
+    'STFT', 'Standardizer', 'stack_context', 'frame_windows',
     'denoise_spec2wav', 'denoise_wav2spec', 'features2matrix',
     'file_to_spectrogram', 'logspec_from_files', 'melspectrogram', 'mfcc',
     'mfcc_from_files', 'save_spectrogram_as_wave', 'spectrogram_to_waveform',
@@ -80,7 +88,7 @@ __all__ = [
     'w2mfcc', 'w2s', 'wav2mel', 'wav2mfcc', 'wav2spec', 'wavform2spec',
     # io
     'LoadAudio', 'check_file', 'check_input', 'check_path', 'copy_waves',
-    'file_load', 'load_wave', 'load_waves', 'save_wave',
+    'file_load', 'resample', 'load_wave', 'load_waves', 'save_wave',
     # manager
     'AudioDataManager',
     # stream

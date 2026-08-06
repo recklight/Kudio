@@ -56,10 +56,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     import kudio
 
     if args.command == "devices":
-        with kudio.CheckDevice() as cd:
-            for d in cd.system_devices():
-                print(f"[{d['index']:>2}] in={d['in']} out={d['out']} "
-                      f"fs={int(d['fs'])}  {d['Device']}")
+        # the two backends number devices independently, so print both spaces
+        # rather than let an index from one be pasted into the other
+        print("sounddevice indices — use with kudio.record(device=...)")
+        try:
+            for d in kudio.list_devices():
+                print(f"  [{d['index']:>2}] in={d['max_input_channels']} "
+                      f"out={d['max_output_channels']} "
+                      f"fs={int(d['default_samplerate'])}  {d['name']}")
+        except Exception as e:
+            print(f"  unavailable: {e}")
+
+        print("\nPyAudio indices — use with kudio.Recorder / stream readers")
+        try:
+            with kudio.CheckDevice() as cd:
+                for d in cd.system_devices():
+                    print(f"  [{d['index']:>2}] in={d['in']} out={d['out']} "
+                          f"fs={int(d['fs'])}  {d['Device']}")
+        except Exception as e:
+            print(f"  unavailable: {e}")
     elif args.command == "info":
         y, sr = kudio.file_load(args.file, sr=None, mono=False)
         ch = 1 if y.ndim == 1 else y.shape[1]

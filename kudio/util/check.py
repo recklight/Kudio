@@ -11,10 +11,51 @@ from kudio.util.tools import timer
 __all__ = [
     'is_available',
     'check_device',
+    'list_devices',
     'CheckDevice',
 ]
 
 log = logging.getLogger(__name__)
+
+
+def list_devices(kind: Optional[str] = None) -> List[dict]:
+    """Devices as **sounddevice** sees them.
+
+    This is the index space :func:`kudio.record` accepts. It is *not* the same
+    numbering as :class:`CheckDevice`, which enumerates through PyAudio for the
+    streaming/recorder classes — PortAudio's two Python bindings index devices
+    independently, so an index from one must never be passed to the other.
+
+    :param kind: ``'input'``, ``'output'``, or ``None`` for every device.
+    :returns: ``[{'index', 'name', 'max_input_channels',
+        'max_output_channels', 'default_samplerate'}, ...]``
+
+    >>> [d['name'] for d in kudio.list_devices('input')]        # doctest: +SKIP
+    """
+    if kind not in (None, 'input', 'output'):
+        raise ValueError(f"kind must be 'input', 'output' or None, got {kind!r}")
+    try:
+        import sounddevice as sd
+    except ImportError as e:
+        from kudio.exceptions import DependencyError
+        raise DependencyError('sounddevice', extra='audio') from e
+
+    devices = []
+    for index, info_ in enumerate(sd.query_devices()):
+        inputs = int(info_.get('max_input_channels', 0))
+        outputs = int(info_.get('max_output_channels', 0))
+        if kind == 'input' and inputs < 1:
+            continue
+        if kind == 'output' and outputs < 1:
+            continue
+        devices.append({
+            'index': index,
+            'name': info_.get('name', ''),
+            'max_input_channels': inputs,
+            'max_output_channels': outputs,
+            'default_samplerate': float(info_.get('default_samplerate', 0.0)),
+        })
+    return devices
 
 
 def _pyaudio():

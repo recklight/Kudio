@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import numpy as np
+import pytest
 
 from kudio import (
     add_noise_snr,
@@ -79,3 +80,54 @@ def test_spec_augment_masks():
     assert masked.shape == spec.shape
     # at least some values were zeroed
     assert np.count_nonzero(masked == 0.0) >= np.count_nonzero(spec == 0.0)
+
+
+# -- normalisation --------------------------------------------------------------
+
+def test_normalize_scales_the_peak():
+    from kudio import normalize
+
+    y = np.array([0.1, -0.2, 0.05], dtype=np.float32)
+    out = normalize(y, peak=0.99)
+
+    assert np.isclose(np.max(np.abs(out)), 0.99)
+    # shape of the signal is untouched, only its scale
+    assert np.allclose(out / np.max(np.abs(out)), y / np.max(np.abs(y)))
+
+
+def test_normalize_leaves_silence_alone():
+    from kudio import normalize
+
+    silence = np.zeros(16, dtype=np.float32)
+    out = normalize(silence)
+
+    assert np.allclose(out, 0.0)
+    assert out is not silence          # still a copy, like every other effect
+
+
+def test_normalize_handles_an_empty_array():
+    from kudio import normalize
+
+    assert normalize(np.array([], dtype=np.float32)).size == 0
+
+
+def test_normalize_rejects_a_bad_peak():
+    from kudio import normalize
+
+    with pytest.raises(ValueError, match="peak must be > 0"):
+        normalize(np.ones(4, dtype=np.float32), peak=0.0)
+
+
+def test_normalize_db_matches_normalize():
+    from kudio import normalize, normalize_db
+
+    y = np.array([0.3, -0.6, 0.1], dtype=np.float32)
+    assert np.allclose(normalize_db(y, -1.0), normalize(y, 10 ** (-1 / 20)))
+    assert np.isclose(np.max(np.abs(normalize_db(y, 0.0))), 1.0)
+
+
+def test_normalize_db_rejects_positive_dbfs():
+    from kudio import normalize_db
+
+    with pytest.raises(ValueError, match="dbfs must be <= 0"):
+        normalize_db(np.ones(4, dtype=np.float32), dbfs=3.0)
