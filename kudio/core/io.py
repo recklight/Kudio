@@ -117,6 +117,10 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
     ``sr=None`` keeps the file's native sample rate and reads via soundfile
     (fast, no librosa/numba needed). A requested ``sr`` triggers a resample
     through librosa.
+
+    Multi-channel audio (``mono=False``) comes back **channels last**, shaped
+    ``(frames, channels)`` -- the layout soundfile uses and the one
+    :func:`kudio.loudness` expects.
     """
     try:
         if sr is None:
@@ -127,7 +131,14 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
         # resampling path (heavier)
         import librosa
         y, rate = librosa.load(str(wav_dir), sr=sr, mono=mono)
-        return np.asarray(y, dtype=np.float32), int(rate)
+        if y.ndim > 1:
+            # librosa hands back (channels, frames); the rest of kudio -- and
+            # the sr=None branch above -- speak (frames, channels). Two layouts
+            # from one function, chosen by an unrelated argument, is exactly
+            # the kind of thing nobody notices until a model is training on
+            # transposed audio.
+            y = y.T
+        return np.ascontiguousarray(y, dtype=np.float32), int(rate)
     except Exception as e:
         raise AudioIOError(f"Could not load audio file: {wav_dir} ({e})") from e
 
