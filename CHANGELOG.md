@@ -4,6 +4,66 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-08-15
+
+Two things a recording can be asked about without anything to compare it to:
+**how loud does this sound**, and **is this usable at all**. Neither had an
+answer in kudio before — `normalize` scales by the peak sample, and every
+quality metric needs the clean signal beside the degraded one.
+
+### Added
+- **`loudness(y, sr)`** — gated integrated loudness to **ITU-R BS.1770-4**, in
+  LUFS. `normalize` and `normalize_db` scale by the *peak* sample, which says
+  nothing about how loud something sounds: a clip with one stray transient
+  peak-normalises to a whisper. Nothing in kudio could answer "how loud is this
+  to a listener" until now.
+- **`normalize_lufs(y, sr, lufs=-23.0)`** — normalise to a loudness target
+  (-23 LUFS is EBU R 128). Logs a warning rather than silently limiting when
+  the gain would push the signal past full scale.
+- **`match_loudness(y, reference, sr, reference_sr=None)`** — scale one clip to
+  another's loudness. **An A/B comparison is not valid until this has been
+  done**: of two versions of a clip, the louder is reliably preferred whatever
+  its quality, so an unmatched comparison partly measures level. Handles the
+  two sides being at different sample rates, since loudness is a property of
+  the sound rather than of the sampling.
+
+The standard publishes its K-weighting coefficients at 48 kHz only, and the
+textbook shelf/high-pass equations do not reproduce them. The filters are
+instead carried to the s-plane and re-discretised at the requested rate through
+a prewarped bilinear transform: exact at 48 kHz by construction, within
+0.06 dB of the reference curve at 16 kHz and 0.21 dB at 8 kHz. Cross-checked
+against `pyloudnorm` — worst disagreement 0.043 LU across 8/16/44.1/48 kHz —
+by a test that runs whenever that package happens to be installed. It is **not**
+a dependency; this is numpy and scipy only.
+
+- **`audio_report(y, sr)` → `AudioReport`** — the measurements you can make
+  with **no clean reference**. Every existing metric (SNR, SI-SDR, PESQ, STOI)
+  needs the clean signal next to the degraded one; synthetic datasets have
+  that, real recordings never do. Reports level, true clipping, DC offset,
+  silence ratio, noise floor, an SNR estimate and the bandwidth the content
+  really occupies, plus `.problems()` — the findings in plain words.
+
+  Two details worth knowing. **Clipping is a flat top, not a big number**:
+  float audio amplified past 1.0 still traces its waveform and has lost
+  nothing, so it gets a separate, weaker warning than a run of samples pinned
+  at the rail. And **band-limit detection catches upsampled files** — a clip
+  labelled 16 kHz whose content stops at 3.8 kHz is 8 kHz audio wearing a
+  bigger number, which quietly wastes half a dataset. Audio recorded at its
+  stated rate has a noise floor spanning the whole band and reaches Nyquist;
+  upsampled audio has nothing above the old one.
+
+### Fixed
+- **`file_load(mono=False)` returned two different channel layouts.** The
+  `sr=None` branch reads through soundfile and gave `(frames, channels)`; the
+  resampling branch goes through librosa and gave `(channels, frames)`. The
+  layout therefore depended on whether you happened to ask for a resample, and
+  nothing said so. Both now return **channels last**, matching soundfile and
+  what `loudness()` expects.
+
+  Mono loading — the default, and almost all use — is unaffected. If you were
+  loading multi-channel audio *with* an explicit `sr`, you were getting
+  `(channels, frames)` and will now get its transpose.
+
 ## [3.2.0] - 2026-08-06
 
 Building two packages on top of kudio surfaced a set of helpers that each of

@@ -57,7 +57,9 @@ from kudio.core.io import (
     load_waves,
     save_wave,
 )
+from kudio.core.loudness import loudness, match_loudness, normalize_lufs
 from kudio.core.manager import AudioDataManager
+from kudio.core.report import AudioReport, audio_report
 from kudio.core.stft import STFT
 from kudio.core.stream import (
     LocalStreamReader,
@@ -89,6 +91,10 @@ __all__ = [
     # io
     'LoadAudio', 'check_file', 'check_input', 'check_path', 'copy_waves',
     'file_load', 'resample', 'load_wave', 'load_waves', 'save_wave',
+    # loudness (BS.1770)
+    'loudness', 'match_loudness', 'normalize_lufs',
+    # reference-free inspection
+    'AudioReport', 'audio_report',
     # manager
     'AudioDataManager',
     # stream

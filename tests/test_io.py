@@ -141,3 +141,54 @@ def test_resample_rejects_bad_rates():
 
     with pytest.raises(ValueError, match="sample rates must be > 0"):
         resample(np.zeros(10, dtype=np.float32), 0, 16000)
+
+
+def test_stereo_comes_back_channels_last_on_both_paths(tmp_path):
+    """The two branches of file_load must not disagree about the layout.
+
+    ``sr=None`` reads through soundfile, a requested rate goes through librosa,
+    and the two libraries have opposite conventions. Picking the branch by an
+    unrelated argument must not transpose the audio.
+    """
+    import numpy as np
+    import soundfile as sf
+    from kudio import file_load
+
+    sr = 16000
+    t = np.arange(sr, dtype=np.float32) / sr
+    left = 0.5 * np.sin(2 * np.pi * 220 * t)
+    right = 0.5 * np.sin(2 * np.pi * 880 * t)          # a different tone
+    path = tmp_path / "stereo.wav"
+    sf.write(str(path), np.stack([left, right], axis=1), sr)
+
+    native, native_sr = file_load(path, mono=False)
+    resampled, out_sr = file_load(path, sr=8000, mono=False)
+
+    assert native.shape == (sr, 2)
+    assert resampled.shape == (8000, 2)
+    assert native_sr == sr and out_sr == 8000
+
+    # and the channels really are in the same order, not swapped by the
+    # transpose: channel 0 is the low tone on both paths
+    for data, rate in ((native, native_sr), (resampled, out_sr)):
+        spectrum = np.abs(np.fft.rfft(data, axis=0))
+        peaks = np.fft.rfftfreq(data.shape[0], 1 / rate)[np.argmax(spectrum, axis=0)]
+        assert peaks[0] < peaks[1]
+        assert abs(peaks[0] - 220) < 5
+
+
+def test_mono_downmix_is_unaffected_by_the_layout_fix(tmp_path):
+    import numpy as np
+    import soundfile as sf
+    from kudio import file_load
+
+    sr = 16000
+    data = np.stack([np.ones(sr, dtype=np.float32) * 0.5,
+                     np.ones(sr, dtype=np.float32) * 0.1], axis=1)
+    path = tmp_path / "stereo.wav"
+    sf.write(str(path), data, sr)
+
+    for kwargs in ({}, {"sr": 8000}):
+        y, _ = file_load(path, mono=True, **kwargs)
+        assert y.ndim == 1
+        assert np.allclose(y.mean(), 0.3, atol=0.01)

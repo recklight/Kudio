@@ -56,6 +56,16 @@ win = kudio.frame_windows(spec, n_frames=64)          # (n, 64, bins)
 std = kudio.Standardizer().fit(spec)                  # save it with the model
 z   = std.transform(spec); spec_again = std.inverse(z)
 
+# --- loudness (BS.1770) ---------------------------------------------------
+lufs = kudio.loudness(y, sr)                          # what it sounds like,
+y    = kudio.normalize_lufs(y, sr, lufs=-23.0)        # not what its peak is
+fair = kudio.match_loudness(enhanced, y, sr)          # before you A/B them
+
+# --- is this recording usable at all? no reference needed -----------------
+for problem in kudio.audio_report(y, sr).problems():
+    print(problem)     # "content stops at 3812 Hz although the file claims
+                       #  16000 Hz — very likely upsampled from 8000 Hz"
+
 # --- effects & augmentation ----------------------------------------------
 y    = kudio.normalize(y, peak=0.99)                  # or normalize_db(y, -1)
 y16  = kudio.resample(y, orig_sr=8000, target_sr=16000)
@@ -104,6 +114,8 @@ kudio trim in.wav out.wav --top-db 30
 | `kudio.core.stft` | `STFT` — geometry + `forward`/`inverse`, storable next to a model |
 | `kudio.core.feature` | `waveform_to_spectrogram`, `spectrogram_to_waveform`, `mfcc`, `melspectrogram`, `stack_context`, `frame_windows`, `Standardizer`, ... |
 | `kudio.effects` | `trim_silence`, `split_on_silence`, `time_stretch`, `pitch_shift`, `normalize`, `add_noise_snr`, `reverb`, `spec_augment` |
+| `kudio.core.loudness` | `loudness`, `normalize_lufs`, `match_loudness` — ITU-R BS.1770-4, the perceptual answer `normalize`'s peak scaling cannot give |
+| `kudio.core.report` | `audio_report` → `AudioReport` — clipping, DC, silence, noise floor, real bandwidth, **with no clean reference needed** |
 | `kudio.core.synth` | `Synthesizer` (SNR mixing, seedable) |
 | `kudio.core.evaluator` | `si_sdr`, `snr`, `segmental_snr` (dep-free); `AudioEvaluate` (PESQ/STOI/SDR); `check_metrics_install` |
 | `kudio.core.stream` | `record`, `play_audio`, `Recorder`, `LocalStreamReader`, `RemoteStreamReader` |
