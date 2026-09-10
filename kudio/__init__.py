@@ -31,18 +31,18 @@ from kudio.exceptions import (
 from kudio import core, effects, enhance, util  # noqa: E402
 from kudio.core import *  # noqa: F401,F403  (curated __all__)
 from kudio.effects import *  # noqa: F401,F403
-from kudio.enhance import trad_enhance, wavelet_low_pass_filter
+from kudio.enhance import *  # noqa: F401,F403  (curated __all__)
 from kudio.util import *  # noqa: F401,F403  (curated __all__)
 
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())
 
 __all__ = [
     '__version__', '__author__', 'KudioConfig', 'KC',
-    'trad_enhance', 'wavelet_low_pass_filter',
     # exceptions
     'KudioError', 'AudioIOError', 'UnsupportedFormatError', 'DeviceError',
     'FeatureError', 'SynthesisError', 'DependencyError',
 ]
 __all__ += core.__all__
 __all__ += effects.__all__
+__all__ += enhance.__all__
 __all__ += util.__all__

@@ -89,6 +89,34 @@ class STFT:
             y_ref, spec, sequence=sequence, hop_length=self.hop_length,
             n_fft=self.n_fft, win_length=self.win_length, window=self.window)
 
+    def analyse(self, y: np.ndarray) -> np.ndarray:
+        """Waveform -> **complex** spectrogram ``(frames, bins)``.
+
+        :meth:`forward` throws the phase away, which is right for a feature and
+        wrong for anything that has to reconstruct the signal. Enhancement
+        multiplies the complex spectrum by a real gain and inverts it, so it
+        needs the phase kept — see :func:`kudio.spectral_enhance`.
+        """
+        import librosa
+        spec = librosa.stft(np.asarray(y, dtype=np.float32),
+                            n_fft=self.n_fft, hop_length=self.hop_length,
+                            win_length=self.win_length, window=self.window)
+        return spec.T                              # (frames, bins), as kudio speaks
+
+    def synthesise(self, spec: np.ndarray,
+                   length: Optional[int] = None) -> np.ndarray:
+        """Complex spectrogram -> waveform, the inverse of :meth:`analyse`.
+
+        *length* trims (or pads) to an exact sample count. Pass the input
+        length and the round trip is sample-aligned, which is what an A/B or a
+        training target needs.
+        """
+        import librosa
+        out = librosa.istft(np.asarray(spec).T, hop_length=self.hop_length,
+                            win_length=self.win_length, window=self.window,
+                            n_fft=self.n_fft, length=length)
+        return np.asarray(out, dtype=np.float32)
+
     # ------------------------------------------------------------ storage
 
     def to_dict(self) -> Dict[str, Any]:

@@ -4,6 +4,256 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-09-10
+
+Three things the toolkit could not do: say which part of a denoiser was doing
+the work, draw a spectrogram of audio that has not finished arriving, and say
+what note somebody is on.
+
+`trad_enhance` was the whole of kudio's statistical enhancement: one function,
+no parameters, one noise estimator welded to one gain rule. There was no way to
+ask which part was doing the work, and no way to try a different one.
+
+### Added — enhancement as interchangeable parts
+
+- **`spectral_enhance(y, sr, method=…, noise=…)`** with **seven gain rules** —
+  `specsub`, `multiband`, `wiener`, `mmse_stsa`, `logmmse`, `omlsa`,
+  `spectral_gate` — over **four noise estimators**: `mcra`, `quantile`,
+  `initial`, `minimum`.
+
+  Every method is the same three decisions: estimate the noise, estimate the a
+  priori SNR, turn it into a gain. Separating them is what makes them
+  comparable — hold the noise estimator still and the difference you hear is
+  the gain rule.
+
+  The `wiener` / `mmse_stsa` / `logmmse` / `omlsa` family shares the
+  decision-directed a priori SNR of Ephraim & Malah, so what distinguishes them
+  really is only the gain function. Their known ordering —
+  `Wiener ≤ log-MMSE ≤ MMSE-STSA`, all three converging on Wiener at high SNR —
+  is asserted in the test suite, which is a stronger check on the formulas than
+  any citation.
+
+  **The noise estimator is as large a lever as the gain rule.** Across the
+  full 7 x 4 grid on the suite's fixture: 5.8 dB of mean SI-SDR spread when the
+  gain rule varies, 6.4 dB when the estimator does. Neither dominates, so a
+  comparison that varies only the method is looking at half the problem.
+
+- **`compare_enhancers(y, sr, reference=None)` → `[EnhanceResult]`** — run
+  several over identical audio and measure each: wall time, residual noise
+  floor, loudness, and (given a reference) SNR / SI-SDR / PESQ / STOI plus
+  **`delta_snr_db`, the improvement over doing nothing**, which is the number
+  that answers "did this help". A method that raises is reported with `error`
+  set rather than taking the comparison down with it.
+
+  **Both axes sweep.** `noises=[...]` compares estimators, and giving both
+  compares the full grid — a run is a *(method, estimator)* pair, not a method,
+  because the two are separate choices of comparable size.
+
+  **Anything callable can join the table.** `('my model', fn)` or a bare
+  function ranks a trained model, a wrapper around another library or a one-off
+  experiment beside the built-ins. "Is the model actually better than log-MMSE"
+  is the question people have, and two separate printouts is how it goes
+  unanswered. A custom entry brings its own noise handling, so it runs once
+  rather than being swept, and its `noise` column says `own`.
+
+- **`StreamEnhancer`** — the same four decision-directed methods, frame by
+  frame, for audio that has not finished arriving. `spectral_enhance` needs the
+  whole clip, which is useless for monitoring a microphone. Everything needed
+  was already recursive, so the noise trackers and the a priori SNR estimator
+  are now *state plus an update* (`make_noise_tracker`, `DecisionDirected`)
+  shared by both paths rather than written twice.
+
+  One frame of latency (32 ms at the default), block-size independent, and
+  refuses `quantile` / `specsub` / `multiband` / `spectral_gate` rather than
+  quietly meaning something different from what those names mean offline.
+
+- **`enhance_folder(src, dst, method, report=True)`** — the denoising
+  counterpart of `convert_folder`, mirroring the input's directory structure
+  the same way. `report=True` measures each file's noise floor before and
+  after; `mean_reduction_db()` summarises it.
+
+- **`crossfade` / `splice`** — join clips through a short overlap instead of
+  butting them together, since a step in the waveform is a click. The result is
+  *shorter* by the overlap, which is documented rather than papered over:
+  anything tracking positions has to account for it.
+
+  The two default to different shapes, measured rather than assumed. A splice
+  joins two moments of the same recording, which are usually alike, and
+  equal-power over-shoots on alike material — on a sine cut at a period
+  boundary it raised the peak from 0.500 to 0.567 while linear left it at
+  0.500. So `splice` is linear and `crossfade`, which joins genuinely different
+  material, is equal-power.
+
+- **`Label` / `save_labels` / `load_labels`** — named time spans, as JSON or as
+  an **Audacity label track**. Three columns of plain text that half the audio
+  world can already read is worth more than a private format only kudio
+  understands. `kudio.vad` output drops straight in.
+
+- **CLI**: `kudio enhance --recursive`, and `kudio compare --noises all` for the
+  full grid.
+
+  Timing is warmed up first: librosa's STFT is JIT-compiled and scipy's Bessel
+  functions import lazily, so whichever method ran first was being charged ~3 s
+  of one-time cost — in a table whose entire purpose is comparing methods.
+
+- **`METHODS` / `NOISE_ESTIMATORS`** describe every method and every parameter:
+  range, default, step, unit and a sentence of help. KudioStudio builds its
+  controls from this rather than restating it, so a parameter added here
+  appears there without anyone editing the GUI.
+
+- **`STFT.analyse()` / `STFT.synthesise()`** — the complex transform.
+  `forward()` returns log-power and throws the phase away, which is right for a
+  feature and useless for anything that has to reconstruct the signal.
+
+- **CLI**: `kudio enhance in.wav out.wav --method logmmse --set q=0.4` and
+  `kudio compare in.wav --reference clean.wav --write-to results/`.
+
+### Added — audio that is still arriving
+
+- **`SpectrogramStream(sr, …)`** — a rolling log-magnitude spectrogram computed
+  one column at a time. `push(block)` returns the columns that block completed;
+  `columns()` is the window as an image, newest on the right.
+
+  The point is that each column is computed **once**, when its samples arrive.
+  Re-running an offline STFT over the last few seconds several times a second
+  — the usual workaround — recomputes about 240 columns to gain three.
+
+  Blocks may be any size: pushing the same audio in blocks of 1, 97, 512 or
+  4096 gives byte-identical columns, so the picture never depends on what the
+  device chose to hand over. Feed it `StreamRecorder.drain()`, never `tail()`.
+
+  Columns follow the **`center=False`** convention — a stream cannot pad audio
+  it has not heard — and the suite checks them against
+  `librosa.stft(…, center=False)` rather than asserting the claim. Values are
+  dBFS normalised by the window, so a full-scale sine reads 0 dB at any
+  `n_fft`. `n_mels=` switches to a mel axis; 2-D input is refused rather than
+  flattened, since flattening interleaved channels analyses a signal nobody
+  recorded.
+
+### Added — fundamental frequency
+
+- **`f0(y, sr)` → `PitchTrack`** — pYIN (Mauch & Dixon 2014), with the
+  voiced/unvoiced decision beside the contour. `f0` is `NaN` wherever the frame
+  is unvoiced, because an estimator asked "what is the pitch here" always
+  answers — for silence, for a slamming door, for the `s` in *this* — and a
+  contour drawn through those answers is a picture of noise with a line
+  through it.
+
+  `PitchTrack` carries `median_hz`, `range_hz()`, `semitone_range` (the unit
+  pitch is actually heard in), `voiced_ratio`, `voiced_segments()` and
+  `to_labels()`, which turns the voiced runs into `kudio.Label`s that
+  `save_labels` writes as an Audacity label track.
+
+  Three settings are **refused rather than silently wrong**: a `frame_length`
+  too short to hold two periods of `fmin` (which otherwise returns "unvoiced
+  everywhere", reading as a property of the recording), an `fmax` above
+  Nyquist, and `fmin >= fmax`.
+
+- **`kudio pitch file.wav`** — median, range in Hz and semitones, voiced
+  percentage; `--segments` lists the voiced spans and `--labels` writes them as
+  a label track. Exits non-zero when nothing is voiced, so it drops into a
+  shell test the way `report` and `vad` do.
+
+### Note on `trad_enhance`
+
+Unchanged, and still exported. It is roughly `specsub` with MCRA and fixed
+parameters, but it returns **128 samples fewer than its input**; the new
+methods return exactly as many, so their output lines up sample-for-sample with
+what it came from.
+
+## [3.4.0] - 2026-08-15
+
+Two gaps closed. kudio could analyse audio and augment it, but it could not
+**edit** it — no fade, no filter, no reversal — and it could not tell you
+**where in a recording somebody is talking** without a fixed silence threshold
+that real rooms defeat. Plus the folder-level helpers three downstream projects
+had each written for themselves.
+
+### Added — editing
+
+- **`fade_in` / `fade_out` / `fade`** (`linear`, `cosine`, `exponential`).
+  The 10 ms default is the anti-click amount: long enough to remove the step at
+  a cut, short enough not to be heard. Overlapping fades raise rather than
+  silently multiplying the middle.
+- **`reverse`**, **`remove_dc`**. The DC mean is accumulated in float64 — a
+  float32 mean over a long clip carries enough rounding error to leave behind
+  the offset it was asked to remove.
+- **`highpass` / `lowpass` / `bandpass` / `bandstop` / `band_filter`** —
+  Butterworth, **zero-phase by default** (`sosfiltfilt`). A filtered copy that
+  is shifted in time no longer lines up with the original, which breaks an A/B,
+  a spectrogram overlay and a training target all at once.
+  `wavelet_low_pass_filter` in `kudio.enhance` is a denoising algorithm that
+  happens to be low-pass; these are the plain filters, and the two are not
+  substitutes.
+
+### Added — voice activity
+
+- **`vad(y, sr)` → speech spans in seconds**, plus `vad_split`, `vad_trim` and
+  `speech_ratio`. `split_on_silence` cuts on level alone, which is right for a
+  studio take and wrong for anything with a noise floor: above some noise level
+  no fixed `top_db` both keeps the quiet consonants and drops the room.
+
+  This decides per frame on level **relative to the recording's own noise
+  floor**, on **spectral flatness** (speech is harmonic and peaky; steady noise
+  is flat), and on zero-crossing rate for the unvoiced fricatives — but the
+  ZCR test only rescues frames **adjacent to** something voiced. On its own, an
+  /s/ and a hiss are the same measurement, and a detector that fires on the air
+  conditioning is not a detector. The cost of that rule, stated plainly in the
+  docstring: a whisper has no voiced frames and is not detected.
+
+### Added — reference-free perception
+
+- **`dnsmos(y, sr, model_dir=)` → `DnsmosScore(sig, bak, ovrl)`**, ITU-T P.835.
+  `audio_report` says whether a recording is technically sound; this predicts
+  what a listener would say about it. SIG and BAK move in opposite directions
+  under denoising — aggressive suppression raises BAK and lowers SIG because it
+  eats the speech with the noise — so `summary()` names that trade rather than
+  averaging it away.
+
+  **The weights are not bundled.** They belong to Microsoft's DNS-Challenge;
+  point `model_dir` (or `$KUDIO_DNSMOS_DIR`) at a checkout. `pip install
+  kudio[dnsmos]` adds onnxruntime. The published P.835 mapping coefficients are
+  included and attributed, overridable by a `polyfit.json` beside the model, and
+  `polyfit=False` returns the raw outputs.
+
+### Added — files and folders
+
+- **`audio_info(source)` → `AudioInfo`** (sr, channels, frames, duration, peak,
+  subtype, format). The `kudio info` CLI computed this and printed it,
+  KudioStudio's transport bar recomputed it and KudioEnhance checked rates —
+  three implementations of one question. `peak=False` reads the header only.
+- **`convert_folder(src, dst, ...)` → `ConvertResult`** — resample, re-encode,
+  trim and normalise a whole tree. Output **mirrors the input's directory
+  structure**, so two files with the same name in different subfolders do not
+  collide. `peak=` and `lufs=` are mutually exclusive; normalising twice would
+  undo the first one.
+- **`Pair` / `save_manifest` / `load_manifest` / `split_pairs`** — dataset
+  manifests, moved out of KudioEnhance because nothing in them is specific to
+  denoising. Plain JSON, so another tool can read it without importing kudio.
+  `Pair` is frozen and therefore hashable: split overlap is checked with sets,
+  which silently catches nothing if the pairs are not.
+- **`StreamRecorder`** — record for as long as you like while watching the
+  level. `record(seconds=…)` is one blocking call: you commit to a duration up
+  front and nothing is observable until it returns, which is fine for a script
+  and useless for a person at a microphone. `start()` / `level()` / `tail()` /
+  `elapsed()` / `stop()`, safe to poll from a UI timer, and **nothing is
+  dropped** — unlike `AudioBuffer`, which is a monitor and discards when full.
+- `LocalStreamReader` gained an `on_frame=` callback, which is what makes the
+  above possible without duplicating its device negotiation.
+
+### Added — CLI
+
+`kudio report` (reference-free health check, exits 1 when something is wrong,
+so it works in a shell test), `kudio loudness`, `kudio normalize --lufs/--peak`,
+`kudio vad [--split-to DIR]`, and `kudio convert --recursive` for folders.
+`kudio info` now goes through `audio_info` and prints the encoding.
+
+### Internal
+
+Framing moved to one private home (`kudio.core._framing.frame_view`); the
+report and the VAD had begun to need identical framing, and written twice they
+would eventually have disagreed about what frame 40 covers.
+
 ## [3.3.0] - 2026-08-15
 
 Two things a recording can be asked about without anything to compare it to:

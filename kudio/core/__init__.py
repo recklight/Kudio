@@ -45,11 +45,25 @@ from kudio.core.feature import (
     wav2spec,
     wavform2spec,
 )
+from kudio.core.dataset import (
+    Label,
+    Pair,
+    load_labels,
+    load_manifest,
+    save_labels,
+    save_manifest,
+    split_pairs,
+)
+from kudio.core.dnsmos import DnsmosScore, dnsmos, find_dnsmos_model
 from kudio.core.io import (
+    AudioInfo,
+    ConvertResult,
     LoadAudio,
+    audio_info,
     check_file,
     check_input,
     check_path,
+    convert_folder,
     copy_waves,
     file_load,
     load_wave,
@@ -60,17 +74,21 @@ from kudio.core.io import (
 from kudio.core.loudness import loudness, match_loudness, normalize_lufs
 from kudio.core.manager import AudioDataManager
 from kudio.core.report import AudioReport, audio_report
+from kudio.core.pitch import PitchTrack, f0
+from kudio.core.spectrogram import SpectrogramStream
 from kudio.core.stft import STFT
 from kudio.core.stream import (
     LocalStreamReader,
     Recorder,
     RemoteStreamReader,
+    StreamRecorder,
     play_audio,
     record,
     wave_decode,
     wave_encode,
 )
 from kudio.core.synth import Synthesizer
+from kudio.core.vad import speech_ratio, vad, vad_split, vad_trim
 
 __all__ = [
     # buffer
@@ -91,15 +109,26 @@ __all__ = [
     # io
     'LoadAudio', 'check_file', 'check_input', 'check_path', 'copy_waves',
     'file_load', 'resample', 'load_wave', 'load_waves', 'save_wave',
+    'AudioInfo', 'audio_info', 'ConvertResult', 'convert_folder',
     # loudness (BS.1770)
     'loudness', 'match_loudness', 'normalize_lufs',
     # reference-free inspection
     'AudioReport', 'audio_report',
+    'DnsmosScore', 'dnsmos', 'find_dnsmos_model',
+    # pitch
+    'PitchTrack', 'f0',
+    # voice activity
+    'vad', 'vad_split', 'vad_trim', 'speech_ratio',
+    # dataset manifests and labels
+    'Pair', 'save_manifest', 'load_manifest', 'split_pairs',
+    'Label', 'save_labels', 'load_labels',
     # manager
     'AudioDataManager',
+    # live analysis
+    'SpectrogramStream',
     # stream
-    'LocalStreamReader', 'Recorder', 'RemoteStreamReader', 'play_audio',
-    'record', 'wave_decode', 'wave_encode',
+    'LocalStreamReader', 'Recorder', 'RemoteStreamReader', 'StreamRecorder',
+    'play_audio', 'record', 'wave_decode', 'wave_encode',
     # synth
     'Synthesizer',
 ]

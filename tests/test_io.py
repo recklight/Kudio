@@ -2,6 +2,7 @@
 import numpy as np
 import pytest
 
+import kudio
 from kudio import check_input, file_load, load_waves, save_wave
 from kudio.core.io import check_file, check_path, copy_waves, LoadAudio
 
@@ -192,3 +193,128 @@ def test_mono_downmix_is_unaffected_by_the_layout_fix(tmp_path):
         y, _ = file_load(path, mono=True, **kwargs)
         assert y.ndim == 1
         assert np.allclose(y.mean(), 0.3, atol=0.01)
+
+
+# --------------------------------------------------------------- audio_info
+
+def test_audio_info_reads_the_header(wav_file):
+    info = kudio.audio_info(wav_file)
+    assert info.sr == 16000
+    assert info.channels == 1
+    assert info.frames == 16000
+    assert info.duration == pytest.approx(1.0)
+    assert info.format == "WAV"
+    assert info.subtype == "PCM_16"
+    assert info.path == wav_file
+
+
+def test_audio_info_measures_the_peak(wav_file):
+    assert kudio.audio_info(wav_file).peak == pytest.approx(0.5, abs=0.01)
+
+
+def test_audio_info_can_skip_the_samples(wav_file):
+    """peak=False never touches the data, so it stays instant on a big file."""
+    info = kudio.audio_info(wav_file, peak=False)
+    assert info.peak == 0.0
+    assert info.duration == pytest.approx(1.0)
+
+
+def test_audio_info_agrees_with_file_load(wav_file):
+    y, sr = file_load(wav_file, sr=None)
+    info = kudio.audio_info(wav_file)
+    assert (info.sr, info.frames) == (sr, len(y))
+    assert info.peak == pytest.approx(float(np.max(np.abs(y))), abs=1e-4)
+
+
+def test_audio_info_accepts_an_array(sine):
+    info = kudio.audio_info(sine, sr=16000)
+    assert info.channels == 1 and info.frames == len(sine)
+    assert info.path is None and info.subtype is None
+    stereo = np.stack([sine, sine], axis=1)
+    assert kudio.audio_info(stereo, sr=16000).channels == 2
+
+
+def test_audio_info_on_an_array_needs_a_rate(sine):
+    with pytest.raises(ValueError, match="needs sr"):
+        kudio.audio_info(sine)
+
+
+def test_audio_info_on_a_missing_file(tmp_path):
+    from kudio.exceptions import AudioIOError
+    with pytest.raises(AudioIOError):
+        kudio.audio_info(tmp_path / "nope.wav")
+
+
+# ------------------------------------------------------------ convert_folder
+
+def test_convert_folder_writes_every_file(wav_dir, tmp_path):
+    result = kudio.convert_folder(wav_dir, tmp_path / "out", sr=8000)
+    assert (result.written, result.total) == (3, 3)
+    assert not result.failed and bool(result) is True
+    for path in result.outputs:
+        assert kudio.audio_info(path, peak=False).sr == 8000
+
+
+def test_convert_folder_mirrors_subdirectories(wav_dir, tmp_path, sine):
+    nested = wav_dir / "deep" / "deeper"
+    nested.mkdir(parents=True)
+    save_wave(nested / "tone_0.wav", sine, 16000)     # same name as a top-level file
+    result = kudio.convert_folder(wav_dir, tmp_path / "out")
+    written = {p.relative_to(tmp_path / "out").as_posix() for p in result.outputs}
+    assert "tone_0.wav" in written
+    assert "deep/deeper/tone_0.wav" in written        # not renamed, not clobbered
+
+
+def test_convert_folder_normalizes_loudness(wav_dir, tmp_path):
+    result = kudio.convert_folder(wav_dir, tmp_path / "out", lufs=-23.0)
+    for path in result.outputs:
+        y, sr = file_load(path, sr=None)
+        assert kudio.loudness(y, sr) == pytest.approx(-23.0, abs=0.5)
+
+
+def test_convert_folder_peak_and_lufs_are_exclusive(wav_dir, tmp_path):
+    with pytest.raises(ValueError, match="not both"):
+        kudio.convert_folder(wav_dir, tmp_path / "out", peak=0.99, lufs=-23.0)
+
+
+def test_convert_folder_collects_failures(wav_dir, tmp_path):
+    (wav_dir / "broken.wav").write_bytes(b"this is not a wave file")
+    result = kudio.convert_folder(wav_dir, tmp_path / "out")
+    assert result.written == 3
+    assert [p.name for p, _ in result.failed] == ["broken.wav"]
+    assert bool(result) is False
+
+
+def test_convert_folder_can_stop_at_the_first_failure(wav_dir, tmp_path):
+    from kudio.exceptions import AudioIOError
+    (wav_dir / "aaa_broken.wav").write_bytes(b"nope")
+    with pytest.raises(AudioIOError):
+        kudio.convert_folder(wav_dir, tmp_path / "out", on_error="raise")
+
+
+def test_convert_folder_reports_progress(wav_dir, tmp_path):
+    seen = []
+    kudio.convert_folder(wav_dir, tmp_path / "out",
+                         progress=lambda n, total, path: seen.append((n, total)))
+    assert seen == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_convert_folder_on_an_empty_folder(tmp_path):
+    from kudio.exceptions import AudioIOError
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(AudioIOError, match="no audio files"):
+        kudio.convert_folder(tmp_path / "empty", tmp_path / "out")
+
+
+def test_convert_folder_does_not_overwrite_by_default(wav_dir, tmp_path):
+    out = tmp_path / "out"
+    kudio.convert_folder(wav_dir, out)
+    kudio.convert_folder(wav_dir, out)
+    assert len(list(out.glob("*.wav"))) == 6      # renamed, not replaced
+
+
+def test_convert_folder_can_overwrite(wav_dir, tmp_path):
+    out = tmp_path / "out"
+    kudio.convert_folder(wav_dir, out)
+    kudio.convert_folder(wav_dir, out, overwrite=True)
+    assert len(list(out.glob("*.wav"))) == 3
