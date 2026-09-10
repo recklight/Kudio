@@ -22,6 +22,7 @@ from typing import List, Optional
 
 import numpy as np
 
+from kudio.core._framing import frame_view as _frame
 from kudio.core.loudness import loudness
 from kudio.exceptions import FeatureError
 
@@ -130,16 +131,6 @@ class AudioReport:
                 f"{self.peak_dbfs:.1f} dBFS · {lufs} · "
                 f"SNR~{self.estimated_snr_db:.0f} dB · "
                 f"bandwidth {self.bandwidth_hz:.0f} Hz")
-
-
-def _frame(y: np.ndarray, size: int, hop: int) -> np.ndarray:
-    """Non-copying frame view, ``(n_frames, size)``."""
-    if size <= 0 or len(y) < size:
-        return y[np.newaxis, :]
-    n = 1 + (len(y) - size) // hop
-    return np.lib.stride_tricks.as_strided(
-        y, shape=(n, size), strides=(y.strides[0] * hop, y.strides[0]),
-        writeable=False)
 
 
 def _clipped_run_count(y: np.ndarray) -> int:

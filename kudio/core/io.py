@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path, PurePath
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import numpy as np
 import soundfile as sf
@@ -24,6 +25,10 @@ __all__ = [
     'load_wave',
     'load_waves',
     'copy_waves',
+    'AudioInfo',
+    'audio_info',
+    'ConvertResult',
+    'convert_folder',
     'LoadAudio',
 ]
 
@@ -164,6 +169,79 @@ def resample(y: np.ndarray, orig_sr: int, target_sr: int,
     return out.astype(y.dtype, copy=False)
 
 
+@dataclass(frozen=True)
+class AudioInfo:
+    """What a file is, before you decide whether to load it.
+
+    ``duration`` is in seconds and ``peak`` is the largest absolute sample.
+    ``subtype`` / ``format`` are soundfile's (``'PCM_16'``, ``'WAV'``) and are
+    ``None`` when the info was taken from an array rather than a file.
+    """
+    sr: int
+    channels: int
+    frames: int
+    duration: float
+    peak: float
+    path: Optional[Path] = None
+    subtype: Optional[str] = None
+    format: Optional[str] = None
+
+    def __str__(self) -> str:  # pragma: no cover - presentation only
+        name = self.path.name if self.path is not None else "<array>"
+        enc = f", {self.subtype}" if self.subtype else ""
+        return (f"{name}: {self.duration:.3f}s, {self.sr} Hz, "
+                f"{self.channels}ch{enc}, peak {self.peak:.4f}")
+
+
+def audio_info(source: Union[PathLike, np.ndarray], sr: Optional[int] = None,
+               peak: bool = True) -> AudioInfo:
+    """Describe an audio file (or an in-memory waveform) without interpreting it.
+
+    >>> info = kudio.audio_info("clip.wav")
+    >>> info.duration, info.sr, info.channels
+    (3.5, 16000, 1)
+
+    The header alone answers rate, channels, frames and duration, so
+    ``peak=False`` never touches the samples and stays instant on a large file.
+    The default reads them, because every caller so far wanted the peak too.
+
+    An array needs its *sr* passed in — a waveform does not carry one — and is
+    read **channels last**, matching :func:`file_load`.
+    """
+    if isinstance(source, np.ndarray):
+        if sr is None:
+            raise ValueError("audio_info(array) needs sr=")
+        y = source
+        frames = int(y.shape[0]) if y.size else 0
+        channels = 1 if y.ndim == 1 else int(y.shape[1])
+        return AudioInfo(sr=int(sr), channels=channels, frames=frames,
+                         duration=frames / float(sr) if sr else 0.0,
+                         peak=float(np.max(np.abs(y))) if y.size else 0.0)
+
+    path = Path(source)
+    try:
+        meta = sf.info(str(path))
+    except Exception as e:
+        raise AudioIOError(f"Could not read audio header: {path} ({e})") from e
+
+    top = 0.0
+    if peak:
+        try:
+            with sf.SoundFile(str(path)) as fh:
+                for block in fh.blocks(blocksize=1 << 20, dtype='float32'):
+                    if block.size:
+                        top = max(top, float(np.max(np.abs(block))))
+        except Exception as e:
+            raise AudioIOError(f"Could not read audio file: {path} ({e})") from e
+
+    return AudioInfo(sr=int(meta.samplerate), channels=int(meta.channels),
+                     frames=int(meta.frames),
+                     duration=float(meta.frames) / float(meta.samplerate)
+                     if meta.samplerate else 0.0,
+                     peak=top, path=path,
+                     subtype=meta.subtype, format=meta.format)
+
+
 def load_wave(wave, num: Optional[int] = None):
     """Load one wave file or a list of them into ``(waveform, sr)`` tuples."""
     info = wave if num is None else wave[num]
@@ -245,6 +323,98 @@ def copy_waves(path: PathLike, wave_) -> None:
     else:
         w = Path(wave_)
         shutil.copy(str(w), path / w.name)
+
+
+@dataclass(frozen=True)
+class ConvertResult:
+    """What :func:`convert_folder` did. ``failed`` is ``(path, reason)`` pairs."""
+    written: int
+    total: int
+    outputs: List[Path]
+    failed: List[Tuple[Path, str]]
+
+    def __bool__(self) -> bool:
+        return not self.failed
+
+    def __str__(self) -> str:  # pragma: no cover - presentation only
+        return f"{self.written}/{self.total} written, {len(self.failed)} failed"
+
+
+def convert_folder(src: Any, dst: PathLike, *,
+                   sr: Optional[int] = None,
+                   mono: bool = True,
+                   subtype: str = 'PCM_16',
+                   trim_db: Optional[float] = None,
+                   peak: Optional[float] = None,
+                   lufs: Optional[float] = None,
+                   overwrite: bool = False,
+                   progress: Optional[Callable[[int, int, Path], None]] = None,
+                   on_error: str = 'collect') -> ConvertResult:
+    """Resample / re-encode / trim / normalise every audio file under *src*.
+
+    *src* is anything :func:`check_input` accepts — a folder, a file, a ``.txt``
+    manifest, or a list of those. The output mirrors the input's directory
+    structure below *dst*, so two files with the same name in different
+    subfolders do not collide.
+
+    >>> kudio.convert_folder("raw/", "16k/", sr=16000, lufs=-23.0)
+    ConvertResult(written=412, total=412, ...)
+
+    :param trim_db: ``top_db`` for :func:`kudio.trim_silence`; ``None`` skips it.
+    :param peak: peak-normalise target (e.g. ``0.99``).
+    :param lufs: loudness-normalise target in LUFS (e.g. ``-23.0``). Mutually
+        exclusive with *peak* — normalising twice would undo the first one.
+    :param overwrite: by default an existing output is renamed rather than
+        replaced (:func:`check_file`).
+    :param progress: optional ``callback(done, total, path)``.
+    :param on_error: ``'collect'`` (default) records the failure and carries on;
+        ``'raise'`` stops at the first one.
+    """
+    if peak is not None and lufs is not None:
+        raise ValueError("pass peak= or lufs=, not both")
+    if on_error not in ('collect', 'raise'):
+        raise ValueError(f"on_error must be 'collect' or 'raise', got {on_error!r}")
+
+    files, _ = check_input(src)
+    if not files:
+        raise AudioIOError(f"no audio files found in {src!r}")
+
+    root = Path(src) if isinstance(src, (str, PurePath)) and Path(src).is_dir() else None
+    out_root = Path(dst)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    outputs: List[Path] = []
+    failed: List[Tuple[Path, str]] = []
+
+    for n, f in enumerate(files, 1):
+        try:
+            y, rate = file_load(f, sr=sr, mono=mono)
+            if trim_db is not None:
+                from kudio.effects.silence import trim_silence
+                y = trim_silence(y, top_db=trim_db)[0]
+            if y.size == 0:
+                raise AudioIOError("empty after trimming")
+            if peak is not None:
+                from kudio.effects.augment import normalize
+                y = normalize(y, peak=peak)
+            elif lufs is not None:
+                from kudio.core.loudness import normalize_lufs
+                y = normalize_lufs(y, rate, lufs=lufs)
+
+            rel = f.relative_to(root) if root is not None else Path(f.name)
+            target = (out_root / rel).with_suffix(WAVE_SUFFIX)
+            target = Path(check_file(target, rename=not overwrite))
+            save_wave(target, y, rate, subtype=subtype)
+            outputs.append(target)
+        except Exception as e:
+            if on_error == 'raise':
+                raise
+            failed.append((Path(f), f"{type(e).__name__}: {e}"))
+        if progress is not None:
+            progress(n, len(files), Path(f))
+
+    return ConvertResult(written=len(outputs), total=len(files),
+                         outputs=outputs, failed=failed)
 
 
 class LoadAudio:

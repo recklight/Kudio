@@ -12,7 +12,7 @@ import socket
 import threading
 import wave
 from pathlib import Path
-from typing import Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 
@@ -28,6 +28,7 @@ __all__ = [
     'Recorder',
     'RemoteStreamReader',
     'LocalStreamReader',
+    'StreamRecorder',
 ]
 
 log = logging.getLogger(__name__)
@@ -367,7 +368,8 @@ class LocalStreamReader:
                  channels: int = 1,
                  frame_size: int = 2048,
                  wav_format: int = PA_INT16,
-                 buffer: Optional[AudioBuffer] = None):
+                 buffer: Optional[AudioBuffer] = None,
+                 on_frame: Optional[Callable[[np.ndarray], None]] = None):
         """
         :param device: input device index (default: system default)
         :param rate: sample rate (default: device default)
@@ -375,8 +377,14 @@ class LocalStreamReader:
         :param frame_size: frames per buffer, default 2048
         :param wav_format: ``PA_FLOAT32`` (1) or ``PA_INT16`` (8)
         :param buffer: target AudioBuffer (optional)
+        :param on_frame: called with each captured chunk. An
+            :class:`AudioBuffer` **drops** frames once it is full, which is
+            correct for a monitor and wrong for a recording; a callback lets
+            the caller decide. It runs on PortAudio's thread, so it must
+            return promptly — append, do not process.
         """
         self.audio_buffer = buffer
+        self.on_frame = on_frame
         self.device_: Optional[int] = None
         self.rate_: Optional[int] = None
         self.channels_: Optional[int] = None
@@ -446,6 +454,13 @@ class LocalStreamReader:
             data = np.frombuffer(in_data, dtype=self.data_type)
             if self.audio_buffer is not None:
                 self.audio_buffer.add(data)
+            if self.on_frame is not None:
+                try:
+                    self.on_frame(data)
+                except Exception:
+                    # an exception here would silently kill the audio thread
+                    # and the stream would just stop delivering
+                    log.exception("Stream: on_frame callback raised")
         return in_data, pyaudio.paContinue
 
     def stream_start(self) -> None:
@@ -476,3 +491,208 @@ class LocalStreamReader:
             log.info("Stream: recording stream stopped")
         if self.p is not None:
             self.p.terminate()
+
+
+class StreamRecorder:
+    """Record for as long as you like, and watch the level while it happens.
+
+    :func:`kudio.record` is one blocking call: you commit to a duration up
+    front and nothing is observable until it returns. That is fine for a script
+    and useless for a person at a microphone, who needs to see the level before
+    committing and stop when the sentence ends.
+
+    >>> rec = kudio.StreamRecorder(sr=16000)
+    >>> rec.start()
+    >>> rec.level_db()                     # doctest: +SKIP
+    -23.4
+    >>> y = rec.stop()                     # everything captured, float32
+
+    Capture runs on PortAudio's own thread; :meth:`level`, :meth:`tail` and
+    :meth:`elapsed` are safe to poll from a UI timer. Nothing is dropped —
+    unlike :class:`AudioBuffer`, which is a monitor and discards when full.
+
+    Requires ``kudio[audio]`` (PyAudio).
+    """
+
+    def __init__(self, device: Optional[int] = None, sr: Optional[int] = None,
+                 channels: int = 1, frame_size: int = 1024,
+                 max_seconds: Optional[float] = 3600.0,
+                 monitor: bool = False):
+        """
+        :param device: **PyAudio** input index (:class:`kudio.CheckDevice`),
+            not a sounddevice one — the two number devices independently.
+        :param sr: sample rate; the device default when omitted.
+        :param max_seconds: hard cap on the take, so a recorder left running
+            cannot fill memory. ``None`` removes the cap.
+        :param monitor: echo the input to the default output while recording.
+        """
+        self._chunks: List[np.ndarray] = []
+        self._lock = threading.Lock()
+        self._level = 0.0
+        self._frames = 0
+        self._drained = 0                     # chunks already handed to drain()
+        self._capped = False
+        self._channels = max(1, int(channels))
+        self._max_seconds = max_seconds
+        self._monitor = monitor
+
+        self._reader = LocalStreamReader(
+            device=device, rate=sr, channels=self._channels,
+            frame_size=frame_size, wav_format=PA_FLOAT32,
+            on_frame=self._on_frame)
+        if not self._reader.get_status():
+            from kudio.exceptions import DeviceError
+            raise DeviceError("no usable input device for StreamRecorder")
+        self._sr = int(self._reader.rate_ or sr or 16000)
+        self._channels = int(self._reader.channels_ or self._channels)
+
+    # ------------------------------------------------------------- properties
+
+    @property
+    def sr(self) -> int:
+        """The rate actually negotiated with the device."""
+        return self._sr
+
+    @property
+    def channels(self) -> int:
+        return self._channels
+
+    @property
+    def recording(self) -> bool:
+        return self._reader.isListening.is_set()
+
+    @property
+    def capped(self) -> bool:
+        """True once ``max_seconds`` was reached and capture stopped growing."""
+        return self._capped
+
+    # ------------------------------------------------------------- capture
+
+    def _on_frame(self, data: np.ndarray) -> None:
+        peak = float(np.max(np.abs(data))) if data.size else 0.0
+        with self._lock:
+            self._level = peak
+            if self._capped:
+                return
+            frames = data.size // self._channels
+            if self._max_seconds is not None and \
+                    (self._frames + frames) / self._sr > self._max_seconds:
+                self._capped = True
+                log.warning("StreamRecorder: hit max_seconds=%.0f, "
+                            "capture stopped", self._max_seconds)
+                return
+            self._chunks.append(data.copy())
+            self._frames += frames
+
+    def start(self) -> "StreamRecorder":
+        """Open the stream and begin capturing. Idempotent."""
+        if self.recording:
+            return self
+        if self._monitor:
+            self._reader.play_audio()
+        self._reader.stream_start()
+        return self
+
+    def stop(self) -> np.ndarray:
+        """Close the stream and return everything captured.
+
+        Mono comes back shaped ``(n,)`` and multi-channel ``(n, channels)`` —
+        the layout :func:`kudio.file_load` and :func:`kudio.save_wave` use.
+        Calling this twice returns the same take rather than an empty array.
+        """
+        if self.recording:
+            self._reader.terminate()
+        return self.take()
+
+    def take(self) -> np.ndarray:
+        """Everything captured so far, without stopping."""
+        with self._lock:
+            chunks = list(self._chunks)
+        if not chunks:
+            return np.zeros(0, dtype=np.float32)
+        flat = np.concatenate(chunks).astype(np.float32, copy=False)
+        if self._channels > 1:
+            usable = (flat.size // self._channels) * self._channels
+            return flat[:usable].reshape(-1, self._channels)
+        return flat
+
+    # ------------------------------------------------------------- monitoring
+
+    def level(self) -> float:
+        """Peak of the most recent chunk, linear ``0..1``."""
+        with self._lock:
+            return self._level
+
+    def level_db(self) -> float:
+        """The same reading in dBFS; ``-inf`` for silence."""
+        peak = self.level()
+        return 20.0 * float(np.log10(peak)) if peak > 0 else float('-inf')
+
+    def elapsed(self) -> float:
+        """Seconds captured so far."""
+        with self._lock:
+            return self._frames / self._sr if self._sr else 0.0
+
+    def tail(self, seconds: float) -> np.ndarray:
+        """The most recent *seconds* of audio, for a rolling display.
+
+        Cheap enough to call from a repeating timer: it copies only the window
+        asked for, not the whole take.
+        """
+        want = int(round(seconds * self._sr)) * self._channels
+        with self._lock:
+            chunks, total = list(self._chunks), self._frames * self._channels
+        if not chunks or want <= 0:
+            return np.zeros(0, dtype=np.float32)
+        collected: List[np.ndarray] = []
+        got = 0
+        for chunk in reversed(chunks):
+            collected.append(chunk)
+            got += chunk.size
+            if got >= want:
+                break
+        flat = np.concatenate(list(reversed(collected)))[-min(want, total):]
+        flat = flat.astype(np.float32, copy=False)
+        if self._channels > 1:
+            usable = (flat.size // self._channels) * self._channels
+            return flat[:usable].reshape(-1, self._channels)
+        return flat
+
+    def drain(self) -> np.ndarray:
+        """Audio captured **since the last call**, and never twice.
+
+        :meth:`tail` returns a sliding window, which overlaps between calls —
+        right for a display, wrong for anything stateful. Feeding overlapping
+        audio to a streaming denoiser processes the same samples repeatedly and
+        corrupts every recursive estimate it holds.
+
+        >>> while rec.recording:                            # doctest: +SKIP
+        ...     monitor(enhancer.process(rec.drain()))
+        """
+        with self._lock:
+            new, self._drained = self._chunks[self._drained:], len(self._chunks)
+        if not new:
+            return np.zeros(0, dtype=np.float32)
+        flat = np.concatenate(new).astype(np.float32, copy=False)
+        if self._channels > 1:
+            usable = (flat.size // self._channels) * self._channels
+            return flat[:usable].reshape(-1, self._channels)
+        return flat
+
+    def reset(self) -> None:
+        """Throw the take away and start counting again, stream untouched."""
+        with self._lock:
+            self._chunks.clear()
+            self._frames = 0
+            self._drained = 0
+            self._capped = False
+            self._level = 0.0
+
+    # ------------------------------------------------------------- lifecycle
+
+    def __enter__(self) -> "StreamRecorder":
+        return self.start()
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self.recording:
+            self._reader.terminate()
