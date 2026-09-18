@@ -201,3 +201,34 @@ def test_vad_output_becomes_labels(tmp_path, speech):
     for written, read in zip(labels, back):
         assert read.start == pytest.approx(written.start, abs=1e-6)
         assert read.end == pytest.approx(written.end, abs=1e-6)
+
+
+def test_a_manifest_written_before_the_link_existed_still_loads(tmp_path):
+    """Every field after `clean` is optional and appended, so an older run's
+    manifest keeps working and a newer one degrades to what it understands.
+    """
+    import json
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps([
+        {"noisy": "a.wav", "clean": "b.wav", "noise": "n", "snr_db": 0},
+    ]), encoding="utf-8")
+    pair, = kudio.load_manifest(path)
+    assert pair.rt60 is None and pair.channel is None and pair.target is None
+
+
+def test_the_link_and_the_target_survive_a_round_trip(tmp_path):
+    pairs = [kudio.Pair(noisy="a.wav", clean="b.wav", noise="n", snr_db=-5,
+                        rt60=0.4, channel="mu_law+loss5%x4",
+                        target="TARGETS/a.wav")]
+    path = kudio.save_manifest(tmp_path / "m.json", pairs)
+    assert kudio.load_manifest(path) == pairs
+
+
+def test_a_pair_is_still_hashable_with_a_link_on_it():
+    """`split_pairs` checks for overlap by putting pairs in a set, which
+    silently catches nothing if they stop being hashable. A dict-valued
+    `channel` would have done exactly that, which is why it is a string.
+    """
+    pair = kudio.Pair(noisy="a.wav", clean="b.wav", channel="telephone",
+                      target="t.wav", rt60=0.3)
+    assert len({pair, pair}) == 1

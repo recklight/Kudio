@@ -57,10 +57,15 @@ win = kudio.frame_windows(spec, n_frames=64)          # (n, 64, bins)
 std = kudio.Standardizer().fit(spec)                  # save it with the model
 z   = std.transform(spec); spec_again = std.inverse(z)
 
-# --- loudness (BS.1770) ---------------------------------------------------
+# --- loudness (BS.1770 / EBU R 128) ---------------------------------------
 lufs = kudio.loudness(y, sr)                          # what it sounds like,
 y    = kudio.normalize_lufs(y, sr, lufs=-23.0)        # not what its peak is
 fair = kudio.match_loudness(enhanced, y, sr)          # before you A/B them
+
+curve = kudio.loudness_over_time(y, sr)               # short-term, 100 ms hop
+print(curve)      # "-18.2 LUFS at 4.10s, -31.7 LUFS at 12.80s (13.5 LU apart)"
+print(kudio.loudness_range(y, sr))                    # EBU Tech 3342, in LU
+print(kudio.true_peak(y, sr))                         # dBTP, between the samples
 
 # --- is this recording usable at all? no reference needed -----------------
 info = kudio.audio_info("clip.wav")                   # header, without loading
@@ -130,14 +135,37 @@ print(result)                                         # "412/412 written, 0 fail
 pairs = kudio.load_manifest("runs/exp/manifest.json")
 train, val, test = kudio.split_pairs(pairs, 0.1, 0.1, seed=17)
 
-# --- noisy-data synthesis -------------------------------------------------
+# --- what the transmission did to it --------------------------------------
+phone = kudio.telephone(y, sr)                        # 300-3400 Hz, 8 kHz, G.711
+lossy = kudio.dropouts(y, sr, loss=0.05, seed=0)      # a bad link
+burst = kudio.dropouts(y, sr, loss=0.05, burst=6)     # ...that loses them in runs
+rough = kudio.bit_depth(y, bits=8)                    # and a cheap converter
+link  = kudio.apply_channel(y, sr, "voip", seed=0)    # or the whole lot at once
+
+# --- rooms: the other kind of degradation ---------------------------------
+ir  = kudio.rir(sr, rt60=0.6, drr_db=6.0, seed=0)     # a room you can rebuild
+wet = kudio.apply_rir(y, ir)                          # put the clip in it
+print(kudio.rt60(ir, sr))    # "T30 0.60 s (EDT 0.61 s) · C50 +12.7 dB · ..."
+
+# --- noisy-data synthesis: the whole chain, in the order it happens -------
+#     talker -> room (rt60) -> + noise (snr_ratio) -> link (channel) -> file
 syx = kudio.Synthesizer("data/clean", "data/noise",
-                        out_path="data/mixed", snr_ratio=(-5, 0, 5))
+                        out_path="data/mixed", snr_ratio=(-5, 0, 5),
+                        rt60=(0.3, 0.8),              # ...and in rooms
+                        channel="telephone",          # ...down a phone line
+                        write_targets=True)           # ...with a wet target
 syx.syn(mode="inc", seed=17)                          # reproducible
 syx.syn(mode="inc", target_sr=16000)                  # or resample the output
+kudio.save_manifest("manifest.json", syx.manifest())  # noise, SNR, room, link
 
 # --- metrics (pure numpy, no extra deps) ----------------------------------
 print(kudio.si_sdr(ref, est), kudio.snr(ref, est), kudio.segmental_snr(ref, est))
+
+# ...but only once the two line up. They compare sample i with sample i, and
+# one sample of delay costs 134 dB.
+print(kudio.find_delay(ref, est, sr))   # "lags by 128 samples (8.0 ms), 0.998"
+a, b = kudio.align(ref, est, sr)        # trimmed to what they share
+print(kudio.si_sdr(a, b))
 
 # --- recording (needs kudio[audio]) --------------------------------------
 mics = kudio.list_devices("input")                    # sounddevice indices
@@ -162,10 +190,19 @@ wave = rec.stop()
 kudio devices                                  # list audio devices
 kudio info clip.wav                            # sr / channels / duration / peak
 kudio report clip.wav                          # health check; exit 1 if wrong
-kudio loudness clip.wav                        # integrated LUFS (BS.1770)
+kudio loudness clip.wav                        # integrated, range, true peak
+kudio loudness clip.wav --over-time            # the short-term curve
+kudio loudness clip.wav --target -23           # exit 1 if it misses EBU R 128
 kudio normalize in.wav out.wav --lufs -23      # or --peak 0.99
 kudio vad clip.wav --split-to spans/           # where the speech is
 kudio pitch clip.wav --segments                # f0 summary + the voiced spans
+kudio align clean.wav processed.wav --metrics  # how far apart, and what it cost
+kudio room ir.wav                              # T30 / EDT / C50 / DRR
+kudio room --make room.wav --rt60 0.6          # ...or build one
+kudio room speech.wav --apply wet.wav --rt60 0.6   # ...or put a clip in it
+kudio channel in.wav out.wav --telephone       # what the phone line did
+kudio channel in.wav out.wav --loss 0.05 --burst 6 --conceal hold
+kudio synth ... --channel telephone --targets  # a corpus off a phone line
 kudio enhance in.wav out.wav --method logmmse --noise mcra
 kudio enhance noisy/ clean/ --recursive        # a whole tree
 kudio compare in.wav --reference clean.wav     # rank every method
@@ -173,11 +210,15 @@ kudio compare in.wav --noises all              # ...over every estimator too
 kudio convert in.wav out.wav --rate 16000 --subtype PCM_16
 kudio convert raw/ 16k/ --rate 16000 --recursive --lufs -23
 kudio synth --clean C --noise N --out O --snr -5 0 5 --seed 17
+kudio synth ... --rt60 0.3 0.6 --manifest manifest.json   # ...in rooms too
 kudio trim in.wav out.wav --top-db 30
 ```
 
-`report`, `vad` and `pitch` exit non-zero when they find a problem, find no
-speech, or find nothing voiced — so they drop straight into a shell test:
+`report`, `vad`, `pitch`, `align` and `room` exit non-zero when they find a
+problem, find no speech, find nothing voiced, decide two files are not the same
+recording, or decide a file is not an impulse response — and
+`loudness --target` does when a file misses its delivery level. They drop
+straight into a shell test:
 
 ```bash
 kudio report clip.wav || echo "needs another take"
@@ -191,15 +232,18 @@ kudio report clip.wav || echo "needs another take"
 | `kudio.core.stft` | `STFT` — geometry + `forward`/`inverse`, storable next to a model |
 | `kudio.core.feature` | `waveform_to_spectrogram`, `spectrogram_to_waveform`, `mfcc`, `melspectrogram`, `stack_context`, `frame_windows`, `Standardizer`, ... |
 | `kudio.effects` | `fade`, `reverse`, `remove_dc`, `highpass`/`lowpass`/`bandpass`/`bandstop`, `trim_silence`, `split_on_silence`, `time_stretch`, `pitch_shift`, `normalize`, `add_noise_snr`, `reverb`, `spec_augment` |
-| `kudio.core.loudness` | `loudness`, `normalize_lufs`, `match_loudness` — ITU-R BS.1770-4, the perceptual answer `normalize`'s peak scaling cannot give |
+| `kudio.effects.channel` | `mu_law`, `a_law` (G.711 companding), `bit_depth`, `dropouts` (packet loss, independent or in Gilbert runs), `telephone`, `apply_channel`/`channel_spec`/`channel_tag` — the degradation that is neither additive nor convolutive |
+| `kudio.core.loudness` | `loudness`, `normalize_lufs`, `match_loudness` — ITU-R BS.1770-4, the perceptual answer `normalize`'s peak scaling cannot give; plus `loudness_over_time` → `LoudnessCurve`, `loudness_range` (EBU Tech 3342) and `true_peak` in dBTP |
 | `kudio.core.report` | `audio_report` → `AudioReport` — clipping, DC, silence, noise floor, real bandwidth, **with no clean reference needed** |
 | `kudio.core.dnsmos` | `dnsmos` → `DnsmosScore` — predicted P.835 opinion (SIG/BAK/OVRL); needs `[dnsmos]` and weights you supply |
 | `kudio.core.vad` | `vad`, `vad_split`, `vad_trim`, `speech_ratio` — noise-adaptive speech detection |
 | `kudio.core.pitch` | `f0` → `PitchTrack` — pYIN fundamental frequency **with** the voiced/unvoiced decision, summary stats and label export |
 | `kudio.core.spectrogram` | `SpectrogramStream` — ring-buffered column-wise STFT for audio still arriving; linear or mel, dBFS |
 | `kudio.core.dataset` | `Pair`, `save_manifest`, `load_manifest`, `split_pairs` — what came from what, in plain JSON |
-| `kudio.core.synth` | `Synthesizer` (SNR mixing, seedable) |
+| `kudio.core.synth` | `Synthesizer` — clean × noise × SNR × room, seedable, with `manifest()` recording what came from what |
+| `kudio.core.room` | `rir`, `apply_rir`, `rt60` → `Reverberation`, `schroeder_curve` — reverberation as a controllable degradation and an ISO 3382-1 measurement |
 | `kudio.core.evaluator` | `si_sdr`, `snr`, `segmental_snr` (dep-free); `AudioEvaluate` (PESQ/STOI/SDR); `check_metrics_install` |
+| `kudio.core.align` | `find_delay` → `Alignment`, `align` — the sample alignment every reference metric assumes and none of them can check |
 | `kudio.core.stream` | `record`, `StreamRecorder`, `play_audio`, `Recorder`, `LocalStreamReader`, `RemoteStreamReader` |
 | `kudio.enhance` | `spectral_enhance` (7 gain rules × 4 noise estimators), `StreamEnhancer`, `compare_enhancers`, `enhance_folder`, `trad_enhance`, `wavelet_low_pass_filter` |
 | `kudio.util` | `list_devices`, `CheckDevice`, `map_waves`, colored console helpers, timers |

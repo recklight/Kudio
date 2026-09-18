@@ -38,6 +38,21 @@ class Pair:
     clean: str
     noise: str = ""
     snr_db: Optional[int] = None
+    #: reverberation time of the room the clean signal was put through, in
+    #: seconds, or ``None`` when it was not. Optional and last, so a manifest
+    #: written before rooms existed still loads and a manifest written with
+    #: them still loads in an older kudio -- see :func:`load_manifest`.
+    rt60: Optional[float] = None
+    #: the link the mixture travelled down, as :func:`kudio.channel_tag`
+    #: writes it (``'telephone'``, ``'mu_law+loss5%x4'``, ...), or ``None``.
+    #: A string rather than the spec dict it came from: this dataclass is
+    #: frozen so that a split can be checked for overlap with a set, and a
+    #: dict field would quietly make it unhashable again.
+    channel: Optional[str] = None
+    #: the reverberant-but-clean signal, when one was written. ``clean`` is
+    #: still the dry target; this is the same speech with the room left on,
+    #: for training that should remove the noise and leave the room.
+    target: Optional[str] = None
 
     def exists(self) -> bool:
         """True when both sides are actually on disk."""
