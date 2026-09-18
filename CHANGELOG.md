@@ -4,6 +4,300 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [3.6.0] - 2026-09-18
+
+The chain between a talker and a file, end to end. 3.5 could describe a room
+and 3.5's late work could describe a link; neither could put a corpus through
+both, and packet loss was still scattered evenly in a way no real link loses
+it.
+
+### Added — burst loss
+
+`dropouts` lost packets independently. Real links lose them in runs — a fade,
+a queue overflowing, a handover — and a run is far harder to conceal than the
+same number of packets scattered about, because there is no recent speech
+left to repeat.
+
+- **`dropouts(y, sr, loss=0.05, burst=6)`** — one parameter, the mean run
+  length in packets. The run lengths are geometric, which is exactly what
+  Gilbert's two-state chain gives; what is *not* taken from Gilbert is its
+  marginal, because that chain fixes the loss *rate* and then delivers 4.1%
+  or 6.3% on any given file. **The count stays exact**, as it has been since
+  `dropouts` existed, because the number on a corpus label should be true of
+  the corpus. Runs are kept at least one surviving packet apart, without
+  which two runs could abut and the mean would drift above the one asked for.
+
+- **`independent_burst(loss)`** — because the obvious guess about the default
+  is wrong. Independent draws land side by side sometimes, so they already
+  average `1 / (1 - loss)`: 1.05 packets at 5%, 1.25 at 20%. `burst=1` is
+  therefore a request for something **less** clustered than leaving it alone,
+  not the same thing, which is why independent loss is spelled `burst=None`.
+
+- A regime that cannot be built is **refused rather than fudged**: 80% of
+  packets lost in runs of one needs four survivors for every loss and there
+  are not four. Silently merging the runs would mean the burst length asked
+  for was not the burst length delivered.
+
+- **`kudio channel --burst 6`**, and the CLI now reports the runs it made:
+  `20 packet(s) lost in 5 run(s) of 4.0`.
+
+### Added — the link as one thing
+
+Five functions in the order a link applies them, so a corpus builder, the
+command line and a GUI describe a link the same way instead of each
+inventing an argument order.
+
+- **`apply_channel(y, sr, spec, seed=)`** — band and rate, then the codec,
+  then the converter, then the wire. The loss goes last because packets are
+  lost from the encoded signal; running it first would let the resampler
+  smear every hole into its neighbours.
+
+- **`channel_spec(spec)`** normalises a preset name, a dict, or a preset with
+  overrides (`{'preset': 'voip', 'loss': 0.1}`) into one dictionary, and
+  returns `{}` — falsy — for "no link", so one check downstream means "is
+  there a channel at all" instead of five that have to agree.
+  **`CHANNEL_PRESETS`**: `telephone`, `telephone_a`, `voip`, `mu_law`,
+  `a_law`, `none`.
+
+- **`channel_tag(spec)`** writes it short and stable for a manifest or a
+  label: `telephone`, `mu_law+loss5%x4`, `8bit`.
+
+### Added — the whole chain in `Synthesizer`
+
+    talker → room (rt60=) → + noise (snr_ratio=) → link (channel=) → file
+
+- **`Synthesizer(..., channel='telephone')`** runs the finished mixture down
+  a link. The **mixture**, not the speech: a wire carries whatever reached
+  the microphone, noise included, which is why it comes last. Packet loss is
+  seeded per output file, so no two files lose the same packets and a rerun
+  loses the same ones again.
+
+  **The link is deliberately not an axis.** `snr_ratio` and `rt60` are swept
+  and multiply the output count; `channel` is constant for the run and does
+  not appear in the file names. A corpus is recorded over a phone line or it
+  is not — that is a property of the corpus rather than a dimension to cross
+  with the others, and four axes already multiply enough. To compare two
+  links, run the Synthesizer twice into two directories.
+
+- **`Synthesizer(..., write_targets=True)`** writes the reverberant-but-clean
+  signal to `OUT/TARGETS/`, named to match its mixture. The clean file is
+  still the dry target, so the default asks a model to undo the room as well
+  as the noise; this is the same speech with the room left on, for training
+  that should remove the noise and **leave** the room. The link does not
+  reach it: asking a model to reproduce G.711 is not denoising.
+
+  Passing it without `rt60=` warns instead of writing, since with no room the
+  clean file already *is* that signal.
+
+- **`Pair` gained `channel` and `target`**, both optional and last, so an
+  older manifest still loads and a newer one still loads in an older kudio.
+  `channel` is the tag **string** rather than the spec dict it came from:
+  `Pair` is frozen so that `split_pairs` can check for overlap with a set,
+  and a dict field would quietly have made it unhashable again.
+
+- **`kudio synth --channel telephone --channel-loss 0.05 --channel-burst 6
+  --targets`**.
+
+### Added — the channel: what the transmission did to it
+
+Speech arrives degraded in three ways and kudio could describe two. Noise is
+**additive**, a room is **convolutive**, and the channel is neither: a codec
+quantises, a link drops packets, a converter throws bits away. None of that
+can be written as `y + n` or `y * h`, which is why none of it was here.
+
+- **`mu_law(y)` / `a_law(y)`** — the G.711 companding curves, quantised to
+  8 bits and back. These are the curves, not the standard's piecewise-linear
+  segment layout: measured against Python's own `audioop` (the reference, and
+  removed in 3.13, which is why it cannot be a dependency) the round-trip SNR
+  agrees to 0.5 dB and the waveforms to 0.013 full scale.
+
+  **The property that makes companding companding is asserted, not assumed.**
+  Logarithmic steps follow the signal down, so on this repo's fixture mu-law
+  holds 37 dB of SNR across a 24 dB range of levels while linear 8-bit loses
+  the textbook 6 dB per halving — 38.1 dB down to 15.1 dB. A wrong
+  implementation would not have that.
+
+- **`bit_depth(y, bits=8, dither=False)`** — linear requantisation. A
+  full-scale sine comes back at `6.02 * bits + 1.76` dB, matched to within a
+  decibel from 4 bits to 16, which is the figure with no fudge in it.
+
+- **`dropouts(y, sr, loss=, packet_ms=, conceal=)`** — packet loss at 20 ms,
+  G.711 over RTP's packet. The loss rate is **achieved exactly** rather than
+  drawn per packet, so a corpus labelled 5% carries 5%; `return_spans=True`
+  says where the holes are; `conceal='hold'` repeats the last packet that
+  arrived.
+
+  Worth knowing before choosing a concealment strategy: **whether holding
+  measures better or worse than a hole is decided by an accident**, not by
+  merit. When the talker's pitch period divides the packet the repeat lands
+  in phase and is numerically exact; when it does not, it is a larger error
+  signal than the silence it replaced. On a 20 ms packet a 150 Hz voice
+  (3.00 cycles) scores +275 dB and a 133 Hz voice (2.66) scores worse than
+  the hole. Anything picking a concealment strategy on a waveform metric is
+  measuring that accident, and there are tests from both sides.
+
+- **`telephone(y, sr)`** — the lot, in the order a line does it: band-limit
+  to 300-3400 Hz at the original rate, resample to 8 kHz, compand, come back.
+  Same length and same rate as it went in, and `audio_report` afterwards says
+  band-limited at about 3.4 kHz.
+
+- **`kudio channel in.wav out.wav --telephone / --codec / --bits / --loss`**.
+
+### Added — rooms in `Synthesizer`
+
+`Synthesizer` mixed clean × noise × SNR. It now takes `rt60=` as a fourth
+axis, putting the speech through a room **before** the noise is mixed in --
+the order a microphone meets them, which is also the only order in which the
+SNR you asked for is the SNR you get, since it is then measured against the
+reverberant speech.
+
+- **`Synthesizer(..., rt60=[0.3, 0.8], drr_db=3.0)`**. Each output file gets
+  its own room, seeded from the base seed and the output name, so the same
+  request rebuilds the same dataset and two files sharing an RT60 still get
+  different rooms. The room goes in the filename (`..._rt300ms.wav`).
+
+- **`Synthesizer.manifest()` → `List[Pair]`**, and `Pair` gained an optional
+  `rt60`. The room travels there rather than in `syn()`'s return value, which
+  is still the four-tuple it has always been: a return shape that changes
+  when a keyword is passed is the bug this codebase has met most often, and
+  `file_load`'s two channel layouts are in the notes as exactly that.
+
+- **`kudio synth --rt60 0.3 0.6 --manifest out.json`**.
+
+The clean file stays the training target, so a model trained on this data is
+asked to undo the room as well as the noise. That is the standard setup and
+worth choosing on purpose; keeping the room and removing only the noise needs
+the reverberant signal as the target, which this class does not write.
+
+### Added — reverberation, as a degradation and a measurement
+
+kudio could degrade a recording with *additive* noise and take it back out
+again. Reverberation is the other kind and it is **convolutive**: the room adds
+nothing, it smears what was already there across the following half-second.
+Nothing here could describe that or measure it.
+
+- **`rir(sr, rt60=, drr_db=, seed=)`** — a synthetic room impulse response:
+  exponentially decaying noise, the textbook model of a diffuse tail. Both
+  knobs are solved for against the measurement's own definitions, so what you
+  ask for is what comes back: RT60 within 3%, DRR within 0.01 dB. Seeded, so a
+  dataset built from it can be rebuilt.
+
+- **`apply_rir(y, ir)`** — put a clip in a room, keeping its length and its
+  level by default. A clip that grows every time it is processed stops lining
+  up with everything measured against it, and an augmentation that also
+  changes the level is measuring two things at once.
+
+- **`rt60(ir, sr)` → `Reverberation`** — T20, T30, EDT, C50, C80 and DRR to
+  ISO 3382-1, all off one backward-integrated decay curve
+  (`schroeder_curve`) so they cannot disagree about what the tail did.
+
+- **`Reverberation.reliable()` asks two questions**, because the R² of the
+  fitted decay only answers one of them. Backward integration makes *any*
+  signal decay monotonically, and over a long clip that decay can fit a
+  straight line well — this repo's speech fixture reaches R² 0.94 and comes
+  back claiming a 3.9 second room. What gives it away is EDT and T30
+  disagreeing by a factor of eleven, where a real room has them within a few
+  per cent. Truncated impulse responses are caught by the R² alone: cutting a
+  1 s room to 50 ms still plunges 35 dB, and reports 0.19 s.
+
+- **`kudio room`** measures an impulse response, `--make` synthesises one and
+  `--apply` puts a file through one. Exits non-zero when the decay does not
+  look like an impulse response.
+
+### Added — the alignment every reference metric assumes
+
+`si_sdr`, `snr`, `segmental_snr`, PESQ and STOI all compare sample *i* of one
+signal with sample *i* of the other. They trim to the shorter of the two and
+assume the rest lines up, which is right for a process that returns what it
+was given and silently wrong for anything with latency — a filter, a
+resampler, a frame-based denoiser that pads.
+
+Measured on a clip scored against **itself**:
+
+| shift | SI-SDR |
+|---|---|
+| 0 | +145 dB |
+| 1 sample | +10.6 dB |
+| 1 ms | -10.1 dB |
+| 10 ms | -11.1 dB |
+
+One sample costs 134 dB. A millisecond scores worse than not processing at
+all, and nothing in the number says "these are misaligned" rather than "your
+denoiser destroyed the signal".
+
+- **`find_delay(ref, deg, sr)` → `Alignment`** — the offset to the nearest
+  sample, by normalised cross-correlation. `delay` is signed (positive means
+  *deg* starts later), `apply()` trims a pair to what they share, and a delay
+  measured once on one passage can be applied to every file that came through
+  the same chain.
+
+- **`align(ref, deg, sr)`** — the pair, lined up and ready for a metric.
+
+- **The confidence is half of it.** Cross-correlation always has a maximum, so
+  it always returns a delay — including for two recordings that have nothing
+  to do with each other. `Alignment.correlation` separates "the same take, 8 ms
+  apart" from "two unrelated files", and `align` refuses below
+  `MIN_CORRELATION` rather than putting a confident-looking number on nothing.
+  Pass `min_correlation=0` to insist.
+
+- **Polarity is reported, not silently fixed.** An inverted copy correlates at
+  -1: it is the same take, and something in the chain flipped it. That is a
+  finding, so `Alignment.inverted` names it instead of correcting it on the
+  way past.
+
+- **`kudio align ref.wav deg.wav`**, with `--metrics` to show the score before
+  and after, `--write-to` for the aligned pair, and `--max-seconds` to bound
+  the search. Exits non-zero when the two do not look like the same recording.
+  Resamples first when the rates differ, because a sample offset is not a
+  quantity yet if the two are not on the same clock.
+
+### Added — loudness over time
+
+`loudness()` answers "how loud is this" with one number, which is what you
+normalise against and useless for finding the moment somebody turned away from
+the microphone.
+
+- **`loudness_over_time(y, sr, window=...)` → `LoudnessCurve`** — the two
+  EBU Tech 3341 meters, `MOMENTARY` (400 ms) and `SHORT_TERM` (3 s), stepped
+  by 100 ms. The curve carries `loudest()`, `quietest()`, `spans_above()`,
+  `spans_below()` and a `summary()`; times are window **centres**, so a curve
+  drawn beside a waveform lines up with the audio that produced it.
+
+  **These are ungated.** Gating belongs to the integrated figure, where its job
+  is to stop pauses dragging the average down. A curve with holes punched in it
+  where the gate fired would describe a recording that stops existing between
+  words.
+
+- **`loudness_range(y, sr)` → LU**, to EBU Tech 3342: the 10th-to-95th
+  percentile spread of the short-term loudness, after an absolute gate at
+  -70 LUFS and a relative one **20 LU** below the power-mean of the survivors
+  — not the integrated measurement's 10. The percentiles are what stop a
+  single door slam from setting the answer.
+
+- **`true_peak(y, sr)` → dBTP**, to BS.1770-4 Annex 2. The largest sample is
+  not the largest value the signal reaches: samples are points on a curve that
+  passes between them, and the curve overshoots. A full-scale sine at a quarter
+  of the sample rate, phased so every sample lands at 0.707, reads -3.01 dBFS
+  and +0.1 dBTP — and the converter, encoder or resampler that reconstructs it
+  meets the second number. Oversampled to at least 192 kHz as the standard
+  asks, in chunks, so a ten-minute file is not held four times over.
+
+  That case is in the test suite, which is the point of having it.
+
+- **`kudio loudness`** now prints range, true peak and the loudest and quietest
+  moments with their timestamps. `--over-time` draws the curve, `--momentary`
+  switches windows, and `--target -23` exits non-zero when a file misses its
+  delivery level by more than 1 LU.
+
+### Internal
+
+K-weighted block power moved to one private helper (`_block_power`), which the
+integrated measurement and both curves now share — they had begun to need the
+same thing and written twice they would eventually have disagreed about what a
+block contains.
+
 ## [3.5.0] - 2026-09-10
 
 Three things the toolkit could not do: say which part of a denoiser was doing

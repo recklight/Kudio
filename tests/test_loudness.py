@@ -161,3 +161,242 @@ def test_agrees_with_pyloudnorm_where_it_is_installed(sr):
     y = _speech_like(sr) + 0.05 * np.sin(2 * np.pi * 3000 * np.arange(4 * sr) / sr)
     assert loudness(y, sr) == pytest.approx(
         pyln.Meter(sr).integrated_loudness(y), abs=0.1)
+
+
+# =========================================================== over time
+
+from kudio import (                                            # noqa: E402
+    MOMENTARY,
+    SHORT_TERM,
+    loudness_over_time,
+    loudness_range,
+    true_peak,
+)
+
+
+def _steps(sr=48000, seconds=12.0, drop_db=12.0):
+    """Loud for the first half, `drop_db` quieter for the second."""
+    y = _sine(sr=sr, seconds=seconds, amp=0.5)
+    half = len(y) // 2
+    y[half:] *= 10 ** (-drop_db / 20.0)
+    return y
+
+
+def test_a_steady_tone_measures_the_same_all_the_way_along():
+    """A curve of a constant signal has to be constant, and has to agree with
+    the integrated figure -- they are the same measurement over different
+    spans."""
+    curve = loudness_over_time(_sine(seconds=10.0), 48000)
+
+    assert len(curve) > 1
+    assert curve.max - curve.min < 0.05
+    assert curve.max == pytest.approx(loudness(_sine(seconds=10.0), 48000),
+                                      abs=0.1)
+
+
+def test_a_level_drop_shows_up_where_it_happened():
+    curve = loudness_over_time(_steps(), 48000, window=MOMENTARY)
+
+    early = curve.lufs[curve.times < 5.5]
+    late = curve.lufs[curve.times > 6.5]
+    assert float(np.mean(early) - np.mean(late)) == pytest.approx(12.0, abs=0.3)
+
+    quiet_at, _ = curve.quietest()
+    loud_at, _ = curve.loudest()
+    assert quiet_at > 6.0 and loud_at < 6.0
+
+
+def test_times_are_window_centres_not_edges():
+    """A curve drawn beside a waveform has to line up with the audio that
+    produced it."""
+    curve = loudness_over_time(_sine(seconds=10.0), 48000, window=SHORT_TERM)
+    assert curve.times[0] == pytest.approx(SHORT_TERM / 2, abs=1e-6)
+    assert curve.times[1] - curve.times[0] == pytest.approx(0.1, abs=1e-6)
+    assert curve.times[-1] <= 10.0 - SHORT_TERM / 2 + 1e-6
+
+
+def _alternating(sr=16000, seconds=12.0, dip_db=12.0, period=2.0):
+    """One second loud, one second `dip_db` down, over and over.
+
+    `_speech_like` modulates at 3 Hz, which a 400 ms window averages straight
+    over -- the right fixture for gating and the wrong one for showing that
+    the two windows resolve different things.
+    """
+    t = np.arange(int(sr * seconds), dtype=np.float64) / sr
+    gate = np.where((t % period) < period / 2, 1.0, 10 ** (-dip_db / 20.0))
+    return 0.4 * np.sin(2 * np.pi * 220 * t) * gate
+
+
+def test_momentary_resolves_what_short_term_smooths():
+    """400 ms follows syllables; 3 s follows passages. Given something that
+    changes every second, the short window has to swing further -- or the two
+    are not measuring what their names claim."""
+    y = _alternating(seconds=12.0, dip_db=12.0)
+    fast = loudness_over_time(y, 16000, window=MOMENTARY)
+    slow = loudness_over_time(y, 16000, window=SHORT_TERM)
+
+    assert (fast.max - fast.min) == pytest.approx(12.0, abs=1.0)
+    assert (slow.max - slow.min) < 3.0
+
+
+def test_the_hop_sets_how_many_measurements_come_back():
+    y = _sine(seconds=10.0)
+    dense = loudness_over_time(y, 48000, window=MOMENTARY, hop=0.1)
+    sparse = loudness_over_time(y, 48000, window=MOMENTARY, hop=0.5)
+    assert len(dense) == pytest.approx(len(sparse) * 5, rel=0.05)
+
+
+def test_the_curve_is_not_gated():
+    """Gating belongs to the integrated figure. A curve with holes punched in
+    it where the gate fired would describe a recording that stops existing
+    between words."""
+    sr = 48000
+    y = _sine(sr=sr, seconds=12.0, amp=0.5)
+    y[len(y) // 3: 2 * len(y) // 3] = 0.0          # a long true silence
+
+    curve = loudness_over_time(y, sr, window=MOMENTARY)
+    assert np.isneginf(curve.lufs).any(), "the silence must still be reported"
+    assert len(curve) == pytest.approx((12.0 - MOMENTARY) / 0.1, abs=2)
+
+
+def test_silence_is_a_silent_curve_rather_than_an_error():
+    curve = loudness_over_time(np.zeros(48000 * 5), 48000)
+    assert len(curve) > 0
+    assert curve.finite.size == 0
+    assert curve.max == float("-inf")
+    assert np.isnan(curve.loudest()[0])
+    assert "silent" in str(curve)
+    assert curve.summary()["windows"] == len(curve)
+
+
+def test_spans_find_the_quiet_stretch():
+    curve = loudness_over_time(_steps(drop_db=20.0), 48000, window=MOMENTARY)
+    threshold = (curve.max + curve.min) / 2
+
+    below = curve.spans_below(threshold, min_seconds=0.5)
+    assert len(below) == 1
+    assert below[0][0] == pytest.approx(6.0, abs=0.4)
+    assert below[0][1] == pytest.approx(12.0, abs=0.4)
+
+    above = curve.spans_above(threshold, min_seconds=0.5)
+    assert len(above) == 1
+    assert above[0][0] < 1.0
+
+
+def test_a_window_longer_than_the_clip_says_how_to_fix_it():
+    with pytest.raises(FeatureError, match="shorter window"):
+        loudness_over_time(_sine(seconds=1.0), 48000, window=SHORT_TERM)
+
+
+@pytest.mark.parametrize("kwargs", [{"window": 0.0}, {"hop": 0.0},
+                                    {"window": -1.0}])
+def test_impossible_curve_settings_are_refused(kwargs):
+    with pytest.raises(FeatureError):
+        loudness_over_time(_sine(seconds=10.0), 48000, **kwargs)
+
+
+# =========================================================== loudness range
+
+def test_a_steady_tone_has_no_range():
+    assert loudness_range(_sine(seconds=10.0), 48000) == pytest.approx(0.0, abs=0.3)
+
+
+def test_a_clip_that_changes_level_has_the_range_it_changed_by():
+    """Half loud, half 12 dB down, held long enough for the 3 s window to
+    settle on each."""
+    assert loudness_range(_steps(seconds=30.0, drop_db=12.0), 48000) == \
+        pytest.approx(12.0, abs=1.0)
+
+
+def test_silence_has_no_range_rather_than_an_undefined_one():
+    assert loudness_range(np.zeros(48000 * 5), 48000) == 0.0
+
+
+def test_a_stray_bang_does_not_set_the_range():
+    """The percentiles are the whole reason it is 10-to-95 and not min-to-max."""
+    sr = 48000
+    y = _sine(sr=sr, seconds=20.0, amp=0.3)
+    plain = loudness_range(y, sr)
+    y[int(9.5 * sr):int(9.52 * sr)] = 1.0          # one 20 ms transient
+    assert loudness_range(y, sr) == pytest.approx(plain, abs=1.0)
+
+
+# ================================================================ true peak
+
+def test_a_full_scale_sine_reads_about_zero_dbtp():
+    assert true_peak(_sine(), 48000) == pytest.approx(0.0, abs=0.2)
+
+
+def test_the_peak_between_the_samples_is_found():
+    """The demonstration case: a sine at a quarter of the sample rate, phased
+    so every sample lands at 0.707. The samples say -3 dBFS; the waveform they
+    describe reaches full scale, and that is what a converter meets."""
+    sr = 48000
+    n = np.arange(sr)
+    y = np.sin(2 * np.pi * (sr / 4) * n / sr + np.pi / 4)
+
+    assert 20 * np.log10(np.max(np.abs(y))) == pytest.approx(-3.01, abs=0.01)
+    assert true_peak(y, sr) == pytest.approx(0.0, abs=0.3)
+
+
+def test_oversampling_can_never_report_less_than_the_samples_do():
+    for signal in (_sine(), _speech_like(), _steps()):
+        sr = 48000 if len(signal) != 64000 else 16000
+        assert true_peak(signal, sr) >= 20 * np.log10(np.max(np.abs(signal))) - 1e-9
+
+
+def test_no_oversampling_is_the_plain_sample_peak():
+    y = _speech_like()
+    assert true_peak(y, 16000, oversample=1) == \
+        pytest.approx(20 * np.log10(np.max(np.abs(y))), abs=1e-9)
+
+
+def test_silence_has_no_peak():
+    assert true_peak(np.zeros(4800), 48000) == float("-inf")
+    assert true_peak(np.zeros(0), 48000) == float("-inf")
+
+
+def test_chunking_does_not_change_the_answer(monkeypatch):
+    """Long files are oversampled in pieces with real audio either side; the
+    seams must not be visible in the result."""
+    import sys
+
+    # by name out of sys.modules: `kudio.core.loudness` the module is shadowed
+    # by `kudio.core.loudness` the function, and getattr finds the function
+    module = sys.modules["kudio.core.loudness"]
+
+    y = _speech_like(seconds=8.0)
+    whole = true_peak(y, 16000)
+    monkeypatch.setattr(module, "_CHUNK", 997)       # deliberately awkward
+    assert true_peak(y, 16000) == pytest.approx(whole, abs=1e-9)
+
+
+def test_stereo_reports_the_louder_channel():
+    quiet = _sine(amp=0.25)
+    loud = _sine(amp=1.0)
+    stereo = np.stack([quiet, loud], axis=1)
+    assert true_peak(stereo, 48000) == pytest.approx(true_peak(loud, 48000),
+                                                     abs=1e-9)
+
+
+def test_a_bad_rate_is_refused():
+    with pytest.raises(FeatureError, match="positive sample rate"):
+        true_peak(_sine(), 0)
+
+
+def test_the_range_is_readable_off_a_curve_you_already_have():
+    """Measuring the curve is the expensive half; asking it for its range
+    afterwards has to be the same answer and nearly free."""
+    y = _steps(seconds=30.0, drop_db=12.0)
+    curve = loudness_over_time(y, 48000, window=SHORT_TERM)
+    assert curve.range_lu == pytest.approx(loudness_range(y, 48000), abs=1e-9)
+    assert curve.summary()["range_lu"] == curve.range_lu
+
+
+def test_a_momentary_curve_still_answers_but_narrower():
+    """Same arithmetic, different question -- how much the syllables vary,
+    not the loudness range."""
+    y = _alternating(seconds=20.0, dip_db=12.0)
+    fast = loudness_over_time(y, 16000, window=MOMENTARY).range_lu
+    slow = loudness_over_time(y, 16000, window=SHORT_TERM).range_lu
+    assert fast > slow
