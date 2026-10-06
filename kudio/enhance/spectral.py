@@ -728,6 +728,8 @@ def compare_enhancers(y: np.ndarray, sr: int,
                       noises: Optional[Sequence[str]] = None,
                       reference: Optional[np.ndarray] = None,
                       metrics: bool = True,
+                      pesq_mode: str = 'auto',
+                      pesq_scale: str = 'lqo',
                       **common) -> List[EnhanceResult]:
     """Run several methods over the same clip and measure each one.
 
@@ -776,7 +778,9 @@ def compare_enhancers(y: np.ndarray, sr: int,
         raise FeatureError(f"unknown noise estimator(s): {', '.join(unknown)}")
 
     y = np.asarray(y, dtype=np.float32)
-    baseline = _reference_metrics(reference, y, sr, metrics) if reference is not None else None
+    baseline = (_reference_metrics(reference, y, sr, metrics, pesq_mode,
+                                   pesq_scale)
+                if reference is not None else None)
 
     # Warm up before timing anything. librosa's STFT is JIT-compiled and scipy's
     # Bessel/exponential-integral functions import lazily, so whichever run
@@ -791,7 +795,8 @@ def compare_enhancers(y: np.ndarray, sr: int,
             # apply and saying 'mcra' beside it would be a lie
             results.append(_run_one(entry.name, CUSTOM_NOISE,
                                     lambda: entry(y, sr),
-                                    y, sr, reference, baseline, metrics))
+                                    y, sr, reference, baseline, metrics,
+                                    pesq_mode, pesq_scale))
             continue
 
         allowed = set(METHODS[entry].defaults())
@@ -803,12 +808,13 @@ def compare_enhancers(y: np.ndarray, sr: int,
                 entry, estimator,
                 lambda name=entry, est=estimator:
                     spectral_enhance(y, sr, name, noise=est, **kwargs),
-                y, sr, reference, baseline, metrics))
+                y, sr, reference, baseline, metrics,
+                pesq_mode, pesq_scale))
     return results
 
 
-def _run_one(name, estimator, call, y, sr, reference, baseline, metrics
-             ) -> EnhanceResult:
+def _run_one(name, estimator, call, y, sr, reference, baseline, metrics,
+             pesq_mode='auto', pesq_scale='lqo') -> EnhanceResult:
     """Time one run and measure it, reporting a failure rather than raising."""
     started = time.perf_counter()
     try:
@@ -821,7 +827,8 @@ def _run_one(name, estimator, call, y, sr, reference, baseline, metrics
             noise_floor_db=float('nan'), error=f"{type(e).__name__}: {e}")
     elapsed = time.perf_counter() - started
     return _measure(name, estimator, np.asarray(out, dtype=np.float32), y, sr,
-                    elapsed, reference, baseline, metrics)
+                    elapsed, reference, baseline, metrics,
+                    pesq_mode, pesq_scale)
 
 
 @dataclass(frozen=True)
@@ -951,7 +958,8 @@ def _warm_up(y: np.ndarray, sr: int, names: Sequence[str], noise: str) -> None:
 
 
 def _measure(name, estimator, out, noisy, sr, elapsed, reference, baseline,
-             metrics) -> EnhanceResult:
+             metrics, pesq_mode='auto',
+             pesq_scale='lqo') -> EnhanceResult:
     from kudio.core.report import audio_report
 
     try:
@@ -962,7 +970,8 @@ def _measure(name, estimator, out, noisy, sr, elapsed, reference, baseline,
 
     snr = si_sdr = delta = pesq = stoi = None
     if reference is not None:
-        scores = _reference_metrics(reference, out, sr, metrics)
+        scores = _reference_metrics(reference, out, sr, metrics,
+                                    pesq_mode, pesq_scale)
         snr, si_sdr, pesq, stoi = scores
         if baseline is not None and snr is not None and baseline[0] is not None:
             delta = snr - baseline[0]
@@ -972,7 +981,8 @@ def _measure(name, estimator, out, noisy, sr, elapsed, reference, baseline,
                          pesq=pesq, stoi=stoi)
 
 
-def _reference_metrics(reference, degraded, sr, metrics):
+def _reference_metrics(reference, degraded, sr, metrics,
+                       pesq_mode='auto', pesq_scale='lqo'):
     """``(snr, si_sdr, pesq, stoi)`` over the overlapping samples."""
     from kudio.core.evaluator import si_sdr as _si_sdr, snr as _snr
 
@@ -992,7 +1002,8 @@ def _reference_metrics(reference, degraded, sr, metrics):
     if metrics:
         try:
             from kudio.core.evaluator import eval_metrics
-            pesq, stoi, _ = eval_metrics(sr, ref, deg)
+            pesq, stoi, _ = eval_metrics(sr, ref, deg, pesq_mode=pesq_mode,
+                                         pesq_scale=pesq_scale)
         except Exception as e:                              # noqa: BLE001
             log.debug("optional metrics unavailable: %s", e)
     return (snr, si_sdr, pesq, stoi)

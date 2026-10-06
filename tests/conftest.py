@@ -12,7 +12,15 @@ def make_sine(freq: float = 440.0, seconds: float = 1.0, sr: int = SR) -> np.nda
 
 
 def write_wav(path, wave: np.ndarray, sr: int = SR) -> None:
-    wavfile.write(str(path), sr, (wave * np.iinfo(np.int16).max).astype(np.int16))
+    """Write a fixture through the library's own writer.
+
+    This used to be ``(wave * iinfo(int16).max).astype(int16)`` -- the exact
+    wrap-around 3.7.0 fixed in `Synthesizer`. The shared noise fixture peaks at
+    1.207, so twelve of its samples came back with the sign flipped, and every
+    test that mixed against it was mixing against clicks it did not ask for.
+    """
+    from kudio import save_wave
+    save_wave(path, wave, sr)
 
 
 def make_speech(sr: int = SR, seconds: float = 6.0, seed: int = 0) -> np.ndarray:
@@ -69,8 +77,15 @@ def clean_noise_dirs(tmp_path):
     noise = tmp_path / "noise"
     clean.mkdir()
     noise.mkdir()
+    # 12 dB below make_sine's own level, so that a mixture at this fixture's
+    # lowest SNR still fits in the format. The noise is renormalised to hit the
+    # requested SNR, so the mixture's peak is set by the CLEAN level and the
+    # SNR -- quietening the noise file would change nothing. At -5 dB a 0.5
+    # peak mixes to 2.68 and every test using this fixture warned about
+    # clipping; the warning was right, and a warning that fires on a dozen of
+    # your own tests is one nobody reads.
     for i, freq in enumerate((220, 440)):
-        write_wav(clean / f"clean_{i}.wav", make_sine(freq))
+        write_wav(clean / f"clean_{i}.wav", make_sine(freq) * 0.25)
     rng = np.random.default_rng(0)
     write_wav(noise / "white.wav",
               (0.3 * rng.standard_normal(SR)).astype(np.float32))

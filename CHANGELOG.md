@@ -6,6 +6,85 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.7.1] - 2026-10-07
+
+### Fixed — three ways 3.7.0 could still write a corpus nobody could use
+
+Found by reviewing 3.7.0 against the feedback list it was written from. Two of
+these are the same shape as the bugs it fixed: a mixture written with no speech
+in it, and a name that silently overwrites another.
+
+- **A noise file with no variation produced an all-zero mixture.** Scaling the
+  noise to the requested SNR divides by its standard deviation, so digital
+  silence or a constant level made every sample NaN, and int16 wrote NaN as
+  zero. The mixture came out with no speech in it and nothing said — exactly
+  the damage `is_silence` was doing before 3.7.0, reached a different way. One
+  truncated file in a noise corpus was enough. Now a `SynthesisError` that
+  names the file and says what is wrong with it, because there is no gain that
+  puts a constant at any SNR; a mixture that comes out non-finite is refused
+  the same way.
+
+- **Noise-only file names joined two stems with nothing between them.**
+  `f"{clean.stem}{noise.stem}_n00.wav"` made `ab` + `c` and `a` + `bc` one
+  file, and the de-duplication then kept whichever the RNG drew first. It was
+  also the only output in the class that did not follow the `clean_noise_snr`
+  shape a reader can parse. The separator is back, and two *different* pairs
+  landing on one name now warn instead of one of them vanishing — the
+  collapse of one pair's two SNRs, which is intended, is unchanged.
+
+- **`syn()` still returned numpy scalars for numpy input.** 3.7.0's changelog
+  said it did not, and the manifest path was indeed fixed, but the four-tuples
+  themselves carried `np.int64` whenever `snr_ratio` came from `np.arange`, so
+  `json.dumps` on them still raised. Normalised at the source, so every input
+  form — list, `arange`, `linspace`, fractional — comes back as a plain `int`
+  or `float`.
+
+### Fixed — the PESQ scale could not be reached from anything that reports it
+
+3.7.0 added `mode=`/`scale=` to `kudio.pesq` because enhancement papers mostly
+quote the raw narrowband P.862 score and kudio reported wideband MOS-LQO. But
+`eval_metrics` did not pass them on and `compare_enhancers` went through
+`eval_metrics`, so every table a user actually reads was stuck on the other
+scale with no way to ask. `_compute` already took both arguments; nothing
+carried them.
+
+- **`eval_metrics(sr, ref, deg, pesq_mode=, pesq_scale=)`** and
+  **`compare_enhancers(..., pesq_mode=, pesq_scale=)`**, keyword-only with the
+  existing defaults, so no caller's numbers move.
+
+### Fixed — packaging and documentation
+
+- **`[eval]` pins `mir_eval<0.9`.** `sdr` calls
+  `mir_eval.separation.bss_eval_sources`, deprecated in 0.8 and removed in 0.9,
+  while the floor allowed anything from 0.7 up. The bound is load-bearing, not
+  caution.
+- **`mkdocs.yml` declared `docstring_style: google`** and not one docstring in
+  the library is Google-style — they all use `:param x:`. Every parameter block
+  rendered in the API Reference as prose instead of a table. Now `sphinx`.
+- **The API Reference was missing most of the library.** It listed nine modules;
+  `room`, `align`, `loudness`, `pitch`, `stft`, `spectrogram`, `vad`, `channel`,
+  `edit`, `filters`, `dataset`, `report`, `dnsmos` and `enhance` were absent, so
+  `vad_frames` and everything else added since 3.3 was undocumented. 23 modules
+  now.
+- **`Synthesizer.clipped` and `.seed`** were listed as new public API in 3.7.0
+  and appeared in no document; both are in the README's module table now.
+- `docs/V3_CHANGES.md` was the last place still describing `[eval]` as
+  containing pysepm.
+
+### Fixed — the test suite was carrying the bug it had just fixed
+
+- **`tests/conftest.py`'s `write_wav` still used
+  `(wave * iinfo(int16).max).astype(int16)`** — the exact wrap-around this
+  release fixed in `Synthesizer`. The shared noise fixture peaks at 1.207, so
+  twelve of its samples came back with the sign flipped and every test mixing
+  against it was mixing against clicks it never asked for. It writes through
+  `save_wave` now.
+- **That fixture's clean files are 12 dB quieter.** A mixture at its lowest SNR
+  peaked at 2.68, so twelve unrelated tests emitted the new clipping warning. A
+  warning that fires on a dozen of your own tests is one nobody reads; the
+  deliberate case has its own `loud_corpus` fixture and still warns. Down from
+  14 warnings to 1.
+
 ## [3.7.0] - 2026-10-06
 
 A speech-enhancement project ran kudio's synthesis and evaluation end to end on

@@ -263,7 +263,7 @@ kudio report clip.wav || echo "needs another take"
 | `kudio.core.pitch` | `f0` → `PitchTrack` — pYIN fundamental frequency **with** the voiced/unvoiced decision, summary stats and label export |
 | `kudio.core.spectrogram` | `SpectrogramStream` — ring-buffered column-wise STFT for audio still arriving; linear or mel, dBFS |
 | `kudio.core.dataset` | `Pair`, `save_manifest`, `load_manifest`, `split_pairs` — what came from what, in plain JSON |
-| `kudio.core.synth` | `Synthesizer` — clean × noise × SNR × room from folders, lists or manifests; seeded per file, so the pool cannot change a result; with `manifest()` recording what came from what |
+| `kudio.core.synth` | `Synthesizer` — clean × noise × SNR × room from folders, lists or manifests; seeded per file, so the pool cannot change a result; `manifest()` records what came from what, `.clipped` names any file written past full scale, `.seed` is the base it drew so a run with no seed can still be rebuilt |
 | `kudio.core.room` | `rir`, `apply_rir`, `rt60` → `Reverberation`, `schroeder_curve` — reverberation as a controllable degradation and an ISO 3382-1 measurement |
 | `kudio.core.evaluator` | `si_sdr`, `snr`, `segmental_snr`, `sdi` (dep-free); `pesq` (P.862 / P.862.2, raw or MOS-LQO); `score` (any metric by name); `AudioEvaluate` (PESQ/STOI/SDR, means and per file); `check_metrics_install` |
 | `kudio.core.align` | `find_delay` → `Alignment`, `align` — the sample alignment every reference metric assumes and none of them can check |

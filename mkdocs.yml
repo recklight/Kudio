@@ -12,7 +12,10 @@ plugins:
       handlers:
         python:
           options:
-            docstring_style: google
+            # Sphinx, not Google: every docstring in this library uses
+            # `:param x:`. Declared as google, mkdocstrings rendered
+            # each parameter block as raw prose instead of a table.
+            docstring_style: sphinx
             show_source: false
             members_order: source
 
