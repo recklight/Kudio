@@ -18,12 +18,17 @@ The core stays light (numpy + soundfile + librosa); heavy or niche features
 ```bash
 pip install kudio            # core: I/O, features, effects, synthesis, metrics
 pip install kudio[audio]     # + live capture / playback (PyAudio, sounddevice)
-pip install kudio[eval]      # + PESQ / STOI / SDR back-ends
+pip install kudio[eval]      # + STOI / SDR back-ends (pystoi, mir_eval)
+pip install kudio[pesq]      # + PESQ (pesq) -- builds from source, needs a C compiler
 pip install kudio[dnsmos]    # + DNSMOS perceptual score (onnxruntime)
 pip install kudio[viz]       # + plotting helpers (matplotlib)
 pip install kudio[data]      # + Excel / dataframe export (pandas, openpyxl)
-pip install kudio[all]       # everything
+pip install kudio[all]       # everything but [pesq]
 ```
+
+> `pesq` is published on PyPI as source only, so `kudio[pesq]` compiles it:
+> it needs a C compiler -- on Windows, the MSVC Build Tools. That is why it
+> is an extra of its own rather than part of `[eval]` or `[all]`.
 
 Requires **Python 3.9+** (tested on CPython 3.9–3.13).
 
@@ -33,6 +38,8 @@ Requires **Python 3.9+** (tested on CPython 3.9–3.13).
 ## Quick start
 
 ```python
+from pathlib import Path
+
 import kudio
 
 # --- I/O (soundfile-backed; float32) --------------------------------------
@@ -154,12 +161,28 @@ syx = kudio.Synthesizer("data/clean", "data/noise",
                         rt60=(0.3, 0.8),              # ...and in rooms
                         channel="telephone",          # ...down a phone line
                         write_targets=True)           # ...with a wet target
-syx.syn(mode="inc", seed=17)                          # reproducible
+syx.syn(mode="inc", seed=17)                          # reproducible, pool or not
 syx.syn(mode="inc", target_sr=16000)                  # or resample the output
 kudio.save_manifest("manifest.json", syx.manifest())  # noise, SNR, room, link
 
+# a subset straight from a list, mirrored below root=; FLOAT keeps what is
+# past full scale, where 16-bit has to clip it (syn() says how many it did)
+si_sx = kudio.Synthesizer(sorted(Path("TIMIT/TRAIN").rglob("s[ix]*.wav")),
+                          "data/noise", out_path="data/mixed_sisx",
+                          root="TIMIT/TRAIN", subtype="FLOAT")
+
 # --- metrics (pure numpy, no extra deps) ----------------------------------
 print(kudio.si_sdr(ref, est), kudio.snr(ref, est), kudio.segmental_snr(ref, est))
+print(kudio.sdi(ref, est))                     # speech distortion index
+
+# ...or any of them by name, PESQ / STOI / SDR included where installed.
+# "PESQ" in most enhancement papers is the raw narrowband P.862 score:
+print(kudio.score(ref, est, sr, ["pesq", "stoi", "sdi"],
+                  pesq_mode="nb", pesq_scale="raw"))
+ev = kudio.AudioEvaluate(clean_files, noisy_files, pesq_mode="nb", pesq_scale="raw")
+ev.eval("ddae", enhanced_files)
+ev.get_df()                                    # means, with a Baseline row
+ev.per_file()                                  # every file: join on "noisy"
 
 # ...but only once the two line up. They compare sample i with sample i, and
 # one sample of delay costs 134 dB.
@@ -230,19 +253,19 @@ kudio report clip.wav || echo "needs another take"
 |---|---|
 | `kudio.core.io` | `file_load`, `save_wave`, `resample`, `audio_info`, `convert_folder`, `check_input`, `load_waves`, `copy_waves` |
 | `kudio.core.stft` | `STFT` — geometry + `forward`/`inverse`, storable next to a model |
-| `kudio.core.feature` | `waveform_to_spectrogram`, `spectrogram_to_waveform`, `mfcc`, `melspectrogram`, `stack_context`, `frame_windows`, `Standardizer`, ... |
+| `kudio.core.feature` | `waveform_to_spectrogram`, `spectrogram_to_waveform`, `mfcc`, `melspectrogram`, `stack_context`, `ContextFrames` (context windows a batch at a time), `frame_windows`, `Standardizer`, ... |
 | `kudio.effects` | `fade`, `reverse`, `remove_dc`, `highpass`/`lowpass`/`bandpass`/`bandstop`, `trim_silence`, `split_on_silence`, `time_stretch`, `pitch_shift`, `normalize`, `add_noise_snr`, `reverb`, `spec_augment` |
 | `kudio.effects.channel` | `mu_law`, `a_law` (G.711 companding), `bit_depth`, `dropouts` (packet loss, independent or in Gilbert runs), `telephone`, `apply_channel`/`channel_spec`/`channel_tag` — the degradation that is neither additive nor convolutive |
 | `kudio.core.loudness` | `loudness`, `normalize_lufs`, `match_loudness` — ITU-R BS.1770-4, the perceptual answer `normalize`'s peak scaling cannot give; plus `loudness_over_time` → `LoudnessCurve`, `loudness_range` (EBU Tech 3342) and `true_peak` in dBTP |
 | `kudio.core.report` | `audio_report` → `AudioReport` — clipping, DC, silence, noise floor, real bandwidth, **with no clean reference needed** |
 | `kudio.core.dnsmos` | `dnsmos` → `DnsmosScore` — predicted P.835 opinion (SIG/BAK/OVRL); needs `[dnsmos]` and weights you supply |
-| `kudio.core.vad` | `vad`, `vad_split`, `vad_trim`, `speech_ratio` — noise-adaptive speech detection |
+| `kudio.core.vad` | `vad`, `vad_split`, `vad_trim`, `vad_frames` (one decision per STFT frame), `speech_ratio` — noise-adaptive speech detection |
 | `kudio.core.pitch` | `f0` → `PitchTrack` — pYIN fundamental frequency **with** the voiced/unvoiced decision, summary stats and label export |
 | `kudio.core.spectrogram` | `SpectrogramStream` — ring-buffered column-wise STFT for audio still arriving; linear or mel, dBFS |
 | `kudio.core.dataset` | `Pair`, `save_manifest`, `load_manifest`, `split_pairs` — what came from what, in plain JSON |
-| `kudio.core.synth` | `Synthesizer` — clean × noise × SNR × room, seedable, with `manifest()` recording what came from what |
+| `kudio.core.synth` | `Synthesizer` — clean × noise × SNR × room from folders, lists or manifests; seeded per file, so the pool cannot change a result; with `manifest()` recording what came from what |
 | `kudio.core.room` | `rir`, `apply_rir`, `rt60` → `Reverberation`, `schroeder_curve` — reverberation as a controllable degradation and an ISO 3382-1 measurement |
-| `kudio.core.evaluator` | `si_sdr`, `snr`, `segmental_snr` (dep-free); `AudioEvaluate` (PESQ/STOI/SDR); `check_metrics_install` |
+| `kudio.core.evaluator` | `si_sdr`, `snr`, `segmental_snr`, `sdi` (dep-free); `pesq` (P.862 / P.862.2, raw or MOS-LQO); `score` (any metric by name); `AudioEvaluate` (PESQ/STOI/SDR, means and per file); `check_metrics_install` |
 | `kudio.core.align` | `find_delay` → `Alignment`, `align` — the sample alignment every reference metric assumes and none of them can check |
 | `kudio.core.stream` | `record`, `StreamRecorder`, `play_audio`, `Recorder`, `LocalStreamReader`, `RemoteStreamReader` |
 | `kudio.enhance` | `spectral_enhance` (7 gain rules × 4 noise estimators), `StreamEnhancer`, `compare_enhancers`, `enhance_folder`, `trad_enhance`, `wavelet_low_pass_filter` |

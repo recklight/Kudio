@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path, PurePath
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import soundfile as sf
@@ -113,6 +114,52 @@ def check_input(input: Any) -> Tuple[List[Path], List[Any]]:
     else:
         wrong_list.append(input)
     return right_list, wrong_list
+
+
+def _abspath(path: PathLike) -> Path:
+    # textual, like os.path.abspath: '..' is folded away rather than kept, so
+    # two spellings of one folder compare equal without touching the disk
+    return Path(os.path.abspath(str(path)))
+
+
+def _common_root(files: Sequence[PathLike]) -> Optional[Path]:
+    """The deepest folder holding every one of *files*, or ``None`` if none
+    does (files on two Windows drives)."""
+    if not files:
+        return None
+    try:
+        return Path(os.path.commonpath([str(_abspath(f).parent) for f in files]))
+    except ValueError:
+        return None
+
+
+def _source_root(src: Any, files: Sequence[PathLike],
+                 root: Optional[PathLike] = None) -> Optional[Path]:
+    """Where the folder layout of *files* is measured from.
+
+    An explicit *root* wins and must hold every file. Otherwise a folder input
+    is its own root, and anything else -- a list, a ``.txt`` manifest -- is
+    measured from the folder the files have in common, so that two files
+    called ``sx133.wav`` by two different talkers stay two files.
+    """
+    if root is not None:
+        base = _abspath(root)
+        for f in files:
+            try:
+                _abspath(f).relative_to(base)
+            except ValueError:
+                raise ValueError(f"{f} is not inside root={str(root)!r}") from None
+        return Path(root)
+    if isinstance(src, (str, PurePath)) and Path(src).is_dir():
+        return Path(src)
+    return _common_root(files)
+
+
+def _relative(path: PathLike, root: Optional[PathLike]) -> Path:
+    """*path* below *root*, or just its name when there is no root."""
+    if root is None:
+        return Path(Path(path).name)
+    return _abspath(path).relative_to(_abspath(root))
 
 
 def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
@@ -280,6 +327,14 @@ def load_waves(wave, use_pool: bool = False, std_len: bool = False, core_: int =
     return result
 
 
+def _is_fixed_point(subtype: str) -> bool:
+    """Does *subtype* store integers, so that a sample past ±1.0 cannot be
+    written as it is? True for ``PCM_*`` and the G.711 codes; false for
+    ``FLOAT`` / ``DOUBLE``, which keep it."""
+    name = str(subtype).upper()
+    return name.startswith('PCM_') or name in ('ULAW', 'ALAW')
+
+
 def save_wave(path: PathLike, wave: np.ndarray, sr: int,
               d_sample: Optional[int] = None, subtype: str = 'PCM_16') -> None:
     """Write *wave* to a ``.wav`` file via soundfile.
@@ -288,13 +343,21 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
         ``'FLOAT'`` (32-bit float), ... see ``soundfile.available_subtypes()``.
     :param d_sample: optional resample rate before writing.
 
-    int16 input is normalized to float [-1, 1]; float input is written as-is.
+    int16 input is scaled the way soundfile reads a 16-bit file back,
+    ``v / 32768``, so a 16-bit array is written unchanged; float input is
+    written as-is.
+
+    A fixed-point *subtype* clips anything beyond ±1.0 to full scale, and
+    ``PCM_16`` is rounded to the nearest step. Both are done here rather than
+    left to libsndfile, whose conversion floors -- every sample half a step
+    low -- and wraps around unless clipping has been switched on: 1.2 comes
+    back as -0.8. Whether it has been is up to the soundfile release.
     """
     Path(path).parent.mkdir(exist_ok=True, parents=True)
     wave = np.asarray(wave)
 
     if np.issubdtype(wave.dtype, np.integer):
-        wave = wave.astype(np.float32) / np.iinfo(np.int16).max
+        wave = wave.astype(np.float32) / 32768.0
     else:
         wave = wave.astype(np.float32)
 
@@ -302,6 +365,12 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
         import librosa
         wave = librosa.resample(wave, orig_sr=sr, target_sr=d_sample)
         sr = d_sample
+
+    if _is_fixed_point(subtype):
+        wave = np.clip(wave, -1.0, 1.0)
+        if str(subtype).upper() == 'PCM_16':
+            # soundfile writes int16 as it stands, so the rounding is ours
+            wave = np.clip(np.round(wave * 32768.0), -32768, 32767).astype(np.int16)
 
     try:
         sf.write(str(path), wave, sr, subtype=subtype)
@@ -349,13 +418,15 @@ def convert_folder(src: Any, dst: PathLike, *,
                    lufs: Optional[float] = None,
                    overwrite: bool = False,
                    progress: Optional[Callable[[int, int, Path], None]] = None,
-                   on_error: str = 'collect') -> ConvertResult:
+                   on_error: str = 'collect',
+                   root: Optional[PathLike] = None) -> ConvertResult:
     """Resample / re-encode / trim / normalise every audio file under *src*.
 
     *src* is anything :func:`check_input` accepts — a folder, a file, a ``.txt``
     manifest, or a list of those. The output mirrors the input's directory
     structure below *dst*, so two files with the same name in different
-    subfolders do not collide.
+    subfolders do not collide. A folder is mirrored from itself; a list or a
+    manifest from the deepest folder its files share, or from *root*.
 
     >>> kudio.convert_folder("raw/", "16k/", sr=16000, lufs=-23.0)
     ConvertResult(written=412, total=412, ...)
@@ -369,6 +440,8 @@ def convert_folder(src: Any, dst: PathLike, *,
     :param progress: optional ``callback(done, total, path)``.
     :param on_error: ``'collect'`` (default) records the failure and carries on;
         ``'raise'`` stops at the first one.
+    :param root: the folder the output layout is measured from. Every input
+        has to be inside it.
     """
     if peak is not None and lufs is not None:
         raise ValueError("pass peak= or lufs=, not both")
@@ -379,7 +452,7 @@ def convert_folder(src: Any, dst: PathLike, *,
     if not files:
         raise AudioIOError(f"no audio files found in {src!r}")
 
-    root = Path(src) if isinstance(src, (str, PurePath)) and Path(src).is_dir() else None
+    root = _source_root(src, files, root)
     out_root = Path(dst)
     out_root.mkdir(parents=True, exist_ok=True)
 
@@ -401,8 +474,7 @@ def convert_folder(src: Any, dst: PathLike, *,
                 from kudio.core.loudness import normalize_lufs
                 y = normalize_lufs(y, rate, lufs=lufs)
 
-            rel = f.relative_to(root) if root is not None else Path(f.name)
-            target = (out_root / rel).with_suffix(WAVE_SUFFIX)
+            target = (out_root / _relative(f, root)).with_suffix(WAVE_SUFFIX)
             target = Path(check_file(target, rename=not overwrite))
             save_wave(target, y, rate, subtype=subtype)
             outputs.append(target)

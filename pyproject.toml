@@ -40,15 +40,18 @@ dependencies = [
 
 [project.optional-dependencies]
 audio = ["PyAudio>=0.2.13", "sounddevice>=0.4.5"]     # live capture / playback
-eval = ["mir_eval>=0.7", "pystoi>=0.3.3"]  # STOI / SDR (PESQ: see note below)
+eval = ["mir_eval>=0.7", "pystoi>=0.3.3"]  # STOI / SDR (PESQ: see [pesq])
+# PESQ (ITU-T P.862 / P.862.2). PyPI carries `pesq` as source only, so this
+# compiles it: it needs a C compiler -- the MSVC Build Tools on Windows. That
+# is why it is an extra of its own and not part of [eval] or [all], which
+# would otherwise stop installing on a machine without one.
+pesq = ["pesq>=0.0.4"]
 dnsmos = ["onnxruntime>=1.15"]      # DNSMOS P.835 (weights are NOT bundled --
                                     # see kudio.find_dnsmos_model)
 viz = ["matplotlib>=3.7"]                              # plotting helpers
 data = ["pandas>=2.0", "openpyxl>=3.1"]                # Excel / dataframe export
-all = ["kudio[audio,eval,dnsmos,viz,data]"]
+all = ["kudio[audio,eval,dnsmos,viz,data]"]            # everything but [pesq]
 dev = ["pytest>=7.0", "kudio[data]"]   # [data] lets the full test suite run
-# PESQ back-end (pysepm) is not on PyPI; install it manually if you need PESQ:
-#   pip install https://github.com/schmiph2/pysepm/archive/master.zip
 
 [project.scripts]
 kudio = "kudio.cli:main"

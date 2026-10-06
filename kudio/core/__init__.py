@@ -7,12 +7,16 @@ from kudio.core.evaluator import (
     AudioEvaluate,
     check_metrics_install,
     eval_metrics,
+    pesq,
+    score,
+    sdi,
     segmental_snr,
     si_sdr,
     snr,
 )
 from kudio.core.feature import (
     # canonical (v3)
+    ContextFrames,
     Standardizer,
     denoise_spec2wav,
     denoise_wav2spec,
@@ -106,7 +110,7 @@ from kudio.core.stream import (
     wave_encode,
 )
 from kudio.core.synth import Synthesizer
-from kudio.core.vad import speech_ratio, vad, vad_split, vad_trim
+from kudio.core.vad import speech_ratio, vad, vad_frames, vad_split, vad_trim
 
 __all__ = [
     # buffer
@@ -115,9 +119,9 @@ __all__ = [
     'Alignment', 'find_delay', 'align', 'MIN_CORRELATION',
     # evaluator + lightweight metrics
     'AudioEvaluate', 'check_metrics_install', 'eval_metrics', 'si_sdr', 'snr',
-    'segmental_snr',
+    'segmental_snr', 'sdi', 'pesq', 'score',
     # feature (canonical)
-    'STFT', 'Standardizer', 'stack_context', 'frame_windows',
+    'STFT', 'Standardizer', 'stack_context', 'ContextFrames', 'frame_windows',
     'denoise_spec2wav', 'denoise_wav2spec', 'features2matrix',
     'file_to_spectrogram', 'logspec_from_files', 'melspectrogram', 'mfcc',
     'mfcc_from_files', 'save_spectrogram_as_wave', 'spectrogram_to_waveform',
@@ -142,7 +146,7 @@ __all__ = [
     # rooms: describe one, apply it, measure what it did
     'rir', 'apply_rir', 'rt60', 'Reverberation', 'schroeder_curve',
     # voice activity
-    'vad', 'vad_split', 'vad_trim', 'speech_ratio',
+    'vad', 'vad_split', 'vad_trim', 'vad_frames', 'speech_ratio',
     # dataset manifests and labels
     'Pair', 'save_manifest', 'load_manifest', 'split_pairs',
     'Label', 'save_labels', 'load_labels',

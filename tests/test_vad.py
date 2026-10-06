@@ -112,3 +112,35 @@ def test_rejects_stereo_and_bad_rates(speech):
 
 def test_clip_shorter_than_one_frame_does_not_crash():
     assert isinstance(kudio.vad(np.zeros(100, dtype=np.float32), SR), list)
+
+
+# -- one decision per spectrogram frame -------------------------------------------
+
+@pytest.mark.parametrize("hop", [128, 256, 160])
+def test_vad_frames_line_up_with_the_spectrogram(speech, hop):
+    mask = kudio.vad_frames(speech, SR, hop_length=hop)
+    spec = kudio.waveform_to_spectrogram(speech, hop_length=hop)
+    assert mask.dtype == bool and mask.shape == (spec.shape[0],)
+
+
+def test_vad_frames_uncentred_matches_librosa(speech):
+    import librosa
+    mask = kudio.vad_frames(speech, SR, hop_length=256, n_fft=512, center=False)
+    frames = librosa.stft(speech, n_fft=512, hop_length=256, center=False)
+    assert len(mask) == frames.shape[1]
+
+
+def test_vad_frames_mark_the_bursts(speech):
+    mask = kudio.vad_frames(speech, SR, hop_length=160)
+    t = np.arange(len(mask)) * 160 / SR
+    assert mask[(t > 1.15) & (t < 1.85)].all()
+    assert mask[(t > 3.65) & (t < 4.65)].all()
+    assert not mask[t < 0.8].any() and not mask[(t > 2.3) & (t < 3.2)].any()
+
+
+def test_vad_frames_do_not_pad_unless_asked(speech):
+    """Padding protects a cut; on a frame label it calls silence speech."""
+    plain = kudio.vad_frames(speech, SR)
+    padded = kudio.vad_frames(speech, SR, pad=0.05)
+    assert padded.sum() > plain.sum()
+    assert not (plain & ~padded).any()

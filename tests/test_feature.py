@@ -282,3 +282,87 @@ def test_stft_object_and_function_agree_on_window(sine):
         assert np.allclose(
             stft.forward(sine),
             waveform_to_spectrogram(sine, n_fft=n_fft, hop_length=128))
+
+
+# -- dtype, and what a reconstruction past full scale is written as ---------------
+
+def test_float32_audio_gives_a_float32_spectrogram(sine):
+    """NumPy 2 promoted the spectrum to complex128 through the epsilon, a
+    numpy float64 scalar, doubling every spectrogram computed from float32."""
+    spec = w2s(sine)
+    assert spec.dtype == np.float32
+    assert spec2wavform(sine, spec).dtype == np.float32
+    assert w2s(sine.astype(np.float64)).dtype == np.float64
+
+
+def test_the_silence_floor_did_not_move():
+    """The value a digitally silent bin gets is part of what trained models
+    have seen; the dtype fix must not change it."""
+    assert w2s(np.zeros(4096, np.float32)).min() == pytest.approx(-31.307, abs=1e-3)
+
+
+def test_save_spectrogram_as_wave_clips_rather_than_wrapping(tmp_path, sine):
+    import kudio
+    noisy = tmp_path / "noisy.wav"
+    kudio.save_wave(noisy, sine, 16000)
+    y, _ = kudio.file_load(noisy)
+    louder = w2s(y) + 2.0                 # +20 dB: peaks near 5x full scale
+    exact = spec2wavform(y, louder)
+    assert np.abs(exact).max() > 2.0
+    out = tmp_path / "out.wav"
+    kudio.save_spectrogram_as_wave(out, noisy, louder)
+    written, _ = kudio.file_load(out)
+    assert np.all(written[exact > 1.0] > 0.999)
+    assert np.all(written[exact < -1.0] <= -0.999)
+
+
+# -- context windows without stacking the corpus ---------------------------------
+
+def _utterances():
+    rng = np.random.default_rng(0)
+    return [rng.standard_normal((n, 6)).astype(np.float32) for n in (9, 1, 0, 14)]
+
+
+@pytest.mark.parametrize("pad", ["edge", "zero"])
+def test_context_frames_is_stack_context_a_batch_at_a_time(pad):
+    from kudio import ContextFrames, stack_context
+    feats = _utterances()
+    stacked = np.vstack([stack_context(f, 3, pad) for f in feats if len(f)])
+    bank = ContextFrames(feats, context=3, pad=pad)
+    assert bank.shape == stacked.shape and len(bank) == 24
+    np.testing.assert_array_equal(np.asarray(bank), stacked)
+    idx = np.random.default_rng(1).integers(0, len(bank), 32)
+    np.testing.assert_array_equal(bank[idx], stacked[idx])
+    np.testing.assert_array_equal(bank[5:12], stacked[5:12])
+    np.testing.assert_array_equal(bank[7], stacked[7])
+    mask = np.arange(len(bank)) % 3 == 0
+    np.testing.assert_array_equal(bank[mask], stacked[mask])
+
+
+def test_context_frames_never_reaches_into_the_next_utterance():
+    from kudio import ContextFrames
+    a = np.zeros((4, 2), np.float32)
+    b = np.ones((4, 2), np.float32)
+    bank = ContextFrames([a, b], context=2, pad='edge')
+    assert not bank[:4].any() and bank[4:].all()
+
+
+def test_context_frames_keeps_the_features_not_the_stack():
+    from kudio import ContextFrames
+    feats = [np.zeros((1000, 257), np.float32)] * 4
+    bank = ContextFrames(feats, context=5)
+    stacked_bytes = len(bank) * bank.shape[1] * 4
+    assert bank._frames.nbytes < stacked_bytes / 10
+
+
+def test_context_frames_refuses_bad_input():
+    from kudio import ContextFrames
+    from kudio.exceptions import FeatureError
+    with pytest.raises(FeatureError):
+        ContextFrames([np.zeros((3, 4)), np.zeros((3, 5))], context=1)
+    with pytest.raises(FeatureError):
+        ContextFrames([np.zeros((3, 4))], context=-1)
+    with pytest.raises(FeatureError):
+        ContextFrames([], context=1)
+    single = ContextFrames(np.ones((3, 4), np.float32), context=1)
+    assert single.shape == (3, 12)

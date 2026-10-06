@@ -318,3 +318,75 @@ def test_convert_folder_can_overwrite(wav_dir, tmp_path):
     kudio.convert_folder(wav_dir, out)
     kudio.convert_folder(wav_dir, out, overwrite=True)
     assert len(list(out.glob("*.wav"))) == 3
+
+
+# -- what a fixed-point file cannot hold ---------------------------------------
+
+def test_save_wave_clips_past_full_scale_instead_of_wrapping(tmp_path):
+    out = tmp_path / "hot.wav"
+    save_wave(out, np.array([1.2, -1.3, 1.0, -1.0, 0.5], np.float32), 16000)
+    import soundfile as sf
+    assert sf.read(out, dtype="int16")[0].tolist() == [32767, -32768, 32767,
+                                                       -32768, 16384]
+
+
+def test_save_wave_rounds_to_the_nearest_step(tmp_path):
+    """libsndfile floors, which leaves every sample half a step low."""
+    import soundfile as sf
+    x = np.random.default_rng(0).uniform(-0.99, 0.99, 20000).astype(np.float32)
+    out = tmp_path / "r.wav"
+    save_wave(out, x, 16000)
+    err = (sf.read(out, dtype="float64")[0] - x) * 32768
+    assert np.abs(err).max() <= 0.5 + 1e-6
+    assert abs(err.mean()) < 0.02
+
+
+def test_save_wave_writes_int16_unchanged(tmp_path):
+    import soundfile as sf
+    v = np.random.default_rng(1).integers(-32768, 32768, 5000).astype(np.int16)
+    out = tmp_path / "i.wav"
+    save_wave(out, v, 16000)
+    assert np.array_equal(sf.read(out, dtype="int16")[0], v)
+
+
+def test_save_wave_float_keeps_what_is_past_full_scale(tmp_path):
+    out = tmp_path / "f.wav"
+    save_wave(out, np.array([1.5, -2.0], np.float32), 16000, subtype="FLOAT")
+    y, _ = file_load(out)
+    assert y.tolist() == [1.5, -2.0]
+
+
+# -- convert_folder on a list --------------------------------------------------
+
+def _two_talkers(tmp_path, sine):
+    for folder in ("dr1/fcjf0", "dr2/fdml0"):
+        (tmp_path / "timit" / folder).mkdir(parents=True)
+        save_wave(tmp_path / "timit" / folder / "sx133.wav", sine, 16000)
+    return sorted((tmp_path / "timit").rglob("*.wav"))
+
+
+def test_convert_folder_mirrors_a_list_below_what_it_shares(tmp_path, sine):
+    """A list used to land flat, so two talkers' sx133 collided and the second
+    was renamed sx1332 -- which reads like another sentence."""
+    files = _two_talkers(tmp_path, sine)
+    result = kudio.convert_folder(files, tmp_path / "out")
+    assert sorted(p.relative_to(tmp_path / "out").as_posix()
+                  for p in result.outputs) == ["dr1/fcjf0/sx133.wav",
+                                               "dr2/fdml0/sx133.wav"]
+
+
+def test_convert_folder_takes_a_root(tmp_path, sine):
+    files = _two_talkers(tmp_path, sine)
+    result = kudio.convert_folder(files, tmp_path / "out",
+                                  root=tmp_path / "timit" / "dr1" / "..")
+    assert sorted(p.relative_to(tmp_path / "out").as_posix()
+                  for p in result.outputs) == ["dr1/fcjf0/sx133.wav",
+                                               "dr2/fdml0/sx133.wav"]
+    with pytest.raises(ValueError, match="not inside root"):
+        kudio.convert_folder(files, tmp_path / "out2",
+                             root=tmp_path / "timit" / "dr1")
+
+
+def test_convert_folder_of_files_in_one_folder_stays_flat(wav_dir, tmp_path):
+    result = kudio.convert_folder(sorted(wav_dir.glob("*.wav")), tmp_path / "o")
+    assert all(p.parent == tmp_path / "o" for p in result.outputs)

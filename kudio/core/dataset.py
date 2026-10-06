@@ -37,7 +37,9 @@ class Pair:
     noisy: str
     clean: str
     noise: str = ""
-    snr_db: Optional[int] = None
+    #: an int when the SNR is a whole number of dB, as it always was; a float
+    #: when it is not, rather than that float cut down to an int
+    snr_db: Optional[float] = None
     #: reverberation time of the room the clean signal was put through, in
     #: seconds, or ``None`` when it was not. Optional and last, so a manifest
     #: written before rooms existed still loads and a manifest written with

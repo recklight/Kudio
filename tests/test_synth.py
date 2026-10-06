@@ -530,3 +530,393 @@ def test_the_link_does_not_reach_the_target(dry_corpus, tmp_path):
             == pathlib.Path(plain.target).read_bytes())
     assert (pathlib.Path(phoned.noisy).read_bytes()
             != pathlib.Path(plain.noisy).read_bytes())
+
+
+# ================================================== what goes past full scale
+
+@pytest.fixture
+def loud_corpus(tmp_path):
+    """A talker near full scale and a noise that will push it over at -5 dB."""
+    import kudio
+    sr = 16000
+    clean, noise = tmp_path / "loud_clean", tmp_path / "loud_noise"
+    clean.mkdir()
+    noise.mkdir()
+    t = np.arange(sr) / sr
+    kudio.save_wave(clean / "c.wav",
+                    (0.8 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr)
+    kudio.save_wave(noise / "n.wav",
+                    (0.2 * np.random.default_rng(0).standard_normal(2 * sr))
+                    .astype(np.float32), sr, subtype="FLOAT")
+    return clean, noise
+
+
+def test_past_full_scale_is_clipped_and_rounded_never_wrapped(loud_corpus,
+                                                              tmp_path):
+    """`astype(int16)` turned 1.2 into -0.8 without a word. The float run is
+    the mixture before it was written, sample for sample -- same seed, same
+    name, same crop -- so the 16-bit file can be checked against it."""
+    import soundfile as sf
+    clean, noise = loud_corpus
+    exact = Synthesizer(clean, noise, out_path=str(tmp_path / "f"),
+                        snr_ratio=[-5], subtype="FLOAT")
+    exact.syn(mode="reg", seed=1)
+    with pytest.warns(UserWarning, match="past full scale"):
+        pcm = Synthesizer(clean, noise, out_path=str(tmp_path / "p"),
+                          snr_ratio=[-5])
+        pcm.syn(mode="reg", seed=1)
+
+    y = sf.read(next((tmp_path / "f").rglob("*.wav")))[0]
+    q = sf.read(next((tmp_path / "p").rglob("*.wav")))[0]
+    assert np.abs(y).max() > 1.2, "the float file keeps what is past 1.0"
+    assert exact.clipped == {}
+    assert list(pcm.clipped.values()) == [pytest.approx(np.abs(y).max(), rel=1e-4)]
+
+    assert np.all(q[y > 1.0] > 0.999) and np.all(q[y < -1.0] <= -0.999)
+    inside = np.abs(y) < 0.999
+    step = 1 / 32768
+    assert np.abs(q[inside] - y[inside]).max() <= step / 2 + 1e-7
+    # rounding is unbiased; truncation towards zero would sit half a step low
+    bias = np.mean((q[inside] - y[inside]) * np.sign(y[inside])) / step
+    assert abs(bias) < 0.1
+
+
+def test_a_subtype_that_wav_cannot_hold_is_refused(clean_noise_dirs, tmp_path):
+    clean, noise = clean_noise_dirs
+    with pytest.raises(ValueError, match="subtype"):
+        Synthesizer(clean, noise, out_path=str(tmp_path / "x"), subtype="NOPE")
+
+
+# ============================================== reg mode meets every pairing
+
+def _numbered_corpus(tmp_path, n_clean, n_noise, seconds=0.1):
+    import kudio
+    sr = 16000
+    clean, noise = tmp_path / "nc", tmp_path / "nn"
+    clean.mkdir()
+    noise.mkdir()
+    rng = np.random.default_rng(0)
+    for i in range(n_clean):
+        kudio.save_wave(clean / f"u{i:03d}.wav", (0.1 * rng.standard_normal(
+            int(sr * seconds))).astype(np.float32), sr)
+    for k in range(n_noise):
+        kudio.save_wave(noise / f"noise{k}.wav", (0.1 * rng.standard_normal(
+            int(sr * seconds * 2))).astype(np.float32), sr)
+    return clean, noise
+
+
+def test_reg_mode_meets_every_noise_snr_combination(tmp_path):
+    """Cycled side by side, 2 noises and 4 SNRs only ever meet in 4 of their 8
+    combinations: noise0 always at the even SNRs, noise1 at the odd ones."""
+    clean, noise = _numbered_corpus(tmp_path, n_clean=8, n_noise=2)
+    result = Synthesizer(clean, noise, out_path=str(tmp_path / "o"),
+                         snr_ratio=[0, 5, 10, 15]).syn(mode="reg", seed=0)
+    combos = {(Path(n).stem, snr) for _, _, n, snr in result}
+    assert len(combos) == 8
+
+
+def test_reg_mode_is_unchanged_when_the_counts_share_no_factor(tmp_path):
+    """Coprime counts already met every combination; the assignment stays the
+    plain cycle it has always been, so those datasets come out the same."""
+    clean, noise = _numbered_corpus(tmp_path, n_clean=12, n_noise=2)
+    snrs = [0, 5, 10]
+    result = Synthesizer(clean, noise, out_path=str(tmp_path / "o"),
+                         snr_ratio=snrs).syn(mode="reg", seed=0)
+    assert [Path(n).stem for _, _, n, _ in result] == \
+        [f"noise{i % 2}" for i in range(12)]
+    assert [snr for *_, snr in result] == [snrs[i % 3] for i in range(12)]
+
+
+# ================================================== any input, mirrored right
+
+@pytest.fixture
+def two_talkers(tmp_path):
+    """Two talkers reading the same sentence: same file name, two folders."""
+    import kudio
+    sr = 16000
+    tree = tmp_path / "timit"
+    t = np.arange(sr // 4) / sr
+    for i, folder in enumerate(("dr1/fcjf0", "dr2/fdml0")):
+        (tree / folder).mkdir(parents=True)
+        for name in ("sa1", "sx133"):
+            kudio.save_wave(tree / folder / f"{name}.wav",
+                            (0.3 * np.sin(2 * np.pi * (200 + 50 * i) * t))
+                            .astype(np.float32), sr)
+    return tree
+
+
+def test_a_file_list_is_mirrored_below_the_folder_it_shares(two_talkers,
+                                                           clean_noise_dirs,
+                                                           tmp_path):
+    """The point of a list is a subset -- SI and SX without SA -- and two
+    talkers' sx133 have to stay two files."""
+    _, noise = clean_noise_dirs
+    subset = sorted(two_talkers.rglob("sx*.wav"))
+    out = tmp_path / "subset"
+    result = Synthesizer(subset, noise, out_path=str(out), snr_ratio=[5]).syn(
+        mode="reg", seed=0)
+    written = sorted(p.relative_to(out).as_posix() for p in out.rglob("*.wav"))
+    assert written == ["dr1/fcjf0/sx133_white_5dB.wav",
+                       "dr2/fdml0/sx133_white_5dB.wav"]
+    assert len(result) == 2
+
+
+def test_a_txt_manifest_with_an_explicit_root(two_talkers, clean_noise_dirs,
+                                              tmp_path):
+    _, noise = clean_noise_dirs
+    listing = tmp_path / "subset.txt"
+    listing.write_text("\n".join(str(p) for p in
+                                 sorted(two_talkers.rglob("sa1.wav"))))
+    out = tmp_path / "rooted"
+    Synthesizer(listing, noise, out_path=str(out), snr_ratio=[0],
+                root=two_talkers).syn(mode="reg", seed=0)
+    assert sorted(p.relative_to(out).as_posix() for p in out.rglob("*.wav")) \
+        == ["dr1/fcjf0/sa1_white_0dB.wav", "dr2/fdml0/sa1_white_0dB.wav"]
+
+
+def test_a_root_that_does_not_hold_the_files_is_refused(two_talkers,
+                                                        clean_noise_dirs):
+    _, noise = clean_noise_dirs
+    with pytest.raises(ValueError, match="not inside root"):
+        Synthesizer(sorted(two_talkers.rglob("*.wav")), noise,
+                    root=two_talkers / "dr1")
+
+
+def test_a_list_entry_that_is_not_there_is_reported(two_talkers,
+                                                    clean_noise_dirs):
+    _, noise = clean_noise_dirs
+    files = sorted(two_talkers.rglob("*.wav")) + [two_talkers / "gone.wav"]
+    with pytest.warns(UserWarning, match="skipped 1 input"):
+        syx = Synthesizer(files, noise)
+    assert len(syx.cleanWaves) == 4
+
+
+def test_colliding_output_names_are_reported(two_talkers, clean_noise_dirs,
+                                             tmp_path):
+    """Flattened, two talkers' sx133 land on one name and one overwrites the
+    other -- worth a warning rather than a quietly smaller dataset."""
+    _, noise = clean_noise_dirs
+    syx = Synthesizer(sorted(two_talkers.rglob("sx*.wav")), noise,
+                      out_path=str(tmp_path / "flat"), snr_ratio=[0])
+    with pytest.warns(UserWarning, match="mkdir_parents=False"):
+        syx.syn(mode="reg", seed=0, mkdir_parents=False)
+
+
+# ========================================================= seeds and the pool
+
+def test_the_pool_does_not_change_a_single_file(tmp_path):
+    """The noise crop used to come from each worker's global RNG, so a seeded
+    run through the pool differed from itself and from a serial run."""
+    import soundfile as sf
+    clean, noise = _numbered_corpus(tmp_path, n_clean=21, n_noise=1)
+    made = {}
+    for tag, pool in (("pool", True), ("serial", False)):
+        out = tmp_path / tag
+        Synthesizer(clean, noise, out_path=str(out),
+                    snr_ratio=list(range(10))).syn(mode="inc", seed=3,
+                                                   is_pool=pool)
+        made[tag] = {p.name: sf.read(p)[0] for p in out.rglob("*.wav")}
+    assert len(made["pool"]) == 210 > 200          # past the pool threshold
+    assert made["pool"].keys() == made["serial"].keys()
+    for name, y in made["pool"].items():
+        assert np.array_equal(y, made["serial"][name]), name
+
+
+def test_a_file_does_not_depend_on_what_was_written_before_it(tmp_path):
+    """What the pool changes is the order and the worker; neither can matter
+    once each file draws from its own seed. Written in reverse, after the
+    global RNG has been disturbed, every file comes out the same."""
+    import soundfile as sf
+    clean, noise = _numbered_corpus(tmp_path, n_clean=3, n_noise=1)
+    syx = Synthesizer(clean, noise, out_path=str(tmp_path / "a"),
+                      snr_ratio=[0, 5])
+    syx.syn(mode="inc", seed=11)
+    first = {p.name: sf.read(p)[0] for p in (tmp_path / "a").rglob("*.wav")}
+
+    seeds = Synthesizer._seeds(syx.synWavesList, 11, syx.noisyDir)
+    np.random.seed(12345)
+    for entry in reversed(syx.synWavesList):
+        Synthesizer.syn_waves(entry, False, None, seeds=seeds)
+    again = {p.name: sf.read(p)[0] for p in (tmp_path / "a").rglob("*.wav")}
+    assert first.keys() == again.keys()
+    for name in first:
+        assert np.array_equal(first[name], again[name])
+
+
+def test_syn_leaves_the_callers_rng_alone(clean_noise_dirs, tmp_path):
+    clean, noise = clean_noise_dirs
+    np.random.seed(2024)
+    expected = np.random.random(3)
+    np.random.seed(2024)
+    Synthesizer(clean, noise, out_path=str(tmp_path / "x"),
+                snr_ratio=[0]).syn(mode="reg", seed=5, rdn_choice_num=1)
+    assert np.array_equal(np.random.random(3), expected)
+
+
+def test_a_run_without_a_seed_can_be_rebuilt(clean_noise_dirs, tmp_path):
+    import soundfile as sf
+    clean, noise = clean_noise_dirs
+    syx = Synthesizer(clean, noise, out_path=str(tmp_path / "a"), snr_ratio=[0])
+    syx.syn(mode="reg")
+    assert isinstance(syx.seed, int)
+    first = {p.name: sf.read(p)[0] for p in (tmp_path / "a").rglob("*.wav")}
+    again = Synthesizer(clean, noise, out_path=str(tmp_path / "b"),
+                        snr_ratio=[0])
+    again.syn(mode="reg", seed=syx.seed)
+    for p in (tmp_path / "b").rglob("*.wav"):
+        assert np.array_equal(sf.read(p)[0], first[p.name])
+
+
+def test_a_random_subset_has_no_repeats(tmp_path):
+    clean, noise = _numbered_corpus(tmp_path, n_clean=10, n_noise=1)
+    result = Synthesizer(clean, noise, out_path=str(tmp_path / "o"),
+                         snr_ratio=[0]).syn(mode="reg", seed=0,
+                                            rdn_choice_num=10)
+    assert len({c for _, c, _, _ in result}) == 10
+
+
+def test_a_mirrored_tree_gives_same_named_files_their_own_draws(two_talkers,
+                                                                clean_noise_dirs,
+                                                                tmp_path):
+    """Seeds come from the path below the output folder, not the name: every
+    TIMIT talker reads sa1, and they should not all share a room."""
+    _, noise = clean_noise_dirs
+    syx = Synthesizer(sorted(two_talkers.rglob("sa1.wav")), noise,
+                      out_path=str(tmp_path / "o"), snr_ratio=[0], rt60=[0.4])
+    syx.syn(mode="reg", seed=0)
+    assert len({room[2] for room in syx.rooms.values()}) == 2
+
+
+# ======================================================== the silence share
+
+def _correlation(path, clean_file):
+    from kudio import file_load
+    y, _ = file_load(path)
+    c, _ = file_load(clean_file)
+    n = min(len(y), len(c))
+    return float(np.corrcoef(y[:n], c[:n])[0, 1])
+
+
+def test_is_silence_leaves_the_mixtures_their_speech(tmp_path):
+    """The flag was handed to every file, so `is_silence=True` wrote a whole
+    dataset of noise with not one word in it. Only the share is noise now."""
+    import kudio
+    sr = 16000
+    clean, noise = tmp_path / "sc", tmp_path / "sn"
+    clean.mkdir()
+    noise.mkdir()
+    t = np.arange(sr // 4) / sr
+    for i in range(20):
+        kudio.save_wave(clean / f"u{i:02d}.wav",
+                        (0.3 * np.sin(2 * np.pi * (200 + 10 * i) * t))
+                        .astype(np.float32), sr)
+    kudio.save_wave(noise / "w.wav", (0.1 * np.random.default_rng(0)
+                                      .standard_normal(sr)).astype(np.float32), sr)
+    out = tmp_path / "o"
+    result = Synthesizer(clean, noise, out_path=str(out), snr_ratio=[20]).syn(
+        mode="reg", seed=0, is_silence=True, p_silence=0.1)
+
+    silent = [(o, c) for o, c, _, _ in result if o.name.endswith("_n00.wav")]
+    mixtures = [(o, c) for o, c, _, _ in result if not o.name.endswith("_n00.wav")]
+    assert len(silent) == 2 and len(mixtures) == 20
+    assert len(list(out.rglob("*.wav"))) == 22
+    assert all(_correlation(o, c) > 0.9 for o, c in mixtures)
+    assert all(abs(_correlation(o, c)) < 0.2 for o, c in silent)
+
+
+def test_extra_mode_keeps_the_speech_and_the_working_directory(
+        clean_noise_dirs, tmp_path, monkeypatch):
+    """Stage two ran with the silence flag on for every file, so the whole of
+    extra mode came out as noise; and its scratch folder sat in the working
+    directory, under a name anything else could have been using."""
+    clean, noise = clean_noise_dirs
+    background = tmp_path / "bg"
+    background.mkdir()
+    from conftest import write_wav
+    write_wav(background / "hum.wav", (0.05 * np.sin(
+        2 * np.pi * 50 * np.arange(16000) / 16000)).astype(np.float32))
+    work = tmp_path / "cwd"
+    (work / "tmp_mixed").mkdir(parents=True)
+    (work / "tmp_mixed" / "keep.txt").write_text("not yours")
+    monkeypatch.chdir(work)
+
+    out = tmp_path / "extra"
+    result = Synthesizer(clean, noise, out_path=str(out), snr_ratio=[20]) \
+        .syn_extra_mode(background, background_snr=(5,), seed=0)
+    # 2 clean x (1 stage-one mixture + 1 noise + 1 background) x 1 SNR
+    assert len(result) == 6
+    for path, clean_file, _, _ in result:
+        assert _correlation(path, clean_file) > 0.9
+    assert (work / "tmp_mixed" / "keep.txt").read_text() == "not yours"
+
+
+# ============================================== what overwrite may not delete
+
+def test_overwrite_will_not_delete_the_inputs(clean_noise_dirs, tmp_path):
+    """`out_path` one level too high used to take the corpus with it."""
+    from kudio.exceptions import SynthesisError
+    clean, noise = clean_noise_dirs
+    syx = Synthesizer(clean, noise, out_path=str(tmp_path), snr_ratio=[0])
+    with pytest.raises(SynthesisError, match="holds the input"):
+        syx.syn(mode="reg", seed=0)
+    assert any(Path(clean).iterdir()) and any(Path(noise).iterdir())
+
+
+def test_overwrite_will_not_delete_the_working_directory(clean_noise_dirs,
+                                                         tmp_path, monkeypatch):
+    from kudio.exceptions import SynthesisError
+    clean, noise = clean_noise_dirs
+    work = tmp_path / "project"
+    work.mkdir()
+    (work / "train.py").write_text("print('mine')")
+    monkeypatch.chdir(work)
+    syx = Synthesizer(clean, noise, out_path=".", snr_ratio=[0])
+    with pytest.raises(SynthesisError, match="working directory"):
+        syx.syn(mode="reg", seed=0)
+    assert (work / "train.py").exists()
+
+
+def test_a_bad_mode_is_refused_before_anything_is_deleted(clean_noise_dirs,
+                                                          tmp_path):
+    clean, noise = clean_noise_dirs
+    out = tmp_path / "keep"
+    syx = Synthesizer(clean, noise, out_path=str(out), snr_ratio=[0])
+    syx.syn(mode="reg", seed=0)
+    before = sorted(out.rglob("*.wav"))
+    with pytest.raises(ValueError):
+        syx.syn(mode="bogus")
+    assert sorted(out.rglob("*.wav")) == before
+
+
+# ======================================================== names and values
+
+def test_a_fractional_snr_keeps_its_own_file_and_value(clean_noise_dirs,
+                                                       tmp_path):
+    """`with_suffix` read '.5dB' as a suffix: 2.5 and 2.7 dB both became
+    `..._2.wav` and one overwrote the other."""
+    clean, noise = clean_noise_dirs
+    out = tmp_path / "frac"
+    syx = Synthesizer(clean, noise, out_path=str(out),
+                      snr_ratio=[-5, -2.5, 2.5, 2.7, 5])
+    syx.syn(mode="inc", seed=0)
+    names = sorted(p.name for p in out.glob("clean_0_*.wav"))
+    assert names == ["clean_0_white_2p5dB.wav", "clean_0_white_2p7dB.wav",
+                     "clean_0_white_5dB.wav", "clean_0_white_n2p5.wav",
+                     "clean_0_white_n5.wav"]
+    assert sorted({p.snr_db for p in syx.manifest()}) == [-5, -2.5, 2.5, 2.7, 5]
+    assert all(isinstance(p.snr_db, int) for p in syx.manifest()
+               if p.snr_db in (-5, 5))
+
+
+def test_a_dotted_file_name_keeps_its_whole_stem(tmp_path, clean_noise_dirs):
+    import kudio
+    _, noise = clean_noise_dirs
+    clean = tmp_path / "dotted"
+    clean.mkdir()
+    kudio.save_wave(clean / "take.v2.wav", np.zeros(1600, np.float32) + 0.1,
+                    16000)
+    out = tmp_path / "o"
+    Synthesizer(clean, noise, out_path=str(out), snr_ratio=[0, 5]).syn(
+        mode="inc", seed=0)
+    assert sorted(p.name for p in out.rglob("*.wav")) == \
+        ["take.v2_white_0dB.wav", "take.v2_white_5dB.wav"]
