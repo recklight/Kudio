@@ -444,14 +444,21 @@ def _paired_means(base: List[dict], enhanced: List[dict], column: str):
     return float(np.mean(b)), float(np.mean(e))
 
 
-def eval_metrics(rate: int, ref: np.ndarray, deg: np.ndarray):
+def eval_metrics(rate: int, ref: np.ndarray, deg: np.ndarray, *,
+                 pesq_mode: str = 'auto', pesq_scale: str = 'lqo'):
     """Score a single (reference, degraded) pair with every available metric.
 
-    Returns ``(pesq, stoi, sdr)``. A metric comes back as ``None`` when its
-    back-end is not installed, when it cannot run on this pair -- PESQ off 8
-    and 16 kHz -- or when it fails on it, which is logged. PESQ is
-    :func:`pesq`'s default, MOS-LQO and wideband at 16 kHz; :func:`score`
-    takes the mode and scale, and any metric, by name.
+    Returns ``(pesq, stoi, sdr)`` -- always three values, whatever is
+    installed. A metric comes back as ``None`` when its back-end is not
+    installed, when it cannot run on this pair -- PESQ off 8 and 16 kHz -- or
+    when it fails on it, which is logged.
+
+    :param pesq_mode: ``'nb'``, ``'wb'`` or ``'auto'`` (by sample rate).
+    :param pesq_scale: ``'lqo'`` for MOS-LQO, or ``'raw'`` for the narrowband
+        P.862 score most enhancement papers quote. The defaults are what kudio
+        has always reported, so an existing caller's numbers do not move --
+        but a caller that wants the scale the literature uses can now say so,
+        which before 3.7.1 only :func:`pesq` and :func:`score` could.
     """
     pesq_status, stoi_status, sdr_status = check_metrics_install()
     ref, deg = _align(np.asarray(ref).squeeze(), np.asarray(deg).squeeze())
@@ -462,7 +469,8 @@ def eval_metrics(rate: int, ref: np.ndarray, deg: np.ndarray):
         value = None
         if ok:
             try:
-                value = _compute(name, ref, deg, int(rate))
+                value = _compute(name, ref, deg, int(rate),
+                                 pesq_mode=pesq_mode, pesq_scale=pesq_scale)
             except Exception as e:                          # noqa: BLE001
                 log.warning("%s could not be computed: %s", name.upper(), e)
         values.append(value)

@@ -386,7 +386,12 @@ class Synthesizer:
             outWaves.append(outDir / ('_'.join(parts) + '.wav'))
         self._warn_collisions(outWaves, mkdir_parents)
 
-        entries = list(zip(outWaves, clnWaves, nosWaves, snrSeqs))
+        # Normalised here as well as in the manifest: an SNR list given as
+        # np.arange carries np.int64, which `json` cannot serialise, so a
+        # caller writing `syn()`'s own tuples out hit what the manifest path
+        # was already protected from.
+        entries = list(zip(outWaves, clnWaves, nosWaves,
+                           [_snr_value(s) for s in snrSeqs]))
         rt_of = dict(zip(outWaves, rt60Seqs))
         silent: Set[Path] = set()
         if is_silence and 0 < p_silence < 1:
@@ -534,15 +539,41 @@ class Synthesizer:
 
     @staticmethod
     def _silence_share(entries: list, rng, p_silence: float) -> list:
-        """A *p_silence* share of *entries* again, to be written as noise alone."""
+        """A *p_silence* share of *entries* again, to be written as noise alone.
+
+        The name follows the same ``clean_noise_snr`` shape as every other
+        output, with ``n00`` standing in for the SNR. It used to join the two
+        stems with nothing between them, which made ``ab`` + ``c`` and ``a`` +
+        ``bc`` one file.
+        """
         n = min(len(entries), int(round(len(entries) * p_silence)))
-        chosen: Dict[Path, tuple] = {}
+        chosen: Dict[tuple, tuple] = {}
         for k in rng.choice(len(entries), size=n, replace=False):
             out, cln, nos, _ = entries[k]
-            path = Path(out).parent / f"{Path(cln).stem}{Path(nos).stem}_n00.wav"
-            # two SNRs of one clean x noise pair make the same noise-only file
-            chosen.setdefault(path, (path, cln, nos, 0))
-        return list(chosen.values())
+            path = Path(out).parent / \
+                f"{Path(cln).stem}_{Path(nos).stem}_n00.wav"
+            # Two SNRs of one clean x noise pair are the same noise-only file,
+            # and one of them is the right answer. Keyed on the pair rather
+            # than on the path so that this collapses only what it means to.
+            chosen.setdefault((str(cln), str(nos)), (path, cln, nos, 0))
+
+        # ...which leaves the case it never meant to collapse: two different
+        # pairs whose stems land on one name. Possible with mkdir_parents=False
+        # over a tree, and worth saying rather than dropping one of them.
+        by_path: Dict[Path, list] = {}
+        for entry in chosen.values():
+            by_path.setdefault(entry[0], []).append(entry)
+        clashes = {path: found for path, found in by_path.items()
+                   if len(found) > 1}
+        if clashes:
+            first = next(iter(clashes))
+            warnings.warn(
+                f"{sum(len(v) - 1 for v in clashes.values())} noise-only "
+                f"file(s) share a name with another and only one of each is "
+                f"written, e.g. {first}. Keep mkdir_parents on so the folder "
+                f"layout separates them, or give the inputs distinct stems.",
+                UserWarning, stacklevel=3)
+        return [found[0] for found in by_path.values()]
 
     def _check_clearable(self, *more: Sequence) -> None:
         """Refuse to empty the output folder when that would delete more than
@@ -688,8 +719,28 @@ class Synthesizer:
             y_noise = y_noise[ind:ind + len(y_clean)]
 
         y_noise = y_noise - np.mean(y_noise)
+        spread = float(np.std(y_noise))
+        if not spread > 0.0:
+            # Digital silence, or a constant: there is no scaling that puts
+            # this at the requested SNR, and dividing by it gave every sample
+            # NaN, which int16 wrote as zero -- a mixture with no speech in it
+            # and nothing said. One truncated download in a noise corpus was
+            # enough.
+            raise SynthesisError(
+                f"noise file has no variation and cannot be scaled to "
+                f"{_snr_value(snr)} dB: {noise_file}. It is digital silence or "
+                f"a constant level (std 0 after removing the mean), so there "
+                f"is no gain that makes it a noise floor. Drop the file from "
+                f"the noise set, or trim it to the part that has signal in it.")
         noise_variance = clean_pwr / (10 ** (snr / 10))
-        noise = np.sqrt(noise_variance) * y_noise / np.std(y_noise)
+        noise = np.sqrt(noise_variance) * y_noise / spread
+        if not np.all(np.isfinite(noise)):
+            # belt and braces: a near-silent file scales by a vast factor, and
+            # a mixture of inf or NaN must never reach the disk as zeros
+            raise SynthesisError(
+                f"scaling {noise_file} to {_snr_value(snr)} dB against "
+                f"{clean_file} produced values that are not finite. The noise "
+                f"file is almost certainly degenerate -- check its level.")
 
         y_noisy = noise if isSilence or out in (silent or ()) else y_clean + noise
 

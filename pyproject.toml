@@ -40,7 +40,9 @@ dependencies = [
 
 [project.optional-dependencies]
 audio = ["PyAudio>=0.2.13", "sounddevice>=0.4.5"]     # live capture / playback
-eval = ["mir_eval>=0.7", "pystoi>=0.3.3"]  # STOI / SDR (PESQ: see [pesq])
+# bss_eval_sources, which `sdr` calls, is deprecated in mir_eval 0.8 and
+# removed in 0.9, so the upper bound is load-bearing rather than caution.
+eval = ["mir_eval>=0.7,<0.9", "pystoi>=0.3.3"]  # STOI / SDR (PESQ: see [pesq])
 # PESQ (ITU-T P.862 / P.862.2). PyPI carries `pesq` as source only, so this
 # compiles it: it needs a C compiler -- the MSVC Build Tools on Windows. That
 # is why it is an extra of its own and not part of [eval] or [all], which
