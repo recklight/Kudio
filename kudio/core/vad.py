@@ -37,7 +37,7 @@ import numpy as np
 from kudio.core._framing import frame_view
 from kudio.exceptions import FeatureError
 
-__all__ = ['vad', 'vad_split', 'vad_trim', 'speech_ratio']
+__all__ = ['vad', 'vad_split', 'vad_trim', 'vad_frames', 'speech_ratio']
 
 log = logging.getLogger(__name__)
 
@@ -201,6 +201,46 @@ def vad_trim(y: np.ndarray, sr: int, **kwargs
     start = int(round(spans[0][0] * sr))
     end = min(int(round(spans[-1][1] * sr)), np.asarray(y).shape[0])
     return np.asarray(y)[start:end], (start, end)
+
+
+def vad_frames(y: np.ndarray, sr: int, *, hop_length: int = 256,
+               n_fft: int = 512, center: bool = True, pad: float = 0.0,
+               **kwargs) -> np.ndarray:
+    """:func:`vad` as one decision per STFT frame, ``True`` for speech.
+
+    A frame is speech when its centre falls inside a span :func:`vad` found.
+    The frames are the ones :func:`kudio.waveform_to_spectrogram` and
+    :class:`kudio.STFT` make with the same *hop_length*, *n_fft* and *center*,
+    so the mask indexes their rows directly::
+
+        >>> spec = kudio.waveform_to_spectrogram(y)       # (frames, bins)
+        >>> speech = kudio.vad_frames(y, sr)              # (frames,) bool
+        >>> noise_only = spec[~speech]
+
+    :param pad: seconds added to each end of a span, as in :func:`vad` --
+        but 0 by default here rather than 0.05. Padding keeps a cut from
+        clipping a consonant; on a frame label it only marks the frames next
+        to the speech as speech too.
+    :param center: ``True`` (librosa's default and kudio's) centres frame *t*
+        on sample ``t * hop_length``; ``False`` starts it there.
+
+    Other keyword arguments go to :func:`vad`.
+    """
+    if hop_length < 1 or n_fft < 1:
+        raise FeatureError(f"hop_length and n_fft must be >= 1, got "
+                           f"{hop_length} and {n_fft}")
+    spans = vad(y, sr, pad=pad, **kwargs)
+    n = np.asarray(y).squeeze().shape[0] if np.asarray(y).size else 0
+    if center:
+        centres = np.arange(1 + n // hop_length) * hop_length
+    else:
+        count = 1 + (n - n_fft) // hop_length if n >= n_fft else 0
+        centres = np.arange(count) * hop_length + n_fft / 2
+    seconds = centres / float(sr)
+    speech = np.zeros(len(centres), dtype=bool)
+    for start, end in spans:
+        speech |= (seconds >= start) & (seconds < end)
+    return speech
 
 
 def speech_ratio(y: np.ndarray, sr: int, **kwargs) -> float:

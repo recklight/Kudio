@@ -10,8 +10,9 @@ the [API Reference](api.md) for the full function list.
 ```bash
 pip install kudio            # core: I/O, features, effects, synthesis, metrics
 pip install kudio[audio]     # + live capture / playback (PyAudio, sounddevice)
-pip install kudio[eval]      # + PESQ / STOI / SDR back-ends
+pip install kudio[eval]      # + STOI / SDR back-ends (pystoi, mir_eval)
+pip install kudio[pesq]      # + PESQ (pesq) -- builds from source, needs a C compiler
 pip install kudio[viz]       # + plotting helpers (matplotlib)
 pip install kudio[data]      # + Excel / dataframe export (pandas, openpyxl)
-pip install kudio[all]       # everything
+pip install kudio[all]       # everything but [pesq]
 ```

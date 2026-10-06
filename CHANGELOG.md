@@ -6,6 +6,197 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.7.0] - 2026-10-06
+
+A speech-enhancement project ran kudio's synthesis and evaluation end to end on
+TIMIT and wrote down everything that went wrong. Nearly all of it was silent:
+files that wrapped around instead of clipping, a `reg` corpus that met a
+seventh of its noise x SNR combinations, a seed the process pool ignored, and a
+PESQ that was on the wrong scale where it ran and NaN where it did not. This
+release fixes those, and two worse problems found on the way: `is_silence=True`
+wrote a dataset without a word of speech in it, and `overwrite=True` could
+delete the corpus it was reading from.
+
+### Fixed — synthesis
+
+- **`is_silence=True` wrote a dataset with no speech in it.** The flag was meant
+  to add a 2% share of noise-only files, but it was handed to *every* file, so
+  every mixture was written as noise alone. `syn_extra_mode`, which always sets
+  it, has never produced a mixture with speech in it. Only the share is
+  noise-only now, and it is drawn without replacement.
+
+- **A mixture past full scale wrapped around.** `(y * 32767).astype(int16)`
+  turns 1.2 into -0.8 without a word, so a loud talker at a low SNR came out
+  with clicks of the opposite sign. Files are now written through `save_wave`,
+  which clips at full scale and rounds to the nearest step; `syn` warns with
+  the count and the worst peak, and **`Synthesizer.clipped`** lists the files.
+  **`Synthesizer(subtype=...)`** writes `'PCM_24'` or `'FLOAT'` instead, and
+  `'FLOAT'` keeps what is past 1.0.
+
+- **`reg` mode met only `lcm(noises, SNRs)` of the combinations.** The noise and
+  SNR lists were cycled side by side, so 14 noises against 21 SNRs paired each
+  noise with just 3 SNRs. The SNR now steps on by one at the end of every such
+  cycle, so any `noises x SNRs` consecutive outputs hold every combination
+  exactly once. **When the two counts share no factor nothing changes**: the
+  assignment is exactly the cycle it was.
+
+- **`seed=` did not survive the process pool.** The noise crop came from each
+  worker's own global RNG, so a seeded run with `is_pool=True` differed from
+  itself (77 of 210 files on a test corpus) and from a serial run. Each file now
+  draws its crop, its room and its packet loss from the seed and its own path
+  below the output folder -- the path rather than the name, because a mirrored
+  tree repeats names and every TIMIT talker reads `sa1`. `syn()` also no longer
+  calls `np.random.seed()`, which reset the caller's global RNG.
+
+- **`overwrite=True` could delete the corpus.** `syn()` emptied the output
+  folder with `rmtree`, as `syn_extra_mode()` always did, so an `out_path=` one
+  level too high took the clean and noise files with it. Both now refuse, with
+  `SynthesisError`, to empty a folder that holds an input file, the working
+  directory or the home directory. An unknown `mode=` is refused before
+  anything is deleted rather than after.
+
+- **`Synthesizer` takes what its docstring always said it took.** The
+  constructor demanded two folders, though the docstring promised anything
+  `check_input` accepts, so a subset -- TIMIT's SI and SX without SA -- had to be
+  copied out first. A list or a `.txt` manifest now works, mirrored below the
+  folder its files share or below **`root=`**; an entry that is not an
+  existing `.wav` is reported instead of skipped in silence.
+
+- **Fractional SNRs and dotted names.** `with_suffix` read `.5dB` as a file
+  suffix, so 2.5 dB and 2.7 dB both became `..._2.wav` and one overwrote the
+  other, and every output of `take.v2.wav` was called `take.wav`. A decimal
+  point is written `p` (`2p5dB`, `n2p5`) and names are joined, not suffixed.
+  Integer SNRs keep their names exactly. The manifest records 2.5 rather than
+  `int(2.5)`, and output names that still collide -- a tree flattened with
+  `mkdir_parents=False` -- get a warning.
+
+- `rdn_choice_num` samples without replacement; a repeat was written twice
+  under one name. `syn_extra_mode` keeps its scratch files in a temporary
+  directory rather than in `./tmp_mixed`, which it deleted on the way in.
+
+### Fixed — evaluation
+
+- **PESQ depended on `pysepm`, which is not on PyPI, and at 16 kHz failed on
+  NumPy 2.** pysepm returns `(np.NaN, MOS-LQO)` at 16 kHz, and `np.NaN` is gone
+  from NumPy 2, so every 16 kHz score raised; `AudioEvaluate` logged each one
+  and averaged them into NaN. PESQ now runs on the **`pesq`** package from PyPI,
+  installed by the new extra **`kudio[pesq]`**. PyPI carries it as source only,
+  so it needs a C compiler -- the MSVC Build Tools on Windows -- and it is left
+  out of `[eval]` and `[all]` so that those still install anywhere.
+
+- **And it was not the PESQ most papers report.** kudio reported P.862.2
+  wideband MOS-LQO at 16 kHz. Enhancement papers that say "PESQ" mostly mean
+  the raw narrowband P.862 score, a different scale: 2.03 raw is about 1.65
+  MOS-LQO. **`kudio.pesq(ref, deg, sr, mode=, scale=)`** takes the bandwidth
+  (`'nb'`, `'wb'`, `'auto'`) and the scale (`'lqo'`, or `'raw'` by inverting
+  P.862.1). The default is still what kudio reported, and
+  `AudioEvaluate(pesq_mode=, pesq_scale=)` passes both through.
+
+- **`AudioEvaluate` read files with `scipy.io.wavfile`**: int16 values, WAV
+  only, and TIMIT's own NIST SPHERE refused. It reads with `file_load` now --
+  float, mono, anything soundfile opens. Each file is read once per method
+  instead of once per metric, the noisy baseline is scored once instead of once
+  per method, lists that do not pair up are refused, and `get_df()` no longer
+  adds another 'Baseline' row each time it is called.
+
+- **`eval_metrics` logged its install hints on every call**, which per-file
+  scoring turned into a wall of warnings. A missing back-end is reported once
+  per process. A metric that cannot run on a pair -- PESQ off 8 and 16 kHz, or
+  on silence -- comes back `None` and leaves the others standing, where one
+  failure used to take every score with it.
+
+### Fixed — features and files
+
+- **Spectrograms of float32 audio came back float64 under NumPy 2.** The
+  epsilon added to the spectrum was a numpy float64 scalar, and NumPy 2's
+  promotion rules let it widen the whole array: twice the memory for every
+  feature matrix. Back to float32. The values are unchanged, including the
+  -31.3 a digitally silent bin is floored at, and `norm=True` still computes its
+  statistics in float64.
+- **`save_spectrogram_as_wave` wrapped around** past full scale, the same way
+  the Synthesizer did. It writes through `save_wave` now.
+- **`save_wave` clips and rounds fixed-point output itself.** libsndfile's
+  conversion floors, leaving every 16-bit sample half a step low, and wraps
+  around unless clipping is switched on. int16 input is scaled by 1/32768, the
+  step soundfile reads it back with, so a 16-bit array is written bit for bit
+  (it was 1/32767).
+- **`convert_folder` flattened a list.** Only a folder input was mirrored, so
+  two talkers' `sx133.wav` collided and one was renamed `sx1332.wav`, which
+  reads like another sentence. A list or manifest is mirrored below the folder
+  its files share, or below the new **`root=`**.
+
+### Added
+
+- **`score(ref, deg, sr, metrics=None)`** returns `{name: value}` for any of
+  `snr`, `si_sdr`, `segsnr`, `sdi`, `pesq`, `stoi`, `estoi`, `sdr`. With
+  `metrics=None` it runs everything that can run here; a metric asked for by
+  name that cannot -- not installed, or the wrong rate -- raises instead of
+  quietly going missing.
+- **`AudioEvaluate.per_file()`** -- every file's scores, one row per method and
+  file, with the clean, noisy and scored paths (`rows` holds the same as plain
+  dicts). Means cannot be broken down by noise, SNR or talker; this can, by
+  joining on `noisy` with a `save_manifest` manifest.
+- **`sdi(ref, deg)`** -- the speech distortion index, `sum((x - x_hat)**2) /
+  sum(x**2)`: `snr` on a linear scale, under the name the enhancement
+  literature reports it by.
+- **`ContextFrames(utterances, context=5)`** -- `stack_context` over a whole
+  corpus, a batch at a time. Stacking ±5 frames up front makes a training set
+  eleven times the size of its features (about 8 GB in the project that asked);
+  this keeps the features once, padded at each utterance's own edges, and
+  `bank[batch]` is row for row `np.vstack([stack_context(...)])[batch]`.
+- **`vad_frames(y, sr, hop_length=256)`** -- `vad` as one boolean per STFT
+  frame, lined up with the rows of `waveform_to_spectrogram` and `STFT`.
+  Padding defaults to 0 here: it keeps a cut from clipping a consonant, but on
+  a frame label it only marks the frames next to the speech as speech too.
+- `Synthesizer(root=, subtype=)`, `Synthesizer.clipped`, `Synthesizer.seed` (the
+  base the last run drew from, so a run given no seed can be rebuilt),
+  `syn_extra_mode(seed=)`, `convert_folder(root=)`.
+
+### Changed
+
+- **A dataset rebuilt from the same seed is not bit-identical to 3.6.0's.**
+  Crops are drawn per file, the clean-file sample and the silence share come
+  from `default_rng(seed)`, 16-bit samples are rounded instead of truncated,
+  and `reg` pairings move where the counts share a factor. Rooms and packet
+  loss of files directly in the output folder keep their 3.6.0 seeds; in a
+  mirrored tree they are now seeded from the path, not the name.
+- **`seed=None` is now random for everything.** In 3.6.0 it fixed the rooms and
+  packet loss (as if `seed=0`) while the crops varied. Now one base is drawn
+  from numpy's global RNG -- so `np.random.seed()` still reproduces a run -- and
+  kept in `Synthesizer.seed`.
+- `syn()` returns each SNR as it was given rather than as a numpy scalar, which
+  `json` could not serialise; `Pair.snr_db` is annotated `Optional[float]`.
+- The manifest names a link only on files that went down it, so the output of
+  `syn_extra_mode`, which applies none, no longer claims one.
+- In `AudioEvaluate` a metric failing on one file gives NaN for that file with
+  a warning; only PESQ did that before, and a failing STOI or SDR stopped the
+  evaluation.
+
+### Not changed
+
+- **`n5` beside `5dB`** in output names: the asymmetry is old, but scripts and
+  folders already depend on those names, and the manifest records each SNR
+  exactly. Only the names that were broken -- fractional SNRs, dotted stems --
+  changed.
+- **The -31.3 floor of a digitally silent bin.** Every model trained on kudio's
+  log spectrogram has seen it, so changing it would move their inputs; clamp
+  it where it matters, e.g. `np.maximum(spec, -10)`.
+
+### Migration
+
+```bash
+pip install -U "kudio[eval,pesq]"      # [pesq] needs a C compiler
+```
+
+```python
+# the PESQ enhancement papers quote: raw narrowband P.862
+ev = kudio.AudioEvaluate(clean, noisy, pesq_mode="nb", pesq_scale="raw")
+
+# a subset without copying it out, written without clipping
+syx = kudio.Synthesizer(si_sx_files, "noise/", out_path="mixed",
+                        root="TIMIT/TRAIN", subtype="FLOAT")
+```
+
 ## [3.6.0] - 2026-09-18
 
 The chain between a talker and a file, end to end. 3.5 could describe a room

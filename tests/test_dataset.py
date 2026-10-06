@@ -232,3 +232,13 @@ def test_a_pair_is_still_hashable_with_a_link_on_it():
     pair = kudio.Pair(noisy="a.wav", clean="b.wav", channel="telephone",
                       target="t.wav", rt60=0.3)
     assert len({pair, pair}) == 1
+
+
+def test_a_fractional_snr_survives_the_manifest(tmp_path):
+    """`int()` turned 2.5 dB into 2 on the way into the manifest."""
+    pairs = [kudio.Pair(noisy="m.wav", clean="c.wav", snr_db=2.5),
+             kudio.Pair(noisy="n.wav", clean="c.wav", snr_db=-5)]
+    path = kudio.save_manifest(tmp_path / "m.json", pairs)
+    back = kudio.load_manifest(path)
+    assert [p.snr_db for p in back] == [2.5, -5]
+    assert isinstance(back[1].snr_db, int)

@@ -28,11 +28,10 @@ from typing import Optional, Sequence, Tuple
 
 import librosa
 import numpy as np
-from scipy.io import wavfile
 from tqdm import tqdm
 
 from kudio._deprecation import alias
-from kudio.core.io import file_load
+from kudio.core.io import file_load, save_wave
 from kudio.exceptions import FeatureError
 
 __all__ = [
@@ -49,6 +48,13 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+
+#: added to the complex spectrum so a silent bin has a logarithm. A Python
+#: float, not ``np.finfo(float).eps``: under NumPy 2 a numpy float64 scalar
+#: promotes a complex64 spectrum to complex128, doubling every spectrogram
+#: computed from float32 audio. The value -- and the -31.3 a digitally silent
+#: bin comes out at -- is unchanged, since trained models have seen it.
+_EPS = float(np.finfo(float).eps)
 
 
 def wave_separate(wave: np.ndarray, channels: int) -> list:
@@ -83,13 +89,17 @@ def waveform_to_spectrogram(y: np.ndarray,
         y = y[:desired_length]
     D = librosa.stft(y, n_fft=n_fft, hop_length=hop_length,
                      win_length=win_length, window=window)
-    D = D + np.finfo(float).eps
+    D = D + _EPS
     Sxx = np.log10(np.abs(D) ** 2)
 
     if norm:
-        Sxx_mean = np.mean(Sxx, axis=1, keepdims=True)
-        Sxx_std = np.std(Sxx, axis=1, keepdims=True) + 1e-12
-        Sxx_r = (Sxx - Sxx_mean) / Sxx_std
+        # statistics in float64 -- a steady bin has a tiny std, and dividing
+        # by it in float32 leaves the normalised mean visibly off zero --
+        # then stored at the precision the audio came in at
+        S64 = Sxx.astype(np.float64)
+        Sxx_mean = np.mean(S64, axis=1, keepdims=True)
+        Sxx_std = np.std(S64, axis=1, keepdims=True) + 1e-12
+        Sxx_r = ((S64 - Sxx_mean) / Sxx_std).astype(Sxx.dtype)
     else:
         Sxx_r = np.array(Sxx)
 
@@ -117,7 +127,7 @@ def spectrogram_to_waveform(y: np.ndarray, enhanced_spec: np.ndarray,
         enhanced_spec = enhanced_spec.squeeze()
     D = librosa.stft(y.astype('float32'), hop_length=hop_length,
                      n_fft=n_fft, win_length=win_length, window=window)
-    D = D + np.finfo(float).eps
+    D = D + _EPS
     phase = np.exp(1j * np.angle(D))
     magnitude = np.sqrt(10 ** np.array(enhanced_spec)).T
     reverse = np.multiply(magnitude, phase)
@@ -148,13 +158,11 @@ def save_spectrogram_as_wave(wave_out_dir, noisy_file, enhanced_spec,
                              win_length: Optional[int] = None,
                              window: str = 'hamming') -> None:
     """Reconstruct a waveform from *enhanced_spec* (phase from *noisy_file*)
-    and write it to *wave_out_dir* as 16-bit PCM."""
+    and write it to *wave_out_dir* as 16-bit PCM, clipped at full scale."""
     y, rate = librosa.load(str(noisy_file), sr=None)
     y_out = spectrogram_to_waveform(y, enhanced_spec, squeeze, hop_length,
                                     n_fft, win_length, window)
-    Path(wave_out_dir).parent.mkdir(parents=True, exist_ok=True)
-    wavfile.write(str(wave_out_dir), rate,
-                  (y_out * np.iinfo(np.int16).max).astype(np.int16))
+    save_wave(wave_out_dir, y_out, rate)
 
 
 def mfcc(y: np.ndarray, sr: int, n_mfcc: int = 40) -> np.ndarray:
@@ -286,6 +294,76 @@ def stack_context(frames: np.ndarray, context: int,
     for i in range(width):
         out[:, i * dim:(i + 1) * dim] = padded[i:i + n]
     return out
+
+
+class ContextFrames:
+    """:func:`stack_context` over a whole corpus, stacked a batch at a time.
+
+    Stacking ±5 frames makes every row eleven rows wide, so a training set
+    stacked up front takes eleven times the memory of its features. This
+    keeps the features once -- each utterance padded at its own edges, so no
+    window reaches into the next utterance -- and stacks only the rows asked
+    for::
+
+        >>> bank = kudio.ContextFrames(features, context=5)   # (frames, dim) each
+        >>> bank.shape
+        (707112, 2827)
+        >>> x = bank[batch]                # indices, a slice or a mask
+
+    Row *i* is row *i* of ``np.vstack([stack_context(f, context, pad) for f in
+    features])``, so a target built with ``np.vstack(targets)`` lines up with
+    it index for index.
+    """
+
+    def __init__(self, utterances, context: int, pad: str = 'edge'):
+        if context < 0:
+            raise FeatureError(f"context must be >= 0, got {context}")
+        if pad not in ('edge', 'zero'):
+            raise FeatureError(f"pad must be 'edge' or 'zero', got {pad!r}")
+        if isinstance(utterances, np.ndarray) and utterances.ndim == 2:
+            utterances = [utterances]
+        mats = [np.asarray(u, dtype=np.float32) for u in utterances]
+        if not mats:
+            raise FeatureError("ContextFrames needs at least one utterance")
+        if any(m.ndim != 2 for m in mats) or len({m.shape[1] for m in mats}) != 1:
+            raise FeatureError("every utterance must be (frames, dim) with one "
+                               f"dim, got {sorted({m.shape for m in mats})}")
+        self.context = int(context)
+        self.dim = int(mats[0].shape[1])
+        mode = 'edge' if pad == 'edge' else 'constant'
+        padded, centres, offset = [], [], 0
+        for m in mats:
+            if not len(m):
+                continue
+            padded.append(np.pad(m, ((context, context), (0, 0)), mode=mode))
+            centres.append(offset + context + np.arange(len(m)))
+            offset += len(m) + 2 * context
+        self._frames = (np.concatenate(padded) if padded
+                        else np.empty((0, self.dim), np.float32))
+        self._centres = (np.concatenate(centres) if centres
+                         else np.empty(0, dtype=np.intp))
+        self._window = np.arange(-context, context + 1)
+
+    @property
+    def shape(self) -> Tuple[int, int]:
+        return len(self), self.dim * len(self._window)
+
+    def __len__(self) -> int:
+        return len(self._centres)
+
+    def __getitem__(self, index) -> np.ndarray:
+        centres = self._centres[index]
+        rows = np.atleast_1d(centres)[:, None] + self._window
+        out = self._frames[rows].reshape(len(rows), -1)
+        return out[0] if np.ndim(centres) == 0 else out
+
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        out = self[:]
+        return out if dtype is None else out.astype(dtype)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (f"<ContextFrames {self.shape[0]} x {self.shape[1]} "
+                f"(context ±{self.context}, {self._frames.nbytes / 2**20:.0f} MiB)>")
 
 
 def frame_windows(frames: np.ndarray, n_frames: int,
