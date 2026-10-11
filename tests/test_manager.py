@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
+import logging
+
 import numpy as np
 
+from conftest import make_sine
 from kudio import AudioDataManager, file_load
 
 
@@ -46,3 +49,65 @@ def test_del_element(wav_file):
     mgr.del_element('sine')
     assert len(mgr) == 0
     mgr.del_element('sine')  # no-op
+
+
+# -- one clip, one file ---------------------------------------------------------
+
+def test_clips_with_dotted_names_keep_their_own_files(tmp_path):
+    """'take' and 'take.v2' are two recordings, and they need two files.
+
+    ``with_suffix`` read the dot as the start of an extension and sent both to
+    'take.wav': one clip's audio was gone, ``save_all`` still said True, and
+    nothing in the log mentioned it.
+    """
+    mgr = AudioDataManager()
+    mgr.set_params(sr=16000, ch=1)
+    take, take_v2 = make_sine(freq=220.0), make_sine(freq=880.0)
+    mgr.add_new_file(name='take', wave=[take])
+    mgr.add_new_file(name='take.v2', wave=[take_v2])
+
+    assert mgr.save_all(dst_path=tmp_path) is True
+
+    written = sorted(p.name for p in tmp_path.glob("*.wav"))
+    assert written == ["take.v2.wav", "take.wav"]
+    y, _ = file_load(tmp_path / "take.wav")
+    assert np.corrcoef(y, take)[0, 1] > 0.999
+    y_v2, _ = file_load(tmp_path / "take.v2.wav")
+    assert np.corrcoef(y_v2, take_v2)[0, 1] > 0.999
+
+
+def test_both_channels_of_a_dotted_name_survive(tmp_path):
+    """'take.v2_ch0' and 'take.v2_ch1' both came out as 'take.wav', so channel
+    one landed on channel zero under a name identifying neither."""
+    mgr = AudioDataManager()
+    mgr.set_params(sr=16000, ch=2)
+    left, right = make_sine(freq=220.0), make_sine(freq=880.0)
+    interleaved = np.empty(len(left) + len(right), dtype=np.float32)
+    interleaved[0::2], interleaved[1::2] = left, right
+    mgr.add_new_file(name='take.v2', wave=[interleaved])
+
+    assert mgr.save_(name='take.v2', dst_path=tmp_path) is True
+
+    written = sorted(p.name for p in tmp_path.glob("*.wav"))
+    assert written == ["take.v2_ch0.wav", "take.v2_ch1.wav"]
+    ch0, _ = file_load(tmp_path / "take.v2_ch0.wav")
+    assert np.corrcoef(ch0, left)[0, 1] > 0.999
+    ch1, _ = file_load(tmp_path / "take.v2_ch1.wav")
+    assert np.corrcoef(ch1, right)[0, 1] > 0.999
+
+
+def test_two_clips_that_want_one_file_are_refused_before_anything_is_written(
+        tmp_path, caplog):
+    """A clip called 'take' and one called 'take.wav' ask for the same file.
+    Which of them is renamed is not a decision to make quietly."""
+    mgr = AudioDataManager()
+    mgr.set_params(sr=16000, ch=1)
+    mgr.add_new_file(name='take', wave=[make_sine(freq=220.0)])
+    mgr.add_new_file(name='take.wav', wave=[make_sine(freq=880.0)])
+
+    with caplog.at_level(logging.ERROR, logger="kudio.core.manager"):
+        saved = mgr.save_all(dst_path=tmp_path)
+
+    assert saved is False
+    assert list(tmp_path.glob("*.wav")) == [], "not one of them was written"
+    assert "take.wav" in caplog.text and "rename" in caplog.text

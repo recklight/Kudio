@@ -1,0 +1,18 @@
+# What the sdist carries on top of what setuptools works out by itself.
+#
+# Why this file exists: setuptools' default sdist rule picks up tests/test*.py
+# and stops there, which leaves conftest.py out -- and six of those modules
+# import their fixtures from it, so the shipped suite will not even collect.
+# An sdist carrying 28 of the 29 test files is worse than one carrying none,
+# because it looks runnable and is not. Grafting the directory rather than
+# naming files keeps the next fixture module out of the same hole.
+graft tests
+
+# Worth reading next to the code, and not picked up by default.
+include CHANGELOG.md
+
+# Compiled leftovers, which `graft tests` picks up from a tree the suite has
+# been run in. On a clean tree there is nothing to drop and the build says so
+# ("no previously-included files matching ... found anywhere"); that line means
+# the tree was clean, not that something is wrong here.
+global-exclude *.py[cod]

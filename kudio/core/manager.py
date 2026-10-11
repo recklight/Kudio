@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 from kudio.core.feature import wave_separate
 from kudio.core.io import load_waves, save_wave
@@ -139,6 +140,38 @@ class AudioDataManager:
     def get_values(self):
         return self.audios_.values()
 
+    def _file_name(self, name: str) -> str:
+        """A clip name as a file name: the whole name, plus ``.wav``.
+
+        ``with_suffix`` used to do this, and it reads the dot in 'take.v2' as
+        the start of an extension, so the clip was written to 'take.wav' --
+        the file belonging to the clip called 'take'. Load both from a folder
+        and whichever was saved second kept the file. The channel names were
+        worse: 'take.v2_ch0' and 'take.v2_ch1' both came out as 'take.wav',
+        one overwriting the other under a name identifying neither.
+        """
+        name = str(name)
+        if name.lower().endswith(self.suffix):
+            return name
+        return name + self.suffix
+
+    def _targets(self, name: str, item, dst_path=None) -> List[Path]:
+        """Every file :meth:`save_` would write for the clip *name*.
+
+        Empty when the clip has no destination at all: it was never loaded
+        from a file and no *dst_path* was given.
+        """
+        if dst_path is None:
+            if item['dir'] is None:
+                return []
+            dir_ = Path(item['dir'])
+        else:
+            dir_ = Path(dst_path) / self._file_name(name)
+        if self.ch_ > 1:
+            return [dir_.parent / self._file_name(f"{name}_ch{i}")
+                    for i in range(len(item['wave']))]
+        return [dir_]
+
     def save_(self, name: str, dst_path=None, down_sample=None) -> bool:
         if not len(self):
             log.warning("Manager: nothing to save")
@@ -146,21 +179,41 @@ class AudioDataManager:
         item = self.get_item(name)
         if item is None:
             return False
-        dir_ = item['dir'] if dst_path is None \
-            else (Path(dst_path) / name).with_suffix(self.suffix)
+        if not item['wave']:
+            log.warning("Manager: %r holds no audio yet, nothing written", name)
+            return False
+        targets = self._targets(name, item, dst_path)
+        if not targets:
+            log.warning("Manager: %r did not come from a file, so there is "
+                        "nowhere to put it; pass dst_path= to say where", name)
+            return False
         if self.ch_ > 1:
-            pth = Path(dir_).parent
-            for i, w in enumerate(item['wave']):
-                d = (pth / f"{name}_ch{i}").with_suffix(self.suffix)
+            for d, w in zip(targets, item['wave']):
                 save_wave(d, w, item['sr'], d_sample=down_sample)
         else:
-            save_wave(dir_, item['wave'][0], item['sr'], d_sample=down_sample)
+            save_wave(targets[0], item['wave'][0], item['sr'],
+                      d_sample=down_sample)
         return True
 
     def save_all(self, dst_path=None, down_sample=None) -> bool:
         if not len(self):
             log.warning("Manager: nothing to save")
             return False
+        # Checked for the whole store before a single file is written: two
+        # clips landing on one name used to mean one of them simply vanished,
+        # with `True` coming back and nothing in the log to say so. `normcase`
+        # because Windows would collide on names that compare different.
+        claimed = {}
+        for name in self.get_names():
+            for target in self._targets(name, self.audios_[name], dst_path):
+                key = os.path.normcase(str(target))
+                owner = claimed.setdefault(key, name)
+                if owner != name:
+                    log.error("Manager: %r and %r would both be written to "
+                              "%s, so one would lose its audio. Nothing was "
+                              "saved -- rename one of them first.",
+                              owner, name, target)
+                    return False
         for n in self.get_names():
             if not self.save_(n, dst_path=dst_path, down_sample=down_sample):
                 return False

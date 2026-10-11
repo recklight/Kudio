@@ -22,6 +22,7 @@ import logging
 import math
 import os
 import re
+import warnings
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -30,7 +31,7 @@ from tqdm import tqdm
 from kudio.exceptions import DependencyError
 
 __all__ = ['AudioEvaluate', 'eval_metrics', 'score', 'pesq', 'sdi', 'METRICS',
-           'si_sdr', 'snr', 'segmental_snr']
+           'si_sdr', 'snr', 'segmental_snr', 'MAX_LENGTH_MISMATCH']
 
 log = logging.getLogger(__name__)
 
@@ -44,8 +45,56 @@ def _pandas():
 
 
 # --- lightweight, dependency-free metrics --------------------------------------
-def _align(ref: np.ndarray, deg: np.ndarray):
+#: How much of the longer signal a comparison may leave unmeasured, as a
+#: fraction of it. Every metric here lines the pair up at sample zero and cuts
+#: both to the common length, so the tail of the longer one is never looked
+#: at; past half of it the score describes the overlap and not the file whose
+#: name it is reported under. Half is also well clear of the slop a real
+#: pipeline produces -- a window or two lost at the tail, a resampler's
+#: rounding -- which is the case truncation is there to absorb in the first
+#: place. Raise it to compare a pair that really is that lopsided.
+MAX_LENGTH_MISMATCH = 0.5
+
+
+def _align(ref: np.ndarray, deg: np.ndarray, *,
+           names: Tuple[str, str] = ('ref', 'deg'),
+           tolerance: Optional[float] = None):
+    """Cut both signals to the length they share, and say when that cuts.
+
+    A length difference is not a detail: the pair is compared sample for
+    sample, so whatever hangs off the end of the longer one simply does not
+    enter the number, and nothing in the result says so. Two files that
+    overlap in their first 1000 samples and differ everywhere after score as a
+    bit-perfect copy. So say it every time, and refuse once the part going
+    unmeasured is past *tolerance* (default :data:`MAX_LENGTH_MISMATCH`).
+
+    :param names: what to call the two in the message -- file paths where the
+        caller has them, otherwise the argument names.
+    """
     n = min(len(ref), len(deg))
+    longest = max(len(ref), len(deg))
+    if longest != n:
+        limit = MAX_LENGTH_MISMATCH if tolerance is None else float(tolerance)
+        unmeasured = (longest - n) / longest
+        counts = f"{names[0]} is {len(ref)} samples and {names[1]} {len(deg)}"
+        if unmeasured > limit:
+            # the sample count leads and the percentage follows it: rounding a
+            # percentage can read as a contradiction right at the gate, and
+            # 15999 of 16000 unmeasured is not "100%" when one was scored
+            raise ValueError(
+                f"{counts}: comparing them leaves {longest - n} of the longer "
+                f"one's {longest} samples unmeasured ({unmeasured * 100:.1f}%), "
+                f"past the {limit * 100:.0f}% "
+                f"limit, so the score would be about the overlap rather than "
+                f"about the pair. Check that these two are the same "
+                f"utterance, line them up with kudio.align, or raise "
+                f"kudio.core.evaluator.MAX_LENGTH_MISMATCH to score them as "
+                f"they sit.")
+        warnings.warn(
+            f"{counts}: only the first {n} samples are scored and the rest is "
+            f"ignored. Use kudio.align if the short one is delayed rather "
+            f"than just short, or trim the pair yourself to say which part "
+            f"you meant.", UserWarning, stacklevel=3)
     return ref[:n].astype(np.float64), deg[:n].astype(np.float64)
 
 
@@ -206,7 +255,8 @@ def score(ref: np.ndarray, deg: np.ndarray, sr: int,
 
     The two signals are compared sample for sample over their common length,
     as the rest of kudio's reference metrics are -- see :func:`kudio.align`
-    for a pair that may not line up.
+    for a pair that may not line up. A length difference is warned about, and
+    refused past :data:`MAX_LENGTH_MISMATCH` of the longer signal.
     """
     if metrics is None:
         names = [m for m in METRICS
@@ -373,7 +423,7 @@ class AudioEvaluate:
             if sr_deg != sr:
                 raise ValueError(f"{deg} is at {sr_deg} Hz and its reference "
                                  f"{cln} at {sr} Hz; resample one of them")
-            ref, out = _align(ref, out)
+            ref, out = _align(ref, out, names=(str(cln), str(deg)))
             row = {'method': method, 'clean': str(cln), 'noisy': str(noy),
                    'file': str(deg)}
             for column in columns:

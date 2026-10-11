@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path, PurePath
 from typing import Dict, List, Optional, Sequence, Tuple, Union
@@ -197,10 +198,71 @@ def load_labels(path: PathLike, fmt: Optional[str] = None) -> List[Label]:
     return labels
 
 
+def _distinct_examples(pairs: Sequence[Pair]) -> List[Pair]:
+    """*pairs* with each example once, in the order it first turned up.
+
+    Two rows equal in every field are one example written down twice: the
+    same mixture, from the same clean file and noise at the same SNR. A
+    repeated value in ``snr_ratio`` produces a manifest like that, and so
+    does gluing two runs over one output folder together. Dropping the repeat
+    loses nothing, which is why this de-duplicates instead of refusing:
+    refusing would send the caller off to hand-edit rows that say nothing,
+    when the split they asked for is perfectly well defined. It warns anyway,
+    because a row the caller counted on has gone.
+
+    Rows that disagree and still name the same mixture are the other case.
+    Only one of them can be true of that file and nothing here can tell
+    which, so there is nothing to de-duplicate and that one raises.
+    """
+    counted: Dict[Pair, int] = {}
+    for pair in pairs:
+        counted[pair] = counted.get(pair, 0) + 1
+
+    claimed: Dict[str, List[Pair]] = {}
+    for pair in counted:
+        claimed.setdefault(pair.noisy, []).append(pair)
+    clashes = [rows for rows in claimed.values() if len(rows) > 1]
+    if clashes:
+        rows = clashes[0]
+        differ = ", ".join(f.name for f in fields(Pair)
+                           if len({getattr(r, f.name) for r in rows}) > 1)
+        more = (f" ({len(clashes)} mixtures are listed like this)"
+                if len(clashes) > 1 else "")
+        raise ValueError(
+            f"{rows[0].noisy} is listed {len(rows)} times, by rows that "
+            f"disagree about {differ}{more}. Only one of those rows can be "
+            f"true of that file and nothing here can tell which, so "
+            f"splitting would train on it under one answer and then score "
+            f"it under another. Give each mixture a name of its own "
+            f"(mkdir_parents=True keeps the folder layout apart) and rebuild "
+            f"the manifest, or drop the rows that are out of date.")
+
+    repeats = sum(n - 1 for n in counted.values())
+    if repeats:
+        worst = max(counted, key=lambda p: counted[p])
+        # count the rows we tallied, not len(pairs): the argument has already
+        # been walked once by now, and an iterator has no length left to ask for
+        total = sum(counted.values())
+        warnings.warn(
+            f"{repeats} of {total} row(s) repeat an earlier one and were "
+            f"dropped; {len(counted)} distinct example(s) were split. "
+            f"{worst.noisy} is listed {counted[worst]} times. A repeated row "
+            f"lands in two splits at once and is then scored as if it had "
+            f"been held out, which inflates every number; a value repeated "
+            f"in snr_ratio= is the usual cause.",
+            UserWarning, stacklevel=3)
+    return list(counted)
+
+
 def split_pairs(pairs: Sequence[Pair], val_split: float = 0.1,
                 test_split: float = 0.1, seed: Optional[int] = None
                 ) -> Tuple[List[Pair], List[Pair], List[Pair]]:
     """Shuffle once, then cut into ``(train, validation, test)``.
+
+    An example listed more than once is cut down to one first, with a
+    warning, since dealing the copies out would put the same file in two
+    splits and then score it as if it had been held out. Rows that disagree
+    about one mixture file raise instead — see :func:`_distinct_examples`.
 
     Splitting a tiny set by percentage can leave nothing to train on, so when
     the three shares would starve training the validation and test sets are
@@ -214,7 +276,7 @@ def split_pairs(pairs: Sequence[Pair], val_split: float = 0.1,
             f"val_split + test_split must leave something to train on, "
             f"got {val_split} + {test_split}")
 
-    items = list(pairs)
+    items = _distinct_examples(pairs)
     rng = np.random.default_rng(seed)
     rng.shuffle(items)
 

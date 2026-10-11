@@ -86,10 +86,24 @@ class AudioReport:
     bandwidth_hz: float
     #: content stops well below Nyquist: upsampled, or through a narrow codec
     band_limited: bool
+    #: samples that are NaN or inf; with any of these the rest is meaningless
+    non_finite_samples: int = 0
 
     def problems(self) -> List[str]:
         """The findings worth acting on, in plain words. Empty is good news."""
         found = []
+        if self.non_finite_samples:
+            # First, and on its own: every number in this report came out of
+            # the same samples, so with NaN among them there is nothing else
+            # here worth reading. It has to be its own test rather than
+            # something the tests below catch, because a comparison against
+            # nan is false whichever way round it is written -- which is how a
+            # corrupt clip came to be reported as a muted microphone, the one
+            # answer that stops anybody looking any further.
+            return [f"{self.non_finite_samples} samples are not finite (NaN "
+                    f"or inf) -- the clip is corrupt, not quiet, and every "
+                    f"measurement here is meaningless. Repair it or drop it "
+                    f"from the set"]
         if self.peak_dbfs == float('-inf'):
             return ["the clip is digital silence"]
         if self.clipped_samples:
@@ -154,6 +168,12 @@ def _clipped_run_count(y: np.ndarray) -> int:
         if stop - start < _CLIP_RUN:
             continue
         run = np.abs(y[start:stop])
+        if not np.all(np.isfinite(run)):
+            # inf counts as pinned to the rail and it is not clipping: it is a
+            # broken sample, which `audio_report` counts and reports on its
+            # own. Measuring its flatness means `inf - inf`, and all that
+            # produces is a warning about the arithmetic.
+            continue
         if float(run.max() - run.min()) <= _CLIP_FLATNESS:
             total += stop - start
     return total
@@ -169,6 +189,11 @@ def _bandwidth(y: np.ndarray, sr: int) -> float:
     size = min(1024, len(y))
     if size < 32:
         return 0.0
+    if not np.all(np.isfinite(y)):
+        # No spectrum: the transform of a clip with NaN or inf in it is NaN
+        # throughout, which the power test below reads as no content anyway.
+        # Taken here so the transform is not asked for in the first place.
+        return 0.0
     windowed = _frame(y, size, max(1, size // 2)) * np.hanning(size)
     power = np.mean(np.abs(np.fft.rfft(windowed, axis=-1)) ** 2, axis=0)
     if not np.any(power > 0):
@@ -181,6 +206,11 @@ def _bandwidth(y: np.ndarray, sr: int) -> float:
 
 
 def _db(value: float) -> float:
+    if not np.isfinite(value):
+        # -inf is reserved for a measurement that came out at zero. A peak of
+        # nan has no dB value at all, and reporting it as -inf is how a
+        # corrupt clip came to look like digital silence.
+        return float('nan')
     return 20.0 * np.log10(value) if value > 0 else float('-inf')
 
 
@@ -195,6 +225,11 @@ def audio_report(y: np.ndarray, sr: int) -> AudioReport:
     ...     print(problem)
     content stops at 3844 Hz although the file claims 16000 Hz — ...
 
+    A clip carrying NaN or inf is measured and counted rather than refused:
+    the count is the finding, reported by :meth:`AudioReport.problems`, and
+    the numbers beside it come out nan. Inspecting a corpus is exactly when
+    you want to be told which files are broken, not stopped at the first one.
+
     :raises FeatureError: on a non-mono array or a non-positive rate.
     """
     if sr <= 0:
@@ -205,6 +240,7 @@ def audio_report(y: np.ndarray, sr: int) -> AudioReport:
     if y.size == 0:
         raise FeatureError("audio_report() got an empty waveform")
 
+    non_finite = int(np.count_nonzero(~np.isfinite(y)))
     peak = float(np.max(np.abs(y)))
     rms = float(np.sqrt(np.mean(y ** 2)))
     clipped = _clipped_run_count(y)
@@ -247,4 +283,5 @@ def audio_report(y: np.ndarray, sr: int) -> AudioReport:
         estimated_snr_db=snr,
         bandwidth_hz=bandwidth,
         band_limited=bool(0.0 < bandwidth < _BAND_LIMITED_RATIO * nyquist),
+        non_finite_samples=non_finite,
     )

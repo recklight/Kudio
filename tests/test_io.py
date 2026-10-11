@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
+import logging
+from pathlib import Path
+
 import numpy as np
 import pytest
+import soundfile as sf
 
 import kudio
 from kudio import check_input, file_load, load_waves, save_wave
 from kudio.core.io import check_file, check_path, copy_waves, LoadAudio
+from kudio.exceptions import AudioIOError
 
 
 def test_file_load_roundtrip(wav_file):
@@ -390,3 +395,139 @@ def test_convert_folder_takes_a_root(tmp_path, sine):
 def test_convert_folder_of_files_in_one_folder_stays_flat(wav_dir, tmp_path):
     result = kudio.convert_folder(sorted(wav_dir.glob("*.wav")), tmp_path / "o")
     assert all(p.parent == tmp_path / "o" for p in result.outputs)
+
+
+# -- names that are free, and names that only look free -------------------------
+
+def test_check_file_never_hands_back_an_occupied_name(tmp_path, sine):
+    """A dotted name is a name, not a name plus an extension.
+
+    Numbering 'take.v2.wav' through ``with_suffix`` produced 'take.wav' -- the
+    file belonging to the take next to it -- and the caller then wrote over it
+    in the one mode that exists to leave existing files alone.
+    """
+    save_wave(tmp_path / "take.wav", sine, 16000)
+    save_wave(tmp_path / "take.v2.wav", sine, 16000)
+
+    chosen = Path(check_file(tmp_path / "take.v2.wav", rename=True))
+
+    assert not chosen.exists(), "the name handed back has to be free"
+    assert chosen != tmp_path / "take.wav", "that file is another recording"
+    assert chosen.name.startswith("take.v2"), "and it should still be this one"
+
+
+def test_check_file_logs_the_name_it_actually_chose(tmp_path, sine, caplog):
+    """The INFO line is the only record of the rename, so it has to be true."""
+    save_wave(tmp_path / "take.wav", sine, 16000)
+    save_wave(tmp_path / "take.v2.wav", sine, 16000)
+
+    with caplog.at_level(logging.INFO, logger="kudio.core.io"):
+        chosen = check_file(tmp_path / "take.v2.wav", rename=True)
+
+    renamed_to = [m.split("Renamed to: ")[1] for m in caplog.messages
+                  if m.startswith("Renamed to: ")]
+    assert renamed_to == [chosen]
+    assert not Path(renamed_to[0]).exists()
+
+
+def test_check_file_keeps_a_dotted_name_when_it_adds_the_suffix(tmp_path):
+    """'take.v2' with no suffix is the clip's whole name; '.flac' is not."""
+    assert check_file(tmp_path / "take.v2") == str(tmp_path / "take.v2.wav")
+    assert check_file(tmp_path / "take.flac") == str(tmp_path / "take.wav")
+
+
+def test_convert_folder_without_overwrite_leaves_the_existing_files_alone(tmp_path):
+    """The whole point of ``overwrite=False``: nothing already there is lost.
+
+    Two takes whose names differ only by a dotted part, converted into a
+    folder that already holds both, used to end with the second one's audio
+    under the first one's name.
+    """
+    from conftest import make_sine
+
+    src = tmp_path / "raw"
+    src.mkdir()
+    out = tmp_path / "16k"
+    out.mkdir()
+    take, take_v2 = make_sine(freq=220.0), make_sine(freq=880.0)
+    for folder in (src, out):                   # out/ is left over from a run
+        save_wave(folder / "take.wav", take, 16000)
+        save_wave(folder / "take.v2.wav", take_v2, 16000)
+
+    result = kudio.convert_folder(src, out, overwrite=False)
+
+    assert result.written == 2 and not result.failed
+    kept, _ = file_load(out / "take.wav")
+    assert np.corrcoef(kept, take)[0, 1] > 0.999, "take.wav is still take"
+    kept_v2, _ = file_load(out / "take.v2.wav")
+    assert np.corrcoef(kept_v2, take_v2)[0, 1] > 0.999
+    assert len(list(out.glob("*.wav"))) == 4, "both conversions were written too"
+
+
+# -- samples that are not numbers -----------------------------------------------
+
+def _write_non_finite(path, bad=np.nan, count=10, sr=16000):
+    """A one-second 220 Hz tone at 0.3 with *count* samples replaced by *bad*.
+
+    Written straight through soundfile: ``save_wave`` refuses it, which is the
+    point, and files like this one are what kudio 3.7.0 and earlier left on
+    disk.
+    """
+    y = 0.3 * np.sin(2 * np.pi * 220 * np.arange(sr) / sr)
+    y[1000:1000 + count] = bad
+    sf.write(str(path), y.astype(np.float32), sr, subtype='FLOAT')
+    return y
+
+
+def test_save_wave_refuses_to_write_non_finite_samples(tmp_path, sine):
+    """FLOAT keeps a NaN and an integer subtype turns it into a zero, which
+    reads back as silence. Neither is a file anybody can use."""
+    broken = sine.copy()
+    broken[1000:1010] = np.nan
+    broken[2000] = np.inf
+
+    for subtype in ('FLOAT', 'PCM_16'):
+        out = tmp_path / f"broken_{subtype}.wav"
+        with pytest.raises(AudioIOError, match="not finite"):
+            save_wave(out, broken, 16000, subtype=subtype)
+        assert not out.exists(), "and nothing is left behind"
+
+
+def test_save_wave_names_the_file_and_the_count(tmp_path, sine):
+    broken = sine.copy()
+    broken[:3] = np.nan
+
+    with pytest.raises(AudioIOError) as excinfo:
+        save_wave(tmp_path / "mix.wav", broken, 16000, subtype='FLOAT')
+
+    message = str(excinfo.value)
+    assert "mix.wav" in message
+    assert "3 of" in message
+
+
+def test_file_load_says_so_when_a_file_holds_nan(tmp_path, caplog):
+    """Loading one is allowed -- you may be reading it to repair it -- but it
+    is the last place anything can be said about it."""
+    path = tmp_path / "take.wav"
+    _write_non_finite(path)
+
+    with caplog.at_level(logging.WARNING, logger="kudio.core.io"):
+        y, _ = file_load(path)
+
+    assert np.count_nonzero(~np.isfinite(y)) == 10, "the samples come back as they are"
+    assert "not finite" in caplog.text
+    assert "take.wav" in caplog.text
+
+
+def test_audio_info_does_not_report_a_nan_file_as_silent(tmp_path, caplog):
+    """``max(0.0, nan)`` keeps the 0.0, so the peak of a 0.3 tone with ten NaN
+    samples in it was reported as digital silence."""
+    path = tmp_path / "take.wav"
+    _write_non_finite(path)
+
+    with caplog.at_level(logging.WARNING, logger="kudio.core.io"):
+        info = kudio.audio_info(path)
+
+    assert not np.isfinite(info.peak), "there is no largest sample here"
+    assert info.frames == 16000, "the header is still readable"
+    assert "not finite" in caplog.text

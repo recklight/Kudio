@@ -54,6 +54,57 @@ def check_path(path: PathLike, exist_ok: bool = False, sep: str = '') -> str:
     return f"{path}{sep}{n}"
 
 
+#: Containers a caller may name instead of ``.wav``. Their suffix is an
+#: extension and gets replaced, because ``clip.flac`` is asking for
+#: ``clip.wav``. Anything else -- ``take.v2``, ``session.2026-10-11`` -- is
+#: part of the name and keeps it.
+_AUDIO_SUFFIXES = frozenset((
+    '.wav', '.wave', '.flac', '.mp3', '.m4a', '.aac', '.ogg', '.oga', '.opus',
+    '.aiff', '.aifc', '.aif', '.au', '.snd', '.caf', '.w64', '.sph', '.pcm',
+    '.raw',
+))
+
+
+def _as_wave_path(path: Path) -> Path:
+    """*path* ending in ``.wav``, with the rest of its name left alone.
+
+    ``with_suffix`` cannot tell an extension from a dotted name, so it reads
+    ``take.v2`` as a stem plus an extension and hands back ``take.wav`` --
+    which is a *different* recording. Only a real container suffix is
+    replaced; everything else gets ``.wav`` appended.
+    """
+    if path.suffix.lower() in _AUDIO_SUFFIXES:
+        return path.with_suffix(WAVE_SUFFIX)
+    return path.parent / (path.name + WAVE_SUFFIX)
+
+
+def _free_wave_path(path: Path, sep: str = '') -> Path:
+    """A sibling of *path* that nothing occupies: ``rec.wav`` -> ``rec2.wav``.
+
+    The counter is joined onto the stem and the suffix put back by hand.
+    Numbering through ``with_suffix`` instead turned the candidate
+    ``take.v22`` into ``take.wav``, so a folder holding ``take.wav`` and
+    ``take.v2.wav`` lost the first of them to the second -- in the mode whose
+    whole job is to leave existing files alone.
+
+    The highest index already in the folder is where the search starts, not
+    where it ends: it says nothing about the names between it and *path*, and
+    a sibling may have appeared since the glob. Every candidate is tested
+    before it is handed back, so the name the caller gets really is free.
+    """
+    stem, suffix = path.stem, path.suffix
+    pattern = re.compile(rf"{re.escape(stem)}{re.escape(sep)}(\d+)")
+    existing = path.parent.glob(f"{stem}{sep}*")
+    indices = [int(m.group(1)) for m in
+               (pattern.fullmatch(p.stem) for p in existing) if m]
+    n = max(indices) + 1 if indices else 2
+    while True:
+        candidate = path.parent / f"{stem}{sep}{n}{suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 def check_file(file_dir: PathLike, rename: bool = True, sep: str = '') -> str:
     """Normalize an output wave path: force the ``.wav`` suffix, create parent
     directories, and (optionally) rename to avoid overwriting an existing file.
@@ -61,16 +112,11 @@ def check_file(file_dir: PathLike, rename: bool = True, sep: str = '') -> str:
     file_dir = Path(file_dir)
     if file_dir.is_dir():
         file_dir = file_dir / 'unknown'
-    file_dir = file_dir.with_suffix(WAVE_SUFFIX)
-    if file_dir.is_file():
+    file_dir = _as_wave_path(file_dir)
+    if file_dir.exists():
         log.info("File already exists: %s", file_dir)
         if rename:
-            pattern = rf"{re.escape(file_dir.stem)}{re.escape(sep)}(\d+)"
-            existing = file_dir.parent.glob(f"{file_dir.stem}{sep}*")
-            indices = [int(m.group(1)) for m in
-                       (re.fullmatch(pattern, p.stem) for p in existing) if m]
-            n = max(indices) + 1 if indices else 2
-            file_dir = (file_dir.parent / f"{file_dir.stem}{sep}{n}").with_suffix(WAVE_SUFFIX)
+            file_dir = _free_wave_path(file_dir, sep)
             log.info("Renamed to: %s", file_dir)
         else:
             log.warning("Existing file will be overwritten: %s", file_dir)
@@ -162,6 +208,32 @@ def _relative(path: PathLike, root: Optional[PathLike]) -> Path:
     return _abspath(path).relative_to(_abspath(root))
 
 
+def _count_non_finite(y: np.ndarray) -> int:
+    """How many samples of *y* are NaN or inf."""
+    y = np.asarray(y)
+    if not y.size or not np.issubdtype(y.dtype, np.floating):
+        return 0
+    return int(np.count_nonzero(~np.isfinite(y)))
+
+
+def _warn_non_finite(y: np.ndarray, wav_dir: PathLike) -> None:
+    """Say so when a file comes back with NaN or inf samples in it.
+
+    Not an error: repairing a corpus means reading it first. But this is the
+    last point at which anyone can be told what is actually wrong with the
+    clip, because every measurement taken from it afterwards comes back nan
+    or -inf, and that reads like a microphone nobody switched on. kudio up to
+    3.7.0 wrote FLOAT files without checking, so such files are sitting in
+    corpora right now.
+    """
+    bad = _count_non_finite(y)
+    if bad:
+        log.warning("%s: %d of %d sample(s) are not finite (NaN or inf). This "
+                    "is a corrupt file, not a quiet one -- anything measured "
+                    "from it comes back nan or -inf. Repair the clip or drop "
+                    "it from the set.", wav_dir, bad, y.size)
+
+
 def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
               ) -> Tuple[np.ndarray, int]:
     """Load a wave file; returns ``(waveform float32, sample_rate)``.
@@ -179,7 +251,9 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
             y, rate = sf.read(str(wav_dir), dtype='float32', always_2d=False)
             if mono and y.ndim > 1:
                 y = y.mean(axis=1).astype(np.float32)
-            return np.asarray(y, dtype=np.float32), int(rate)
+            y = np.asarray(y, dtype=np.float32)
+            _warn_non_finite(y, wav_dir)
+            return y, int(rate)
         # resampling path (heavier)
         import librosa
         y, rate = librosa.load(str(wav_dir), sr=sr, mono=mono)
@@ -190,7 +264,9 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
             # the kind of thing nobody notices until a model is training on
             # transposed audio.
             y = y.T
-        return np.ascontiguousarray(y, dtype=np.float32), int(rate)
+        y = np.ascontiguousarray(y, dtype=np.float32)
+        _warn_non_finite(y, wav_dir)
+        return y, int(rate)
     except Exception as e:
         raise AudioIOError(f"Could not load audio file: {wav_dir} ({e})") from e
 
@@ -273,13 +349,24 @@ def audio_info(source: Union[PathLike, np.ndarray], sr: Optional[int] = None,
 
     top = 0.0
     if peak:
+        bad = 0
         try:
             with sf.SoundFile(str(path)) as fh:
                 for block in fh.blocks(blocksize=1 << 20, dtype='float32'):
                     if block.size:
+                        bad += _count_non_finite(block)
                         top = max(top, float(np.max(np.abs(block))))
         except Exception as e:
             raise AudioIOError(f"Could not read audio file: {path} ({e})") from e
+        if bad:
+            # `max(0.0, nan)` keeps the 0.0, so a file with NaN in it reported
+            # a peak of 0.0 -- digital silence, for a clip that is anything
+            # but. There is no largest sample when some of them are not
+            # numbers, so say nan and let callers ask `isfinite(info.peak)`.
+            log.warning("%s: %d sample(s) are not finite (NaN or inf), so the "
+                        "peak is undefined. Repair the clip or drop it from "
+                        "the set.", path, bad)
+            top = float('nan')
 
     return AudioInfo(sr=int(meta.samplerate), channels=int(meta.channels),
                      frames=int(meta.frames),
@@ -352,6 +439,10 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
     left to libsndfile, whose conversion floors -- every sample half a step
     low -- and wraps around unless clipping has been switched on: 1.2 comes
     back as -0.8. Whether it has been is up to the soundfile release.
+
+    :raises AudioIOError: if any sample is NaN or inf. Neither subtype family
+        survives one: ``FLOAT`` keeps it, and an integer one turns it into a
+        zero that reads back as silence.
     """
     Path(path).parent.mkdir(exist_ok=True, parents=True)
     wave = np.asarray(wave)
@@ -360,6 +451,21 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
         wave = wave.astype(np.float32) / 32768.0
     else:
         wave = wave.astype(np.float32)
+
+    bad = _count_non_finite(wave)
+    if bad:
+        # Neither subtype family survives this. `FLOAT` writes the NaN out,
+        # and every reader of that file gets nan back for the peak, the RMS
+        # and the loudness; an integer subtype converts it to a zero, which is
+        # worse, because the clip then reads as plain silence and nothing ever
+        # says otherwise. One truncated file or one divide by a silent frame
+        # upstream is enough, so it stops here with the name of the file.
+        raise AudioIOError(
+            f"refusing to write {path}: {bad} of {wave.size} sample(s) are "
+            f"not finite (NaN or inf). Written as FLOAT they stay, and as an "
+            f"integer subtype they become zeros that read back as silence. "
+            f"Find what produced them -- a gain computed from a silent frame "
+            f"is the usual one -- or drop the clip.")
 
     if d_sample is not None and d_sample != sr:
         import librosa

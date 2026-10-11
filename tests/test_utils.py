@@ -71,3 +71,37 @@ def test_list_devices_shape_and_filtering():
     assert len(inputs) <= len(every)
     # indices index into sounddevice's own table -- the contract record() relies on
     assert [d['index'] for d in every] == list(range(len(sd.query_devices())))
+
+
+# -- optional dependencies -----------------------------------------------------
+
+def test_visual_names_the_viz_extra_without_matplotlib():
+    """Importing the plotting helpers has to point at the extra that fixes it.
+
+    Runs in a subprocess with matplotlib hidden from the import machinery, so
+    the check means the same thing on a box that has the [viz] extra installed
+    and on one that does not.
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "class Hide:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'matplotlib' or name.startswith('matplotlib.'):\n"
+        "            raise ModuleNotFoundError(name, name=name)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, Hide())\n"
+        "from kudio.exceptions import DependencyError\n"
+        "try:\n"
+        "    import kudio.util.visual\n"
+        "except DependencyError as e:\n"
+        "    assert 'matplotlib' in str(e), str(e)\n"
+        "    assert 'kudio[viz]' in str(e), str(e)\n"
+        "else:\n"
+        "    raise AssertionError('kudio.util.visual imported without matplotlib')\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code],
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr

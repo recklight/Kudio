@@ -6,6 +6,96 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.7.2] - 2026-10-11
+
+### Fixed — files destroyed in the modes meant to protect them
+
+- **`convert_folder(..., overwrite=False)` could destroy a file it was never
+  asked to touch.** `check_file` chose its anti-collision name with
+  `Path.with_suffix`, which cannot tell an extension from a dotted name, so
+  `take.v2.wav` was renamed to `take.wav` -- over the top of a different
+  recording -- and the log said `Renamed to: take.wav` as though a collision
+  had been avoided. This is the defect 3.7.0 fixed inside `Synthesizer`; three
+  callers were still on the old pattern (`convert_folder`, `enhance_folder`,
+  `Recorder.save`). A suffix is now replaced only when it is a real audio
+  container, and every candidate name is checked before it is handed back.
+- **`AudioDataManager.save_all()` wrote two clips to one file and returned
+  `True`.** Clips named `take` and `take.v2` both landed on `take.wav`, and in
+  the multi-channel branch so did `take.v2_ch0` and `take.v2_ch1`. Dotted
+  names keep their own files now, and two clips that would still share one
+  are refused before anything is written, naming both.
+
+### Fixed — numbers that looked fine and were not
+
+- **`split_pairs` put the same example in more than one split.** A manifest
+  with a repeated row -- which `snr_ratio=[0, 0.0]` produces -- put 5 of 12
+  examples into both train and validation, so part of every score was
+  measured on training data, and nothing said so. Exact repeats are now
+  dropped with a warning that counts them; rows that list one mixture with
+  conflicting fields are refused, because nothing can tell which is true.
+- **The reference metrics trimmed any length mismatch without bound.** 100
+  samples against 16000 scored `snr 119.70 dB` -- a bit-perfect copy -- with
+  99.4 % of the reference never compared. Any mismatch now warns with both
+  counts, and past `MAX_LENGTH_MISMATCH` (0.5) it is refused, the way a
+  sample-rate mismatch already was. 20 % short is still scored: a frame or two
+  of framing slop is not a different recording.
+- **A clip with NaN in it was reported as digital silence.** `audio_report`
+  read ten NaN samples in an audible tone as a muted microphone, and the CLI
+  exited 0. `problems()` now names non-finite samples first and on their own,
+  `AudioReport.non_finite_samples` carries the count, `save_wave` refuses to
+  write such a waveform in any subtype, and `file_load` logs a warning naming
+  the file. Loading is still allowed, because repairing a corpus means reading
+  it -- and FLOAT corpora written by 3.7.0 and earlier can hold these.
+- **A manifest could name the wrong clean file.** When two different clean
+  files collapsed onto one output name, the manifest gave both as the
+  reference for the single mixture on disk, so training read a mislabeled
+  pair. The clean file that lost is now left out of the run and out of
+  `manifest()`, with a warning naming it. A repeated SNR is unaffected: there
+  both rows describe the same request, and the file is right for both.
+
+### Fixed — a hang, and a seed lost
+
+- **`AudioBuffer` blocked forever on a frame count of zero or less**, which
+  `int(seconds * sr / chunk)` produces for any request shorter than a chunk.
+  No traceback, nothing to interrupt. It is refused now. `FetchBuffer` on a
+  timeout raises `TimeoutError` rather than returning `None`, which a caller
+  could not tell from an empty capture.
+- **An aborted `syn()` or `syn_extra_mode()` threw away the seed of the corpus
+  on disk.** The seed was drawn before the check that refuses to clear the
+  output folder, so a refused run still overwrote `.seed`, and the one value
+  that rebuilt the existing corpus was gone. It is drawn after the check now.
+
+### Fixed — packaging and documentation
+
+- **The setuptools build floor was below what `pyproject.toml` needs.** The
+  licence is declared in the PEP 639 form, which setuptools reads only from
+  77.0.0; 68.2.2 and 76.1.0 both stop with `configuration error:
+  project.license must be valid exactly by one definition`. Now `>=77`.
+- **`numpy<2.5` is now `numpy<2.6`.** The cap follows numba, and numba 0.67.0
+  moved to `<2.6` on 2026-08-11. numpy 2.5 needs Python 3.12, so the old cap
+  bit only there -- as a resolution failure, or a quiet downgrade to 2.4.
+- **The Changelog link on PyPI was a 404.** It pointed at `main`; the branch
+  is `master`.
+- **`kudio.util.visual` raised a bare `ModuleNotFoundError`** instead of the
+  `DependencyError` that names `kudio[viz]`.
+- **`mkdocs build` failed outright**, with or without `--strict`. A docstring
+  line in `kudio.core.vad` read as a cross-reference. It arrived with 3.7.1's
+  expansion of the API Reference to 23 modules.
+- **The sdist carried 28 of the 29 test files** and left out `conftest.py`,
+  which six of the others import, so the shipped suite could not be collected.
+  `MANIFEST.in` grafts `tests/` whole.
+
+### Added
+
+- `kudio[check]` (pyloudnorm), so the BS.1770 loudness can be checked against
+  a reference implementation -- a test no environment could run before.
+- `kudio[docs]`, the toolchain `mkdocs.yml` asks for.
+- CI: a leg that installs the optional metric back-ends, so the `mir_eval`
+  and `pystoi` call sites run at all; and a release job that checks the built
+  files with `twine check --strict`, imports every module of the installed
+  wheel from outside the source tree, and refuses a tag that does not match
+  `kudio/_version.py`.
+
 ## [3.7.1] - 2026-10-07
 
 ### Fixed — three ways 3.7.0 could still write a corpus nobody could use

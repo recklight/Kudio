@@ -15,8 +15,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.9", "3.11", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install (with dev extras)
@@ -26,22 +26,117 @@ jobs:
       - name: Run tests
         run: pytest -q
 
+  backends:
+    # The one leg where the optional metric back-ends are really installed.
+    # [dev] is deliberately small, so on the legs above, the mir_eval and
+    # pystoi calls in kudio/core/evaluator.py never run -- which leaves the
+    # mir_eval <0.9 bound (0.8 deprecates bss_eval_sources, 0.9 removes it) a
+    # claim nothing tries. matplotlib and onnxruntime come along so that
+    # kudio.util.visual and the DNSMOS path get imported for real and not only
+    # through their missing-dependency branch, and pyloudnorm so the BS.1770
+    # cross-check in test_loudness runs somewhere rather than nowhere.
+    #
+    # Left out: [pesq], which ships no wheel and wants a C compiler, and
+    # [audio], whose PyAudio has no Linux wheel either. Keeping those two out
+    # means one failed source build cannot take the back-ends above with it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install (with the optional back-ends)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev,eval,dnsmos,viz,check]
+      - name: Run tests
+        run: pytest -q
+
   publish:
     # build sdist+wheel and upload to PyPI when a v* tag is pushed
-    needs: test
+    needs: [test, backends]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write        # trusted publishing (no API token in secrets)
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+      - name: Tag matches kudio/_version.py
+        # The tag and the code come from the same commit, so this cannot catch
+        # uploading something other than what was tested. What it catches is a
+        # mislabeled tag: v3.8.0 cut from a tree that still says 3.7.1. Worth
+        # a step of its own because PyPI never lets a version number be reused
+        # once it has been published.
+        #
+        # The version is read out of the file rather than imported: nothing is
+        # installed this early in the job, so `import kudio` would go looking
+        # for numpy and fail for the wrong reason.
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          version=$(sed -n 's/^__version__ = "\([^"]*\)".*$/\1/p' kudio/_version.py)
+          if [ -z "$version" ]; then
+            echo "found no __version__ = \"...\" line in kudio/_version.py to check the tag against." >&2
+            exit 1
+          fi
+          if [ "$tag" != "$version" ]; then
+            echo "tag v$tag does not match kudio/_version.py, which says $version." >&2
+            echo "Move the tag onto a commit whose _version.py says $tag, or bump _version.py and tag again." >&2
+            exit 1
+          fi
+          echo "releasing $version"
       - name: Build
         run: |
-          python -m pip install --upgrade pip build
+          python -m pip install --upgrade pip build twine
           python -m build
+      - name: Check the built metadata
+        run: twine check --strict dist/*
+      - name: Import every module out of the built wheel
+        # twine check reads metadata and imports nothing, so a module that
+        # raises on import -- an optional dependency escaping its gate, a typo
+        # in a corner of the tree no test reaches -- goes straight to PyPI.
+        # The walk runs from outside the checkout, so `import kudio` can only
+        # resolve to the wheel that was just installed, and the wheel goes in
+        # bare, with no extras in sight.
+        #
+        # On a bare install every module has to do one of two things: import,
+        # or refuse with kudio's DependencyError naming the extra it needs.
+        # The second is the gate working -- kudio.util.visual is all plotting,
+        # so it asks for [viz] on import rather than on every call. Anything
+        # else, a bare ModuleNotFoundError above all, is a dependency that got
+        # past its gate, and that is what fails the release.
+        run: |
+          python -m pip install dist/*.whl
+          mkdir -p "$RUNNER_TEMP/import-walk"
+          cd "$RUNNER_TEMP/import-walk"
+          python - <<'PY'
+          import importlib
+          import pkgutil
+
+          import kudio
+          from kudio.exceptions import DependencyError
+
+          broken, gated = [], []
+          for found in pkgutil.walk_packages(kudio.__path__, kudio.__name__ + "."):
+              try:
+                  importlib.import_module(found.name)
+              except DependencyError as exc:
+                  gated.append("{}: {}".format(found.name, exc))
+              except Exception as exc:
+                  broken.append("{}: {}: {}".format(found.name, type(exc).__name__, exc))
+
+          for line in gated:
+              print("gated behind an extra, as it should be --", line)
+          if broken:
+              raise SystemExit(
+                  "these modules do not import from a plain install of the wheel:\n  "
+                  + "\n  ".join(broken)
+                  + "\nMove the optional import inside the function that needs it."
+              )
+          print("every module under kudio imports from the wheel or names its extra")
+          PY
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

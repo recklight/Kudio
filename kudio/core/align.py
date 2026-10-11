@@ -5,7 +5,10 @@ Every reference metric in kudio -- :func:`kudio.si_sdr`, :func:`kudio.snr`,
 :func:`kudio.segmental_snr`, PESQ, STOI -- compares sample *i* of one signal
 with sample *i* of the other. They trim to the shorter of the two and assume
 the rest lines up, which is right for a process that returns what it was given
-and silently wrong for anything that introduces a delay.
+and wrong for anything that introduces a delay. A trim large enough to matter
+is warned about, and past :data:`kudio.core.evaluator.MAX_LENGTH_MISMATCH`
+refused -- but a delay that leaves the lengths equal is invisible to that
+check, and this is the module for it.
 
 How wrong is worth seeing. A clip scored against **itself**, shifted:
 

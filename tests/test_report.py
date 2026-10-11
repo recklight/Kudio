@@ -129,3 +129,32 @@ def test_bad_input_is_rejected_clearly():
         audio_report(np.zeros((1000, 2)), SR)
     with pytest.raises(FeatureError, match="empty"):
         audio_report(np.zeros(0), SR)
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_a_non_finite_clip_is_not_called_digital_silence(bad):
+    """Ten samples of a one-second tone replaced by something that is not a
+    number: a peak of nan is not a peak of nothing.
+
+    Every measurement here is computed from those samples, so all of them come
+    out nan, and the dBFS of nan used to be -inf -- which is exactly what
+    digital silence reads as. A corrupt file was reported as a muted
+    microphone, the one answer that stops anybody looking at the file.
+    """
+    y = 0.3 * np.sin(2 * np.pi * 220 * np.arange(SR) / SR)
+    y[1000:1010] = bad
+
+    report = audio_report(y, SR)
+    problems = report.problems()
+
+    assert len(problems) == 1
+    assert "not finite" in problems[0]
+    assert "10 samples" in problems[0]
+    assert "silence" not in problems[0]
+    assert report.non_finite_samples == 10
+    assert report.peak_dbfs != float("-inf")
+
+
+def test_a_healthy_clip_counts_no_non_finite_samples():
+    assert audio_report(_speech(), SR).non_finite_samples == 0
+    assert audio_report(np.zeros(SR, dtype=np.float32), SR).non_finite_samples == 0

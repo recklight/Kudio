@@ -693,13 +693,92 @@ def test_a_list_entry_that_is_not_there_is_reported(two_talkers,
 
 def test_colliding_output_names_are_reported(two_talkers, clean_noise_dirs,
                                              tmp_path):
-    """Flattened, two talkers' sx133 land on one name and one overwrites the
-    other -- worth a warning rather than a quietly smaller dataset."""
+    """Flattened, two talkers' sx133 land on one name. Only one mixture can be
+    written there, so the run names the clean file it left out rather than
+    handing back a manifest that claims both."""
     _, noise = clean_noise_dirs
     syx = Synthesizer(sorted(two_talkers.rglob("sx*.wav")), noise,
                       out_path=str(tmp_path / "flat"), snr_ratio=[0])
     with pytest.warns(UserWarning, match="mkdir_parents=False"):
         syx.syn(mode="reg", seed=0, mkdir_parents=False)
+
+
+@pytest.fixture
+def one_name_two_recordings(tmp_path):
+    """`same.wav` in two folders, 301 Hz in one and 900 Hz in the other.
+
+    Far enough apart that the dominant frequency of a mixture says which of
+    the two it was built from.
+    """
+    import kudio
+    sr = 16000
+    tree = tmp_path / "tree"
+    t = np.arange(sr // 2) / sr
+    for folder, freq in (("a", 301.0), ("b", 900.0)):
+        (tree / folder).mkdir(parents=True)
+        kudio.save_wave(tree / folder / "same.wav",
+                        (0.3 * np.sin(2 * np.pi * freq * t)).astype(np.float32),
+                        sr)
+    return tree
+
+
+def _dominant_hz(path) -> float:
+    from kudio import file_load
+    y, sr = file_load(path)
+    spectrum = np.abs(np.fft.rfft(y))
+    return float(np.fft.rfftfreq(len(y), 1 / sr)[int(np.argmax(spectrum))])
+
+
+def test_a_flattened_collision_never_names_the_wrong_clean_file(
+        one_name_two_recordings, clean_noise_dirs, tmp_path):
+    """Both recordings ask for one output name and only one mixture can be
+    there, so a row for each left `manifest` pairing that mixture with a clean
+    file it was not built from -- a mislabelled example a training loop has no
+    way of telling from a real one."""
+    _, noise = clean_noise_dirs
+    out = tmp_path / "flat"
+    syx = Synthesizer(sorted(one_name_two_recordings.rglob("same.wav")), noise,
+                      out_path=str(out), snr_ratio=[12, 20])
+    with pytest.warns(UserWarning):
+        rows = syx.syn(mode="inc", seed=0, mkdir_parents=False)
+
+    pairs = syx.manifest()
+    for p in pairs:
+        assert Path(p.noisy).is_file()
+        assert abs(_dominant_hz(p.noisy) - _dominant_hz(p.clean)) < 5.0, p.noisy
+    written = sorted(out.rglob("*.wav"))
+    assert len(written) == 2            # 4 requested, 2 names to write them to
+    assert len(rows) == len(pairs) == 2
+    assert len({p.noisy for p in pairs}) == 2
+
+
+def test_a_dropped_clean_file_is_named_in_the_warning(one_name_two_recordings,
+                                                      clean_noise_dirs,
+                                                      tmp_path):
+    """Two recordings go in and one dataset row comes out, so the warning has
+    to say which file was left behind and how to keep it."""
+    _, noise = clean_noise_dirs
+    clean = sorted(one_name_two_recordings.rglob("same.wav"))
+    syx = Synthesizer(clean, noise, out_path=str(tmp_path / "flat"),
+                      snr_ratio=[20])
+    with pytest.warns(UserWarning, match="not synthesised") as caught:
+        syx.syn(mode="inc", seed=0, mkdir_parents=False)
+    said = next(str(w.message) for w in caught
+                if "not synthesised" in str(w.message))
+    assert str(clean[1]) in said and "mkdir_parents" in said
+
+
+def test_one_request_made_twice_keeps_both_rows(clean_noise_dirs, tmp_path):
+    """The same clean file at an SNR given twice over asks for one name twice,
+    and the file that lands answers both rows. kudio records the request here,
+    so both stay and the repeat is only worth a warning."""
+    clean, noise = clean_noise_dirs
+    out = tmp_path / "dup"
+    syx = Synthesizer(clean, noise, out_path=str(out), snr_ratio=[0, 0])
+    with pytest.warns(UserWarning, match="overwrite it"):
+        rows = syx.syn(mode="inc", seed=0)
+    assert len(rows) == 4 and len(list(out.rglob("*.wav"))) == 2
+    assert len(syx.manifest()) == 4
 
 
 # ========================================================= seeds and the pool
@@ -765,6 +844,55 @@ def test_a_run_without_a_seed_can_be_rebuilt(clean_noise_dirs, tmp_path):
     again.syn(mode="reg", seed=syx.seed)
     for p in (tmp_path / "b").rglob("*.wav"):
         assert np.array_equal(sf.read(p)[0], first[p.name])
+
+
+def test_an_aborted_run_keeps_the_seed_of_the_corpus_on_disk(clean_noise_dirs,
+                                                             tmp_path):
+    """An unseeded run is only rebuildable through `.seed`, and the base used
+    to be drawn before the overwrite check -- so a call that aborted, wrote
+    nothing and deleted nothing still replaced `.seed` with the base of a run
+    that never happened, and the files in the folder had no seed left."""
+    import soundfile as sf
+    clean, noise = clean_noise_dirs
+    out = tmp_path / "mixed"
+    syx = Synthesizer(clean, noise, out_path=str(out), snr_ratio=[0])
+    assert syx.syn(mode="reg") is not None
+    kept = syx.seed
+    on_disk = {p.name: sf.read(p)[0] for p in out.rglob("*.wav")}
+
+    assert syx.syn(mode="reg", overwrite=False) is None
+    assert syx.seed == kept
+
+    replay = tmp_path / "replay"
+    Synthesizer(clean, noise, out_path=str(replay),
+                snr_ratio=[0]).syn(mode="reg", seed=syx.seed)
+    rebuilt = {p.name: sf.read(p)[0] for p in replay.rglob("*.wav")}
+    assert rebuilt.keys() == on_disk.keys()
+    for name in on_disk:
+        assert np.array_equal(rebuilt[name], on_disk[name]), name
+
+
+def test_an_aborted_run_keeps_the_rate_of_the_corpus_on_disk(clean_noise_dirs,
+                                                             tmp_path):
+    """`.target_sr` goes the same way as the seed: it says what rate the files
+    in the folder were written at, and an aborted call wrote none of them."""
+    clean, noise = clean_noise_dirs
+    out = tmp_path / "mixed"
+    syx = Synthesizer(clean, noise, out_path=str(out), snr_ratio=[0])
+    syx.syn(mode="reg", seed=0, target_sr=8000)
+    assert syx.target_sr == 8000
+    assert syx.syn(mode="reg", seed=0, overwrite=False) is None
+    assert syx.target_sr == 8000
+
+
+def test_a_refused_overwrite_draws_no_seed(clean_noise_dirs, tmp_path):
+    """Nothing was synthesised, so there is no run for `.seed` to name."""
+    from kudio.exceptions import SynthesisError
+    clean, noise = clean_noise_dirs
+    syx = Synthesizer(clean, noise, out_path=str(tmp_path), snr_ratio=[0])
+    with pytest.raises(SynthesisError, match="holds the input"):
+        syx.syn(mode="reg")
+    assert syx.seed is None
 
 
 def test_a_random_subset_has_no_repeats(tmp_path):

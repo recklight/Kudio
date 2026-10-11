@@ -99,9 +99,11 @@ def vad(y: np.ndarray, sr: int, *,
         hop: float = HOP) -> List[Tuple[float, float]]:
     """Find the spans of *y* that contain speech, in **seconds**.
 
+    ```
     >>> spans = kudio.vad(y, sr)
     >>> spans[:2]
     [(0.31, 1.84), (2.42, 3.97)]
+    ```
 
     :param threshold_db: how far above the estimated noise floor a frame must
         sit. Lower it for a very quiet talker, raise it for a noisy room.

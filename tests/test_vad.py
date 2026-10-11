@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 """Voice activity detection."""
+import inspect
+import re
+
 import numpy as np
 import pytest
 
@@ -144,3 +147,39 @@ def test_vad_frames_do_not_pad_unless_asked(speech):
     padded = kudio.vad_frames(speech, SR, pad=0.05)
     assert padded.sum() > plain.sum()
     assert not (plain & ~padded).any()
+
+
+# -- the docstring the docs build reads -------------------------------------------
+
+#: A line that is nothing but a bracketed phrase, which is markdown's
+#: shortcut-reference syntax: mkdocstrings hands it to autorefs as an
+#: identifier to resolve, and the docs build stops when it cannot.
+_SHORTCUT_REFERENCE = re.compile(r'^\[.+\]$')
+
+
+def _markdown_lines(doc):
+    """The docstring lines the docs build parses as prose rather than code."""
+    inside_a_fence = False
+    for line in doc.splitlines():
+        if line.lstrip().startswith('```'):
+            inside_a_fence = not inside_a_fence
+            continue
+        if not inside_a_fence:
+            yield line
+
+
+def test_the_example_output_is_fenced_not_a_link():
+    """vad()'s example prints a list of tuples, and the docs choke on it.
+
+    ``[(0.31, 1.84), (2.42, 3.97)]`` alone on a line is a link to markdown,
+    so building the docs tries to resolve it as a python identifier. Fencing
+    the example keeps it literal. Escaping the bracket would please the docs
+    build and leave a stray backslash in ``help(kudio.vad)``, which is why
+    the backslash is checked here too.
+    """
+    doc = inspect.getdoc(kudio.vad)
+    assert '[(0.31, 1.84), (2.42, 3.97)]' in doc, "the example went missing"
+    assert '\\' not in doc, "an escape leaked into the docstring"
+    offenders = [line for line in _markdown_lines(doc)
+                 if _SHORTCUT_REFERENCE.match(line.strip())]
+    assert not offenders, offenders

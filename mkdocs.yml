@@ -23,4 +23,7 @@ nav:
   - Home: index.md
   - API Reference: api.md
 
-# build docs with:  pip install mkdocs-material mkdocstrings[python]; mkdocs serve
+# The toolchain this file needs is declared in the [docs] extra, so a clean
+# checkout can install it instead of copying package names out of a comment:
+#   pip install -e .[docs]
+#   mkdocs serve

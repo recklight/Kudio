@@ -14,6 +14,31 @@ __all__ = ['AudioBuffer', 'FetchBuffer']
 log = logging.getLogger(__name__)
 
 
+def _checked_frame_count(value, caller: str) -> int:
+    """Validate a frame count before anything starts waiting for it.
+
+    Callers rarely type the number: it comes out of arithmetic like
+    ``int(seconds * sr / chunk)``, which rounds down to zero as soon as the
+    request is shorter than one chunk. Waiting for zero frames can never
+    finish, and a silent hang in a capture gives nobody anything to act on.
+    """
+    try:
+        count = int(value)
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError is float('inf'), which arithmetic on a zero chunk size
+        # produces and which would otherwise walk straight past this guard
+        raise TypeError(
+            "{0} needs a whole number of frames, got {1!r}.".format(caller, value)
+        ) from None
+    if count < 1:
+        raise ValueError(
+            "{0} needs at least 1 frame, got {1}. A frame count computed from a "
+            "duration rounds down to zero when the duration is shorter than one "
+            "chunk, so check the duration and the chunk size.".format(caller, count)
+        )
+    return count
+
+
 class AudioBuffer:
     """Bounded FIFO of audio frames shared between producer/consumer threads.
 
@@ -72,12 +97,17 @@ class AudioBuffer:
 
     def get_fixed_size_data(self, queue_size: int) -> np.ndarray:
         """Block until *queue_size* frames have arrived, then return them
-        concatenated with ``np.hstack``."""
+        concatenated with ``np.hstack``.
+
+        Raises ``ValueError`` when *queue_size* is below 1, because that wait
+        would never end, and ``TypeError`` when it is not a whole number.
+        """
+        count = _checked_frame_count(queue_size, "AudioBuffer.get_fixed_size_data")
         with self._cond:
             self._capture = []
-            self._capture_left = int(queue_size)
+            self._capture_left = count
             self._capture_done.clear()
-        log.info("Buffer: capturing %d frames", queue_size)
+        log.info("Buffer: capturing %d frames", count)
         self._capture_done.wait()
         with self._cond:
             frames, self._capture = self._capture, None
@@ -111,6 +141,8 @@ class FetchBuffer(threading.Thread):
     background thread.
 
     >>> data = FetchBuffer(buffer).get_data(desired_queue_size=10)
+
+    One instance runs one capture, because a thread cannot be started twice.
     """
 
     def __init__(self, buffer: AudioBuffer):
@@ -121,10 +153,38 @@ class FetchBuffer(threading.Thread):
         self.queue_size: Optional[int] = None
         self.data: Optional[np.ndarray] = None
 
-    def get_data(self, desired_queue_size: int, timeout: Optional[float] = None):
-        self.queue_size = desired_queue_size
+    def get_data(self, desired_queue_size: int, timeout: Optional[float] = None) -> np.ndarray:
+        """Run the capture and return the frames.
+
+        Always returns an array; a *timeout* that expires raises
+        ``TimeoutError`` instead, so the caller can tell a stream that stopped
+        delivering from a capture that came back short.
+        """
+        if self.queue_size is not None:
+            raise RuntimeError(
+                "FetchBuffer.get_data runs once per instance and this one has "
+                "already run. Build a new FetchBuffer for the next capture."
+            )
+        self.queue_size = _checked_frame_count(
+            desired_queue_size, "FetchBuffer.get_data"
+        )
         self.start()
-        return self.join(timeout)
+        data = self.join(timeout)
+        if self.is_alive():
+            raise TimeoutError(
+                "FetchBuffer.get_data timed out after {0} s waiting for {1} "
+                "frames. The capture thread is still waiting for the rest, so "
+                "check that the stream is running, or allow more time.".format(
+                    timeout, self.queue_size
+                )
+            )
+        if data is None:
+            raise RuntimeError(
+                "FetchBuffer.get_data collected nothing for {0} frames. The "
+                "capture thread ended early; its traceback is on "
+                "stderr.".format(self.queue_size)
+            )
+        return data
 
     def run(self) -> None:
         if isinstance(self.queue_size, int):

@@ -301,8 +301,6 @@ class Synthesizer:
             raise ValueError("Use 'syn_extra_mode' to run extra mode.")
         if mode not in ('reg', 'regular', 'inc', 'increment'):
             raise ValueError(f"Unknown mode: {mode!r}")
-        base = self._base_seed(seed)
-        rng = np.random.default_rng(base)
         if desired_sample is not None:
             warnings.warn(
                 "Synthesizer.syn(desired_sample=...) is deprecated and will be "
@@ -310,7 +308,6 @@ class Synthesizer:
                 DeprecationWarning, stacklevel=2)
             if target_sr is None:
                 target_sr = desired_sample
-        self.target_sr = target_sr
         log.info("==== Audio synthesizing ====")
         if self.noisyDir.is_dir() and any(self.noisyDir.iterdir()):
             if overwrite:
@@ -321,6 +318,16 @@ class Synthesizer:
                 log.warning("Output path exists -> %s, aborted", self.noisyDir)
                 return None
         self.noisyDir.mkdir(parents=True, exist_ok=True)
+
+        # Drawn once the run is certain to happen. `_base_seed` writes
+        # `self.seed`, and that number is the only way back to the corpus
+        # already in the output folder, so a call that aborts above has to
+        # leave it -- and `target_sr` with it -- naming what is really there.
+        # Nothing between here and the check wants either: the first draw off
+        # `rng` is the random subset just below.
+        base = self._base_seed(seed)
+        rng = np.random.default_rng(base)
+        self.target_sr = target_sr
 
         # optionally sample N clean files at random
         if len(self.cleanWaves) >= rdn_choice_num > 0:
@@ -384,7 +391,6 @@ class Synthesizer:
             # joined rather than `with_suffix`, which would take '.b_noise_5dB'
             # off 'a.b_noise_5dB' and leave every output of 'a.b.wav' as 'a.wav'
             outWaves.append(outDir / ('_'.join(parts) + '.wav'))
-        self._warn_collisions(outWaves, mkdir_parents)
 
         # Normalised here as well as in the manifest: an SNR list given as
         # np.arange carries np.int64, which `json` cannot serialise, so a
@@ -393,6 +399,8 @@ class Synthesizer:
         entries = list(zip(outWaves, clnWaves, nosWaves,
                            [_snr_value(s) for s in snrSeqs]))
         rt_of = dict(zip(outWaves, rt60Seqs))
+        entries = self._one_clean_per_name(entries, mkdir_parents)
+        self._warn_collisions([out for out, *_ in entries], mkdir_parents)
         silent: Set[Path] = set()
         if is_silence and 0 < p_silence < 1:
             extra = self._silence_share(entries, rng, p_silence)
@@ -437,6 +445,11 @@ class Synthesizer:
         often. The room is carried here instead, where it travels with the
         output path it belongs to.
 
+        Each row is a file this run wrote and the clean signal it was built
+        from. A clean file that lost its output name to another one is not
+        here -- there is no mixture of it to point at -- and :meth:`syn` warns
+        when that happens.
+
         >>> pairs = syx.manifest()                           # doctest: +SKIP
         >>> kudio.save_manifest("runs/exp/manifest.json", pairs)  # doctest: +SKIP
         """
@@ -469,12 +482,15 @@ class Synthesizer:
         bgNoiseWaves, _ = check_input(background_path)
         if not bgNoiseWaves:
             raise ValueError(f"No wave files found in: {background_path}")
-        base = self._base_seed(seed)
-        rng = np.random.default_rng(base)
         if self.noisyDir.is_dir() and any(self.noisyDir.iterdir()):
             self._check_clearable(bgNoiseWaves)
             shutil.rmtree(self.noisyDir)
         self.noisyDir.mkdir(parents=True, exist_ok=True)
+        # after the guard, like `syn`: `_base_seed` writes `self.seed`, and a
+        # run that refuses to clear the folder must not take the seed that
+        # names the corpus already sitting in it
+        base = self._base_seed(seed)
+        rng = np.random.default_rng(base)
         self.rooms, self.channels, self.targets = {}, {}, {}
         cleanWaves = self.cleanWaves
         for cln in cleanWaves:
@@ -601,12 +617,59 @@ class Synthesizer:
                 f"Point out_path= at a folder of its own.")
 
     @staticmethod
+    def _one_clean_per_name(entries: List, mkdir_parents: bool) -> List:
+        """*entries*, with every output name left to a single clean file.
+
+        Flatten a tree and two talkers' ``sx133.wav`` ask for one output
+        name. One mixture is all that can be at that name, so a row for each
+        clean file would leave :meth:`manifest` offering one talker's
+        recording as the clean reference for the other talker's mixture --
+        a pair that was never written, and one a training loop has no way of
+        telling from a real one. The first clean file to ask for a name keeps
+        it and the rest are dropped here, before anything is synthesised, so
+        the manifest says exactly what is on disk.
+
+        Rows that ask for the same name with the *same* clean file -- an SNR
+        given twice over, two noise files sharing a stem -- all describe the
+        file that lands correctly, and stay. The dataset is a row short per
+        clean file dropped, which is why this is loud about it.
+        """
+        claimed: Dict[Path, str] = {}
+        kept, lost = [], []
+        for entry in entries:
+            out, cln = Path(entry[0]), str(entry[1])
+            if claimed.setdefault(out, cln) == cln:
+                kept.append(entry)
+            else:
+                lost.append(entry)
+        if lost:
+            out, cln = Path(lost[0][0]), str(lost[0][1])
+            hint = ("" if mkdir_parents else
+                    " -- with mkdir_parents=False, clean files of the same name "
+                    "in different folders land on one output name")
+            warnings.warn(
+                f"{len(lost)} clean file(s) are not synthesised: another clean "
+                f"file asked for the same output name first, and only one "
+                f"mixture can be written there, so these are left out of the "
+                f"run and out of manifest(). {cln} wanted {out}, which belongs "
+                f"to {claimed[out]}{hint}. Keep mkdir_parents on, or give the "
+                f"clean files distinct stems, to get a file for each of them.",
+                UserWarning, stacklevel=3)
+        return kept
+
+    @staticmethod
     def _warn_collisions(outWaves: List[Path], mkdir_parents: bool) -> None:
+        """Names still asked for twice after `_one_clean_per_name` has run.
+
+        What reaches here is one clean file written twice over, so the file
+        that lands is the right one for it either way -- worth saying, not
+        worth dropping.
+        """
         seen: Set[Path] = set()
         dupes = [p for p in outWaves if p in seen or seen.add(p)]
         if dupes:
             hint = ("" if mkdir_parents else
-                    " -- with mkdir_parents=False, clean files of the same name "
+                    " -- with mkdir_parents=False, noise files of the same name "
                     "in different folders land on one output name")
             warnings.warn(
                 f"{len(dupes)} output(s) share a name with another and will "

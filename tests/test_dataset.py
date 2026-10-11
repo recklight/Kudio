@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Dataset manifests and splits."""
 import json
+import warnings
 
 import pytest
 
@@ -103,6 +104,74 @@ def test_splits_that_leave_nothing_are_rejected():
 def test_out_of_range_splits_are_rejected():
     with pytest.raises(ValueError, match=r"\[0, 1\)"):
         kudio.split_pairs(_pairs(10), -0.1, 0.2)
+
+
+def _repeated(n_distinct=10, times=2):
+    """A manifest that lists every example more than once, which is what a
+    repeated value in snr_ratio= leaves behind."""
+    return _pairs(n_distinct) * times
+
+
+def test_a_repeated_example_cannot_land_in_two_splits():
+    """It would be trained on and then scored as if it had been held out,
+    which inflates every number the run reports. The warning is checked
+    elsewhere; what matters here is where the examples ended up.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        train, val, test = kudio.split_pairs(_repeated(), 0.2, 0.2, seed=0)
+    assert not (set(train) & set(val))
+    assert not (set(train) & set(test))
+    assert not (set(val) & set(test))
+    assert len(train) + len(val) + len(test) == 10
+    assert set(train) | set(val) | set(test) == set(_pairs(10))
+    mixtures = [p.noisy for p in train + val + test]
+    assert len(set(mixtures)) == len(mixtures)
+
+
+def test_the_dropped_rows_are_named_and_counted():
+    """A row the caller counted on is gone, so the warning has to be enough
+    to find the cause: how many went, and one that went."""
+    pairs = _repeated() + [_pairs(10)[4]]
+    with pytest.warns(UserWarning) as caught:
+        kudio.split_pairs(pairs, 0.2, 0.2, seed=0)
+    said = str(caught[0].message)
+    assert "11 of 21 row(s)" in said
+    assert "mix/4.wav is listed 3 times" in said
+    said.encode("ascii")        # the console these land on
+
+
+def test_rows_that_disagree_about_one_mixture_are_refused():
+    """Two clean files cannot both be the answer for one mixture. Dropping
+    either one would be a guess, so this is the case that raises."""
+    pairs = _pairs(5) + [kudio.Pair(noisy="mix/2.wav", clean="clean/9.wav",
+                                    noise="fan", snr_db=4)]
+    with pytest.raises(ValueError, match="listed 2 times") as refused:
+        kudio.split_pairs(pairs, 0.2, 0.2, seed=0)
+    said = str(refused.value)
+    assert said.startswith("mix/2.wav is listed 2 times")
+    assert "disagree about clean, snr_db" in said
+    said.encode("ascii")
+
+
+def test_a_split_still_returns_three_lists_when_rows_repeat():
+    """Callers unpack three lists; nothing about the rows may change that."""
+    with pytest.warns(UserWarning):
+        got = kudio.split_pairs(_repeated(), 0.2, 0.2, seed=0)
+    assert len(got) == 3 and all(isinstance(part, list) for part in got)
+
+
+def test_the_manifest_keeps_every_row_and_the_split_drops_the_repeats(tmp_path):
+    """The manifest is the record of what was written, repeats included --
+    that is where a name collision is still visible afterwards. The split is
+    where a repeat does damage, so that is where it is dealt with.
+    """
+    path = kudio.save_manifest(tmp_path / "m.json", _repeated())
+    rows = kudio.load_manifest(path)
+    assert len(rows) == 20
+    with pytest.warns(UserWarning):
+        train, val, test = kudio.split_pairs(rows, 0.3, 0.0, seed=0)
+    assert (len(train), len(val), len(test)) == (7, 3, 0)
 
 
 # ------------------------------------------------------------------- labels

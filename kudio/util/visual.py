@@ -7,15 +7,21 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 import librosa
-import librosa.display
 import numpy as np
 from scipy import signal
 
 from kudio.core.io import copy_waves, file_load
 from kudio.exceptions import DependencyError
 
+# Every helper in here draws something, so matplotlib is needed to import the
+# module at all rather than only to call it. librosa.display imports
+# matplotlib itself, so it belongs inside the guard too: pulled in above it,
+# its own ModuleNotFoundError escapes first and never mentions the extra that
+# cures it.
 try:
     import matplotlib.pyplot as plt
+
+    import librosa.display
 except ImportError as _e:  # pragma: no cover - exercised only without [viz]
     raise DependencyError('matplotlib', extra='viz') from _e
 
