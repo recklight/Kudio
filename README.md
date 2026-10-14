@@ -32,9 +32,6 @@ pip install kudio[all]       # everything but [pesq]
 
 Requires **Python 3.9+** (tested on CPython 3.9–3.13).
 
-> The Python badge above reflects the version currently published on PyPI; it
-> updates automatically once v3.0 is released.
-
 ## Quick start
 
 ```python

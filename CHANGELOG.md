@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.7.3] - 2026-10-14
+
+Documentation and packaging metadata only; nothing in the library behaves
+differently.
+
+- The README no longer says the Python badge is waiting for v3.0. 3.0.0 has
+  been on PyPI since July.
+
 ## [3.7.2] - 2026-10-11
 
 ### Fixed — files destroyed in the modes meant to protect them
