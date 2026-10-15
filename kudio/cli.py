@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import warnings
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -55,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "true peak and where the level moved")
     s_loud.add_argument("file")
     s_loud.add_argument("--over-time", action="store_true",
-                        help="print the short-term curve, one line per second")
+                        help="print the curve too, one line per 100 ms")
     s_loud.add_argument("--momentary", action="store_true",
                         help="use the 400 ms window rather than the 3 s one")
     s_loud.add_argument("--target", type=float, default=None,
@@ -69,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     target.add_argument("--lufs", type=float, default=None,
                         help="loudness target, e.g. -23 (EBU R 128)")
     target.add_argument("--peak", type=float, default=None,
-                        help="peak target in [0, 1], e.g. 0.99")
+                        help="peak target above 0 and at most 1, e.g. 0.99")
     s_norm.add_argument("--subtype", default="PCM_16")
 
     s_enh = sub.add_parser("enhance", help="denoise a file (kudio.spectral_enhance)")
@@ -83,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     s_enh.add_argument("--recursive", action="store_true",
                        help="treat src/dst as folders (kudio.enhance_folder)")
     s_enh.add_argument("--rate", type=int, default=None,
-                       help="resample on the way in (folder mode)")
+                       help="resample on the way in")
 
     s_cmp = sub.add_parser(
         "compare", help="run every enhancement method over one file and rank them")
@@ -118,7 +119,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="top of the search range in Hz (default 400)")
     s_pitch.add_argument("--hop", type=int, default=None,
                          help="samples between frames (default: 10 ms)")
-    s_pitch.add_argument("--frame-length", type=int, default=2048)
+    s_pitch.add_argument("--frame-length", type=int, default=None,
+                         help="analysis window in samples (default 2048, longer "
+                              "where the rate needs it)")
     s_pitch.add_argument("--segments", action="store_true",
                          help="list the voiced spans as well as the summary")
     s_pitch.add_argument("--labels", default=None,
@@ -187,33 +190,39 @@ def build_parser() -> argparse.ArgumentParser:
     s_conv.add_argument("--recursive", action="store_true",
                         help="treat src/dst as folders (kudio.convert_folder)")
     s_conv.add_argument("--lufs", type=float, default=None,
-                        help="also loudness-normalise (folder mode)")
+                        help="also loudness-normalise")
     s_conv.add_argument("--trim-db", type=float, default=None,
-                        help="also trim silence at this top_db (folder mode)")
+                        help="also trim silence at this top_db")
 
     s_syn = sub.add_parser("synth", help="mix clean + noise at given SNRs")
     s_syn.add_argument("--clean", required=True)
     s_syn.add_argument("--noise", required=True)
     s_syn.add_argument("--out", required=True)
-    s_syn.add_argument("--snr", type=int, nargs="+", default=[-5, 0, 5])
+    s_syn.add_argument("--snr", type=float, nargs="+", default=[-5, 0, 5])
     s_syn.add_argument("--mode", default="inc", choices=["inc", "reg"])
-    s_syn.add_argument("--seed", type=int, default=None)
+    s_syn.add_argument("--seed", type=int, default=None,
+                       help="base seed; without one, the seed drawn is printed "
+                            "so the corpus can be rebuilt. --out is emptied "
+                            "first")
     s_syn.add_argument("--rt60", type=float, nargs="+", default=None,
                        help="reverberate the speech in rooms of these "
-                            "reverberation times, in seconds. A fourth axis: "
-                            "in inc mode the output count multiplies by it")
+                            "reverberation times, in seconds. Another axis: "
+                            "the output count multiplies by it in either mode")
     s_syn.add_argument("--drr", type=float, default=0.0,
                        help="direct-to-reverberant ratio for those rooms, in "
                             "dB (default 0, about a metre or two away)")
     s_syn.add_argument("--channel", default=None,
-                       help="send every mixture down a link: telephone, voip, "
-                            "mu_law, a_law. Constant for the run, not an axis "
+                       help="send every mixture down a link: telephone, "
+                            "telephone_a, voip, mu_law, a_law or none. "
+                            "Constant for the run, not an axis "
                             "-- a corpus is recorded over a phone line or it "
                             "is not")
     s_syn.add_argument("--channel-loss", type=float, default=None,
-                       help="override that link's packet loss, e.g. 0.05")
+                       help="override that link's packet loss, e.g. 0.05 "
+                            "(needs --channel)")
     s_syn.add_argument("--channel-burst", type=float, default=None,
-                       help="...lost in runs of this many packets")
+                       help="...lost in runs of this many packets "
+                            "(needs --channel)")
     s_syn.add_argument("--targets", action="store_true",
                        help="also write the reverberant-but-clean signal to "
                             "OUT/TARGETS, for training that should remove the "
@@ -251,10 +260,52 @@ def _cmd_devices(kudio) -> None:
         print(f"  unavailable: {e}")
 
 
+#: The one handler main() puts on the kudio logger, kept so a second call --
+#: the test suite makes hundreds -- does not print every line twice.
+_HANDLER = logging.StreamHandler()
+_HANDLER.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Run one command. Exit status: 0 done, 1 a finding (a file that fails
+    its check, no speech, nothing voiced, a target missed), 2 an error -- a
+    file that cannot be read, an argument that is wrong -- reported on one
+    line rather than as a traceback (``-v`` shows the traceback)."""
     args = build_parser().parse_args(argv)
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                        format="%(levelname)s %(name)s: %(message)s")
+    # kudio's loggers only: DEBUG on the root logger let numba's compiler
+    # write about 400 lines into a single `kudio -v pitch`
+    logger = logging.getLogger("kudio")
+    if _HANDLER not in logger.handlers:
+        logger.addHandler(_HANDLER)
+    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
+
+    from kudio.exceptions import KudioError
+    with warnings.catch_warnings():
+        if not args.verbose:
+            warnings.showwarning = _show_warning
+        try:
+            return _run(args)
+        except (KudioError, ValueError, OSError) as e:
+            if args.verbose:
+                raise
+            print(f"kudio {args.command}: {e}", file=sys.stderr)
+            return 2
+
+
+def _show_warning(message, category, filename, lineno, file=None, line=None):
+    """A warning as a sentence for whoever ran the command. Python's own form
+    points into kudio's source and quotes the line under it, which tells a
+    shell user nothing; ``-v`` keeps that form."""
+    print(f"warning: {message}", file=sys.stderr)
+
+
+def _fail(message: str) -> int:
+    """A refusal goes to stderr, so a redirected result stays clean."""
+    print(message, file=sys.stderr)
+    return 2
+
+
+def _run(args) -> int:
     import numpy as np
 
     import kudio
@@ -289,18 +340,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1 if problems else 0
 
     elif args.command == "loudness":
-        y, sr = kudio.file_load(args.file, sr=None, mono=True)
+        # the channels as they are: BS.1770 weights and sums them, and the
+        # mono mix of a stereo file read 3 LU low
+        y, sr = kudio.file_load(args.file, sr=None, mono=False)
         integrated = kudio.loudness(y, sr)
+        if integrated == float("-inf"):
+            print("integrated      -inf LUFS — the file is digital silence")
+            return 1 if args.target is not None else 0
         print(f"integrated  {integrated:8.2f} LUFS")
         window = kudio.MOMENTARY if args.momentary else kudio.SHORT_TERM
         try:
             curve = kudio.loudness_over_time(y, sr, window=window)
-        except Exception:                    # the clip is shorter than a window
+        except kudio.FeatureError:           # the clip is shorter than a window
             print(f"range       — the clip is shorter than the "
                   f"{window:g} s window")
             curve = None
         else:
-            print(f"range       {kudio.loudness_range(y, sr):8.2f} LU")
+            try:
+                print(f"range       {kudio.loudness_range(y, sr):8.2f} LU")
+            except kudio.FeatureError:       # range needs 3 s, momentary 0.4
+                print(f"range       — needs at least {kudio.SHORT_TERM:g} s")
             loud_at, loud = curve.loudest()
             quiet_at, quiet = curve.quietest()
             label = "momentary" if args.momentary else "short-term"
@@ -329,8 +388,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return 1
 
     elif args.command == "normalize":
-        y, sr = kudio.file_load(args.src, sr=None, mono=True)
+        # channels kept: the output used to be the mono mix of a stereo file
+        y, sr = kudio.file_load(args.src, sr=None, mono=False)
+        if not np.any(y):
+            return _fail(f"{args.src} is digital silence; there is no level "
+                         f"to normalise")
         if args.peak is not None:
+            if not 0 < args.peak <= 1:
+                return _fail(f"--peak is a fraction of full scale, above 0 "
+                             f"and at most 1, got {args.peak:g}")
             out = kudio.normalize(y, peak=args.peak)
             what = f"peak {args.peak}"
         else:
@@ -346,8 +412,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         params = {}
         for item in args.set:
             if "=" not in item:
-                print(f"--set expects NAME=VALUE, got {item!r}")
-                return 2
+                return _fail(f"--set expects NAME=VALUE, got {item!r}")
             name, value = item.split("=", 1)
             params[name.strip()] = float(value)
 
@@ -365,7 +430,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(f"  … and {len(result.failed) - 10} more")
             return 1 if result.failed else 0
 
-        y, sr = kudio.file_load(args.src, sr=None, mono=True)
+        y, sr = kudio.file_load(args.src, sr=args.rate, mono=True)
         out = kudio.spectral_enhance(y, sr, args.method, noise=args.noise,
                                      n_fft=args.n_fft, **params)
         kudio.save_wave(args.dst, out, sr)
@@ -380,9 +445,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.reference:
             reference, ref_sr = kudio.file_load(args.reference, sr=sr, mono=True)
         if args.noise and args.noises:
-            print("pass --noise to fix the estimator or --noises to sweep it, "
-                  "not both")
-            return 2
+            return _fail("pass --noise to fix the estimator or --noises to "
+                         "sweep it, not both")
         sweep = args.noises
         if sweep == ["all"]:
             sweep = list(kudio.NOISE_ESTIMATORS)
@@ -427,10 +491,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.write_to:
             out_dir = Path(args.write_to)
             stem = Path(args.src).stem
+            # the estimator in the name too when it varies: one name per
+            # method used to let each estimator overwrite the last
+            several = len({r.noise for r in results}) > 1
             for r in results:
                 if r.error:
                     continue
-                kudio.save_wave(out_dir / f"{stem}_{r.method}.wav", r.audio, sr)
+                name = f"{stem}_{r.method}_{r.noise}" if several else f"{stem}_{r.method}"
+                kudio.save_wave(out_dir / f"{name}.wav", r.audio, sr)
             print(f"\nwrote {len([r for r in results if not r.error])} file(s) "
                   f"to {out_dir}")
 
@@ -455,7 +523,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     elif args.command == "pitch":
         y, sr = kudio.file_load(args.file, sr=None, mono=True)
-        kwargs = {'frame_length': args.frame_length}
+        kwargs = {}
+        if args.frame_length is not None:
+            kwargs['frame_length'] = args.frame_length
         if args.fmin is not None:
             kwargs['fmin'] = args.fmin
         if args.fmax is not None:
@@ -494,8 +564,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         a, b = found.apply(ref, deg)
         if args.metrics:
-            before = kudio.si_sdr(ref, deg[:len(ref)]) if len(deg) else float("nan")
-            print(f"\nsi_sdr      {before:8.2f} dB  as the files sit")
+            try:
+                before = kudio.si_sdr(ref, deg[:len(ref)]) if len(deg) else float("nan")
+                print(f"\nsi_sdr      {before:8.2f} dB  as the files sit")
+            except ValueError:
+                # too different in length for a score as they sit: the metric
+                # refuses, and the aligned figure below still stands
+                print("\nsi_sdr          —     as the files sit (too different "
+                      "in length to compare)")
             print(f"            {kudio.si_sdr(a, b):8.2f} dB  aligned")
         if args.write_to:
             out_dir = Path(args.write_to)
@@ -505,6 +581,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"\nwrote 2 file(s) to {out_dir}")
 
     elif args.command == "room":
+        if args.make and args.file:
+            return _fail(f"--make builds a room and does not read {args.file}; "
+                         f"use --apply to put that file in a room")
         if args.make:
             ir = kudio.rir(args.rate, rt60=args.rt60, drr_db=args.drr,
                            seed=args.seed)
@@ -516,9 +595,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
 
         if not args.file:
-            print("give an impulse response to measure, audio with --apply, "
-                  "or --make a room")
-            return 1
+            return _fail("give an impulse response to measure, audio with "
+                         "--apply, or --make a room")
 
         if args.apply:
             y, sr = kudio.file_load(args.file, sr=None, mono=True)
@@ -539,12 +617,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"C50         {measured.c50:+8.2f} dB")
         print(f"C80         {measured.c80:+8.2f} dB")
         print(f"DRR         {measured.drr:+8.2f} dB")
-
-        if args.apply:
-            print("\n--apply needs audio to put through the room, and this "
-                  "file is the room itself; pass the audio as `file` and the "
-                  "room with --make first")
-            return 1
         return 0 if measured.reliable() else 1
 
     elif args.command == "channel":
@@ -575,12 +647,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                              f"{len(gaps) / runs:.1f}, {lost:.2f}s, "
                              f"{args.conceal}")
             else:
-                steps.append("nothing lost — the file is shorter than a packet")
+                packets = int(len(y) / (sr * args.packet_ms / 1000.0))
+                steps.append(f"nothing lost — {args.loss:g} of {packets} "
+                             f"packet(s) rounds to none")
 
         if not steps:
-            print("nothing asked for — try --telephone, --codec, --bits "
-                  "or --loss")
-            return 1
+            return _fail("nothing asked for — try --telephone, --codec, --bits "
+                         "or --loss")
 
         kudio.save_wave(args.dst, y, sr)
         after = kudio.audio_report(y, sr)
@@ -606,10 +679,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(f"  … and {len(result.failed) - 10} more")
             return 1 if result.failed else 0
         y, sr = kudio.file_load(args.src, sr=args.rate, mono=True)
+        # the folder options apply to one file too, rather than being dropped
+        if args.trim_db is not None:
+            y = kudio.trim_silence(y, top_db=args.trim_db)[0]
+        if args.lufs is not None:
+            y = kudio.normalize_lufs(y, sr, lufs=args.lufs)
         kudio.save_wave(args.dst, y, sr, subtype=args.subtype)
         print(f"wrote {args.dst} ({sr} Hz, {args.subtype})")
 
     elif args.command == "synth":
+        if args.channel is None and (args.channel_loss is not None
+                                     or args.channel_burst is not None):
+            return _fail("--channel-loss and --channel-burst change a link, "
+                         "so they need --channel")
         link = args.channel
         if link is not None and (args.channel_loss is not None
                                  or args.channel_burst is not None):
@@ -622,8 +704,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                 snr_ratio=args.snr, rt60=args.rt60,
                                 drr_db=args.drr, channel=link,
                                 write_targets=args.targets)
-        result = syx.syn(mode=args.mode, seed=args.seed)
-        print(f"synthesized {len(result or [])} files -> {args.out}")
+        result = syx.syn(mode=args.mode, seed=args.seed) or []
+        print(f"synthesized {len(result)} files -> {args.out} (seed {syx.seed})")
         if args.rt60:
             rooms = ", ".join(f"{v:g}s" for v in args.rt60)
             print(f"rooms: {rooms} at DRR {args.drr:+g} dB — the SNR is "

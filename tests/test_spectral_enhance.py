@@ -578,3 +578,64 @@ def test_a_callable_takes_no_method_parameters(noisy_folder, tmp_path):
     with pytest.raises(FeatureError, match="takes no method parameters"):
         kudio.enhance_folder(noisy_folder, tmp_path / "out",
                              ("m", lambda y, s: y), alpha=0.9)
+
+
+# -- ranges, references and the whole clip back --------------------------------
+
+def test_the_quantile_estimate_sits_at_the_noise_not_below_it():
+    """The 15th percentile of noise power is 0.16 of its mean; uncorrected,
+    the estimate read 7.9 dB low on plain white noise."""
+    rng = np.random.default_rng(1)
+    power = np.abs(np.fft.rfft(rng.standard_normal((400, 512)), axis=1)) ** 2
+    estimate = kudio.estimate_noise_psd(power, 'quantile')
+    error_db = 10 * np.log10(np.mean(estimate) / np.mean(power))
+    assert abs(error_db) < 0.5
+
+
+def test_parameters_out_of_range_are_refused(noisy_and_clean):
+    noisy, _ = noisy_and_clean
+    with pytest.raises(FeatureError, match="gain_floor_db=10"):
+        kudio.spectral_enhance(noisy, SR, 'omlsa', gain_floor_db=10)
+
+
+def test_a_noise_setting_the_estimator_does_not_take_is_named(noisy_and_clean):
+    noisy, _ = noisy_and_clean
+    with pytest.raises(FeatureError, match="does not take quantile"):
+        kudio.spectral_enhance(noisy, SR, noise='mcra', noise_kwargs={'quantile': 0.2})
+
+
+def test_compare_refuses_a_keyword_no_method_takes(noisy_and_clean):
+    noisy, _ = noisy_and_clean
+    with pytest.raises(FeatureError, match="alpah"):
+        kudio.compare_enhancers(noisy, SR, ['wiener'], alpah=0.5)
+
+
+def test_compare_holds_the_reference_to_the_length_check(noisy_and_clean):
+    noisy, clean = noisy_and_clean
+    with pytest.raises(ValueError, match="unmeasured"):
+        kudio.compare_enhancers(noisy, SR, ['wiener'], reference=clean[:SR])
+
+
+def test_trad_enhance_returns_the_whole_clip(noisy_and_clean):
+    noisy, _ = noisy_and_clean
+    out = kudio.trad_enhance(noisy[:16100], SR)
+    assert out.dtype == np.float32 and len(out) == 16100
+    assert np.any(out[15872 - 256:15872] != 0), "the last full frame is not dropped"
+
+
+def test_wavelet_threshold_uses_the_peak_whatever_its_sign():
+    y = -0.5 - 0.1 * np.abs(np.random.default_rng(0).standard_normal(4096))
+    out = kudio.wavelet_low_pass_filter(y)
+    assert np.std(np.diff(out)) < np.std(np.diff(y))
+
+
+def test_enhance_folder_takes_the_stft_settings_and_mirrors_a_list(tmp_path, noisy_and_clean):
+    noisy, _ = noisy_and_clean
+    for day in ("day1", "day2"):
+        (tmp_path / day).mkdir()
+        kudio.save_wave(tmp_path / day / "take1.wav", noisy, SR)
+    result = kudio.enhance_folder([tmp_path / "day1", tmp_path / "day2"],
+                                  tmp_path / "out", n_fft=1024)
+    assert result.written == 2
+    assert sorted(p.relative_to(tmp_path / "out").as_posix() for p in result.outputs) == [
+        "day1/take1.wav", "day2/take1.wav"]

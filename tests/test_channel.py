@@ -144,7 +144,8 @@ def test_dither_costs_a_little_noise_and_is_reproducible():
     dithered = snr(tone, kudio.bit_depth(tone, 8, dither=True, seed=0))
 
     assert dithered < plain, "dither raises the noise floor -- that is the deal"
-    assert plain - dithered < 4.0, "and not by much"
+    # two-step TPDF adds twice the quantisation noise's power: 10*log10(3)
+    assert 4.0 < plain - dithered < 5.5, "about 4.8 dB, the price of TPDF"
     assert np.array_equal(kudio.bit_depth(tone, 8, dither=True, seed=0),
                           kudio.bit_depth(tone, 8, dither=True, seed=0))
 
@@ -562,3 +563,35 @@ def test_the_same_link_and_seed_is_the_same_file():
                           kudio.apply_channel(y, SR, spec, seed=3))
     assert not np.array_equal(kudio.apply_channel(y, SR, spec, seed=3),
                               kudio.apply_channel(y, SR, spec, seed=4))
+
+
+
+# -- dither, presets and refused links -----------------------------------------
+
+def test_dither_takes_the_signal_out_of_the_error():
+    """One-step dither only loosened the tie: a sine a quarter of a step high
+    still came back at 0.42 of its level on average. Two steps wide, the
+    error's mean no longer follows the signal."""
+    step = 2.0 / 2 ** 8
+    t = np.arange(160000) / 16000
+    quiet = (0.25 * step * np.sin(2 * np.pi * 50 * t)).astype(np.float32)
+    runs = np.stack([kudio.bit_depth(quiet, 8, dither=True, seed=s) for s in range(40)])
+    # how much of the sine survives in the average output: 0.42 before
+    gain = float(np.dot(runs.mean(axis=0), quiet) / np.dot(quiet, quiet))
+    assert abs(gain - 1.0) < 0.05
+
+
+def test_telephone_a_has_a_name_of_its_own():
+    assert kudio.channel_tag('telephone_a') == 'telephone_a'
+    assert kudio.channel_tag('telephone') == 'telephone'
+
+
+def test_a_bad_link_is_refused_when_it_is_described():
+    for bad in ({'loss': 0.05, 'burst': 0.5}, {'loss': 0.05, 'packet_ms': -1}):
+        with pytest.raises(FeatureError):
+            kudio.channel_spec(bad)
+
+
+def test_no_link_still_refuses_stereo():
+    with pytest.raises(FeatureError):
+        kudio.apply_channel(np.zeros((100, 2), dtype=np.float32), 16000, None)

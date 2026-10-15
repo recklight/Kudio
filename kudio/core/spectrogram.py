@@ -5,8 +5,9 @@
 clip. That is right for a file and impossible for a microphone, and the usual
 workaround -- keep the last few seconds in a list and re-run the STFT over all
 of it several times a second -- is wasteful in a way that shows: at 16 kHz with
-a 3-second window, twenty redraws a second recompute about 240 columns to gain
-three, and 99% of that work redraws what was already on screen.
+a 3-second window and the default geometry, twenty redraws a second recompute
+375 columns to gain about six, and 98% of that work redraws what was already
+on screen.
 
 :class:`SpectrogramStream` computes each column **once**, when the samples for
 it have arrived, and keeps the last *N* in a ring buffer. Feeding it a stream
@@ -24,8 +25,10 @@ yet, so column *k* here covers samples ``[k*hop, k*hop + n_fft)`` -- the
 ``center=False`` convention. The first column therefore needs a whole frame
 before it exists, which is :attr:`~SpectrogramStream.latency_seconds`.
 
-**Values are dBFS.** Amplitude is normalised by the window, so a full-scale
-sine reads 0 dB whatever the frame size and window are. The number on screen
+**Values are dBFS** on a linear axis. Amplitude is normalised by the window,
+so a full-scale sine reads 0 dB whatever the frame size and window are. A mel
+axis sums bins through librosa's area-normalised filters, so there the number
+is band power in dB, not dBFS: a full-scale sine reads about -18 dB at 1 kHz. The number on screen
 then means the same thing after someone changes ``n_fft`` -- which it does not
 if the scaling is left to the FFT.
 """
@@ -60,7 +63,8 @@ class SpectrogramStream:
     :param ref: amplitude that reads 0 dB. ``1.0`` is dBFS.
     :param n_mels: 0 for a linear frequency axis, or a band count for a mel
         one. Speech at 16 kHz spends most of its energy in the bottom eighth
-        of a linear axis; a mel axis spends half the picture there.
+        of a linear axis; 64 mel bands spend about a third of the picture
+        below 1 kHz.
     :param fmin: lowest mel band, ignored when *n_mels* is 0.
     :param fmax: highest mel band; Nyquist when omitted.
     """
@@ -112,8 +116,10 @@ class SpectrogramStream:
             self._mel_fb = np.asarray(librosa.filters.mel(
                 sr=self.sr, n_fft=self.n_fft, n_mels=self.n_mels,
                 fmin=self.fmin, fmax=self.fmax), dtype=np.float64)
+            # the band centres: mel_frequencies(n_mels + 2) spans fmin to
+            # fmax, and the filters sit on its inner points
             self._freqs = np.asarray(librosa.mel_frequencies(
-                n_mels=self.n_mels, fmin=self.fmin, fmax=self.fmax),
+                n_mels=self.n_mels + 2, fmin=self.fmin, fmax=self.fmax)[1:-1],
                 dtype=np.float64)
         else:
             self._freqs = np.fft.rfftfreq(self.n_fft, 1.0 / self.sr)

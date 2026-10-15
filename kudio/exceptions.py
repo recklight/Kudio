@@ -1,12 +1,18 @@
 # -*- coding: utf-8 -*-
 """Exception hierarchy for kudio.
 
-All library-raised errors derive from :class:`KudioError`, so callers can::
+What goes wrong with a file, a device, a feature, a synthesis run or a missing
+extra derives from :class:`KudioError`, so callers can::
 
     try:
         kudio.file_load(path)
     except kudio.KudioError:
         ...
+
+A wrong argument -- a negative rate, an unknown metric, two signals too
+different in length to compare -- raises ``ValueError`` or ``TypeError`` as the
+standard library would, and a buffer that waited too long raises
+``TimeoutError``.
 """
 from __future__ import annotations
 
@@ -30,7 +36,11 @@ class AudioIOError(KudioError):
 
 
 class UnsupportedFormatError(AudioIOError):
-    """The file type / dtype is not supported."""
+    """The file type / dtype is not supported.
+
+    Not raised by kudio itself at present: a file soundfile cannot read comes
+    back as a plain :class:`AudioIOError`. Catch that one.
+    """
 
 
 class DeviceError(KudioError):
@@ -38,7 +48,9 @@ class DeviceError(KudioError):
 
 
 class FeatureError(KudioError):
-    """Feature extraction or a spectrogram transform failed."""
+    """A feature, effect, room, channel or enhancement step refused its input
+    or its settings: the wrong shape of audio, a parameter out of range, a
+    clip too short to frame."""
 
 
 class SynthesisError(KudioError):

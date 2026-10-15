@@ -22,7 +22,8 @@ def test_eval_metrics_handles_missing_backends(sine):
 def test_audio_evaluate_constructs(wav_dir):
     files = sorted(wav_dir.glob("*.wav"))
     ev = AudioEvaluate(files, files)
-    assert ev.get_df() == []  # nothing evaluated yet
+    df = ev.get_df()        # nothing evaluated yet: an empty frame, not a list
+    assert df.empty and "Enh_method" in df.columns
 
 
 # -- the dependency-free additions ----------------------------------------------
@@ -181,3 +182,39 @@ def test_audio_evaluate_keeps_every_file_and_reads_any_format(tmp_path):
     assert list(df['Enh_method']) == ['good', 'nothing', 'Baseline']
     assert ev.get_df().shape == df.shape, "get_df no longer grows each call"
     assert df['STOI'].iloc[1] == pytest.approx(df['STOI'].iloc[2])
+
+
+
+# -- what the metrics refuse, and files that cannot be scored ------------------
+
+def test_stereo_is_refused_by_every_metric_alike():
+    """snr, sdi and segmental_snr used to score both channels at once, and
+    si_sdr failed with numpy's shape error."""
+    import numpy as np
+    pair = np.zeros((1600, 2)) + 0.1
+    for fn in (kudio.snr, kudio.si_sdr, kudio.segmental_snr, kudio.sdi):
+        with pytest.raises(ValueError, match="mono"):
+            fn(pair, pair)
+
+
+def test_stoi_on_a_clip_too_short_for_it_is_nan():
+    """pystoi's 1e-5 placeholder used to be averaged in as a score."""
+    pytest.importorskip("pystoi")
+    import numpy as np
+    y = np.sin(2 * np.pi * 300 * np.arange(4000) / 16000)       # 0.25 s
+    with pytest.warns(UserWarning, match="0.4 s"):
+        assert np.isnan(kudio.score(y, y, 16000, ["stoi"])["stoi"])
+
+
+def test_one_bad_file_does_not_stop_the_rest(wav_dir, tmp_path):
+    import warnings
+    import numpy as np
+    files = sorted(wav_dir.glob("*.wav"))
+    bad = tmp_path / "bad.wav"
+    bad.write_bytes(b"not audio")
+    ev = AudioEvaluate(files, files)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rows = ev._score_rows("m", [bad] + files[1:], ["SDR"])
+    assert len(rows) == len(files) and np.isnan(rows[0]["SDR"])
+    assert any("was not scored" in str(w.message) for w in caught)

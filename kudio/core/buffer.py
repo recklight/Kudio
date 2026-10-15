@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import operator
 import threading
 from collections import deque
 from typing import List, Optional
@@ -22,14 +23,20 @@ def _checked_frame_count(value, caller: str) -> int:
     request is shorter than one chunk. Waiting for zero frames can never
     finish, and a silent hang in a capture gives nobody anything to act on.
     """
-    try:
-        count = int(value)
-    except (TypeError, ValueError, OverflowError):
-        # OverflowError is float('inf'), which arithmetic on a zero chunk size
-        # produces and which would otherwise walk straight past this guard
+    whole = None
+    if not isinstance(value, (bool, str, bytes)):
+        try:
+            whole = operator.index(value)              # int, numpy integers
+        except TypeError:
+            # a float only when it is whole: int() used to truncate 2.5 to 2,
+            # and float('inf') -- arithmetic on a zero chunk size -- is not
+            if isinstance(value, (float, np.floating)) and np.isfinite(value) \
+                    and float(value).is_integer():
+                whole = int(value)
+    if whole is None:
         raise TypeError(
-            "{0} needs a whole number of frames, got {1!r}.".format(caller, value)
-        ) from None
+            "{0} needs a whole number of frames, got {1!r}.".format(caller, value))
+    count = whole
     if count < 1:
         raise ValueError(
             "{0} needs at least 1 frame, got {1}. A frame count computed from a "
@@ -95,12 +102,16 @@ class AudioBuffer:
             self._cond.notify_all()
             return data
 
-    def get_fixed_size_data(self, queue_size: int) -> np.ndarray:
+    def get_fixed_size_data(self, queue_size: int,
+                            timeout: Optional[float] = None) -> np.ndarray:
         """Block until *queue_size* frames have arrived, then return them
         concatenated with ``np.hstack``.
 
         Raises ``ValueError`` when *queue_size* is below 1, because that wait
-        would never end, and ``TypeError`` when it is not a whole number.
+        would never end, and ``TypeError`` when it is not a whole number. A
+        *timeout* that expires raises ``TimeoutError`` and ends the capture,
+        so nothing is left waiting on the buffer to take the next one's
+        frames.
         """
         count = _checked_frame_count(queue_size, "AudioBuffer.get_fixed_size_data")
         with self._cond:
@@ -108,9 +119,14 @@ class AudioBuffer:
             self._capture_left = count
             self._capture_done.clear()
         log.info("Buffer: capturing %d frames", count)
-        self._capture_done.wait()
+        finished = self._capture_done.wait(timeout)
         with self._cond:
             frames, self._capture = self._capture, None
+            self._capture_left = 0
+        if not finished:
+            raise TimeoutError(
+                "AudioBuffer.get_fixed_size_data timed out after {0} s with {1} "
+                "of {2} frames".format(timeout, len(frames or ()), count))
         return np.hstack(frames)
 
     def clear(self) -> bool:
@@ -152,6 +168,8 @@ class FetchBuffer(threading.Thread):
         self.buffer = buffer
         self.queue_size: Optional[int] = None
         self.data: Optional[np.ndarray] = None
+        self._timeout: Optional[float] = None
+        self._error: Optional[BaseException] = None
 
     def get_data(self, desired_queue_size: int, timeout: Optional[float] = None) -> np.ndarray:
         """Run the capture and return the frames.
@@ -168,16 +186,17 @@ class FetchBuffer(threading.Thread):
         self.queue_size = _checked_frame_count(
             desired_queue_size, "FetchBuffer.get_data"
         )
+        self._timeout = timeout
         self.start()
-        data = self.join(timeout)
-        if self.is_alive():
+        # the capture ends itself at the timeout, so this join returns; the
+        # thread used to be left waiting on the buffer and took the next
+        # capture's frames
+        data = self.join()
+        if isinstance(self._error, TimeoutError):
             raise TimeoutError(
                 "FetchBuffer.get_data timed out after {0} s waiting for {1} "
-                "frames. The capture thread is still waiting for the rest, so "
-                "check that the stream is running, or allow more time.".format(
-                    timeout, self.queue_size
-                )
-            )
+                "frames. Check that the stream is running, or allow more "
+                "time.".format(timeout, self.queue_size))
         if data is None:
             raise RuntimeError(
                 "FetchBuffer.get_data collected nothing for {0} frames. The "
@@ -188,7 +207,11 @@ class FetchBuffer(threading.Thread):
 
     def run(self) -> None:
         if isinstance(self.queue_size, int):
-            self.data = self.buffer.get_fixed_size_data(self.queue_size)
+            try:
+                self.data = self.buffer.get_fixed_size_data(
+                    self.queue_size, timeout=self._timeout)
+            except TimeoutError as e:
+                self._error = e
 
     def join(self, timeout: Optional[float] = None):
         super().join(timeout)

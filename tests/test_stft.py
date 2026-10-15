@@ -79,3 +79,38 @@ def test_matches_checks_the_rate():
     stft = STFT(sr=16000)
     assert stft.matches(16000) is True
     assert stft.matches(8000) is False
+
+
+# -- frame counts, stored geometry and the tail --------------------------------
+
+@pytest.mark.parametrize("n_fft, n", [(512, 32000), (511, 32000), (511, 16384), (400, 999)])
+def test_n_frames_counts_what_forward_returns(n_fft, n):
+    """n // hop + 1 is right for an even n_fft only: STFT(n_fft=511) promised
+    126 frames for 32000 samples and gave 125."""
+    stft = STFT(sr=SR, n_fft=n_fft, hop_length=256)
+    y = np.random.default_rng(0).standard_normal(n).astype(np.float32)
+    assert stft.n_frames(n) == len(stft.forward(y))
+
+
+def test_from_dict_wants_every_key():
+    """A stored geometry missing hop_length would analyse at 256 without a word."""
+    with pytest.raises(ValueError, match="missing: hop_length"):
+        STFT.from_dict({'sr': 16000, 'n_fft': 512, 'win_length': 512, 'window': 'hann'})
+
+
+def test_inverse_rebuilds_the_tail_too():
+    """The last len(y) % hop samples used to be one value repeated."""
+    stft = STFT(sr=SR, n_fft=512, hop_length=256)
+    y = make_sine(seconds=1.0)                    # 16000 % 256 = 128 samples of tail
+    back = stft.inverse(y, stft.forward(y))
+    assert len(back) == len(y)
+    assert np.max(np.abs(back[-128:] - y[-128:])) < 0.01
+    assert len(np.unique(np.round(back[-128:], 6))) > 10
+
+
+def test_inverse_refuses_a_spectrogram_of_the_wrong_shape():
+    from kudio.exceptions import FeatureError
+    stft = STFT(sr=SR, n_fft=512, hop_length=256)
+    y = make_sine(seconds=1.0)
+    with pytest.raises(FeatureError, match="one row per frame"):
+        stft.inverse(y, stft.forward(y, context=2))

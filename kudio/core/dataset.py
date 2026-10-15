@@ -62,21 +62,38 @@ class Pair:
         return Path(self.noisy).is_file() and Path(self.clean).is_file()
 
 
+def _portable(row: dict) -> dict:
+    """Paths with forward slashes. Windows reads them as well as its own, and
+    a manifest written there with backslashes named no file on Linux or
+    macOS. Relative paths stay relative, to the working directory of
+    whoever reads them, as they always have."""
+    for key in ('noisy', 'clean', 'target'):
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            row[key] = value.replace('\\', '/')
+    return row
+
+
 def save_manifest(path: PathLike, pairs: Sequence[Pair]) -> Path:
-    """Write *pairs* to *path* as JSON. Parent directories are created."""
+    """Write *pairs* to *path* as JSON. Parent directories are created.
+
+    Paths are written with forward slashes, so a manifest made on Windows
+    loads on Linux and macOS too.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
-        json.dump([asdict(p) for p in pairs], fh, indent=2, ensure_ascii=False)
+        json.dump([_portable(asdict(p)) for p in pairs], fh, indent=2,
+                  ensure_ascii=False)
     return path
 
 
 def load_manifest(path: PathLike) -> List[Pair]:
     """Read a manifest written by :func:`save_manifest`.
 
-    Extra keys are dropped with a warning rather than raising — a manifest
-    written by a later version should still load — but a missing ``noisy`` or
-    ``clean`` is an error, since there is no example without them.
+    Extra keys are dropped with a ``UserWarning`` rather than raising — a
+    manifest written by a later version should still load — but a missing
+    ``noisy`` or ``clean`` is an error, since there is no example without them.
     """
     with open(path, "r", encoding="utf-8") as fh:
         rows = json.load(fh)
@@ -92,8 +109,8 @@ def load_manifest(path: PathLike) -> List[Pair]:
             dropped[key] = dropped.get(key, 0) + 1
         out.append(Pair(**{k: v for k, v in row.items() if k in known}))
     if dropped:
-        log.warning("manifest %s: ignored unknown key(s) %s",
-                    path, ", ".join(sorted(dropped)))
+        warnings.warn(f"manifest {path}: ignored unknown key(s) "
+                      f"{', '.join(sorted(dropped))}", UserWarning, stacklevel=2)
     return out
 
 
@@ -163,6 +180,10 @@ def save_labels(path: PathLike, labels: Sequence[Label],
 def load_labels(path: PathLike, fmt: Optional[str] = None) -> List[Label]:
     """Read labels written by :func:`save_labels`, or by Audacity.
 
+    Audacity follows a label that has a frequency range with a second row,
+    ``\\<TAB>low<TAB>high``. Those rows are skipped: a :class:`Label` holds
+    times, not frequencies.
+
     :raises ValueError: on a malformed row, naming the line — a label file is
         usually hand-edited at some point, and "line 12 has 2 columns" is worth
         more than an IndexError.
@@ -180,7 +201,7 @@ def load_labels(path: PathLike, fmt: Optional[str] = None) -> List[Label]:
     labels = []
     with open(path, "r", encoding="utf-8") as fh:
         for n, line in enumerate(fh, 1):
-            if not line.strip():
+            if not line.strip() or line.startswith("\\"):
                 continue
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 2:
@@ -265,9 +286,10 @@ def split_pairs(pairs: Sequence[Pair], val_split: float = 0.1,
     about one mixture file raise instead — see :func:`_distinct_examples`.
 
     Splitting a tiny set by percentage can leave nothing to train on, so when
-    the three shares would starve training the validation and test sets are
-    given up instead — an empty validation set is visible, a one-example
-    training set looks like it worked.
+    the shares would leave training empty, the validation and test sets are
+    given up instead: an empty validation set is visible, and a run with no
+    training data at all is not a run. Anything above that is split as asked,
+    even when training ends up with a single example.
     """
     if not 0.0 <= val_split < 1.0 or not 0.0 <= test_split < 1.0:
         raise ValueError("splits must be in [0, 1)")

@@ -89,13 +89,13 @@ def test_normalize_lufs_hits_its_target():
             target, abs=0.05)
 
 
-def test_normalize_lufs_warns_instead_of_silently_clipping(caplog):
+def test_normalize_lufs_warns_instead_of_silently_clipping():
+    """A warning, not a log line: the kudio logger's NullHandler kept that quiet."""
     sr = 16000
     y = _speech_like(sr) * 0.02
-    with caplog.at_level("WARNING"):
+    with pytest.warns(UserWarning, match="clip"):
         out = normalize_lufs(y, sr, lufs=0.0)
     assert np.max(np.abs(out)) > 1.0, "the gain really does overshoot"
-    assert "clip" in caplog.text
 
 
 def test_match_loudness_equalises_two_versions_of_a_clip():
@@ -400,3 +400,42 @@ def test_a_momentary_curve_still_answers_but_narrower():
     fast = loudness_over_time(y, 16000, window=MOMENTARY).range_lu
     slow = loudness_over_time(y, 16000, window=SHORT_TERM).range_lu
     assert fast > slow
+
+
+
+# -- corrupt clips -------------------------------------------------------------
+
+import kudio                                                     # noqa: E402
+
+def test_a_corrupt_clip_is_not_measured_as_silence():
+    """One NaN runs through the K-weighting filter into every block after it,
+    and the gate would drop them all: -inf, which is what silence measures."""
+    sr = 16000
+    y = _speech_like(sr).copy()
+    y[100] = np.nan
+    with pytest.warns(UserWarning, match="not finite"):
+        assert np.isnan(kudio.loudness(y, sr))
+    with pytest.warns(UserWarning):
+        with pytest.raises(kudio.FeatureError, match="not finite"):
+            normalize_lufs(y, sr)
+
+
+def test_the_curve_and_its_range_do_not_read_a_corrupt_clip_as_silence():
+    sr = 16000
+    y = _speech_like(sr).copy()
+    y[100] = np.nan
+    with pytest.warns(UserWarning, match="not finite"):
+        curve = kudio.loudness_over_time(y, sr, window=kudio.MOMENTARY)
+    assert "unmeasurable" in str(curve)
+    with pytest.warns(UserWarning, match="not finite"):
+        assert np.isnan(kudio.loudness_range(np.tile(y, 3), sr))
+    with pytest.warns(UserWarning):
+        with pytest.raises(kudio.FeatureError, match="clip with samples"):
+            kudio.match_loudness(y, _speech_like(sr), sr)
+        with pytest.raises(kudio.FeatureError, match="reference with samples"):
+            kudio.match_loudness(_speech_like(sr), y, sr)
+
+
+def test_true_peak_refuses_an_oversampling_of_zero():
+    with pytest.raises(kudio.FeatureError, match="oversample"):
+        kudio.true_peak(np.ones(1600) * 0.5, 16000, oversample=0)

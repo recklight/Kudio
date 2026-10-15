@@ -158,3 +158,22 @@ def test_a_frame_too_short_for_fmin_is_refused_rather_than_silently_empty():
 def test_a_bad_rate_is_refused():
     with pytest.raises(FeatureError, match="positive rate"):
         kudio.f0(buzz(150.0), 0)
+
+
+# -- channels and the frame length ---------------------------------------------
+
+def test_stereo_is_refused_rather_than_read_at_half_pitch():
+    import kudio
+    from kudio.exceptions import FeatureError
+    with pytest.raises(FeatureError, match="mono"):
+        kudio.f0(np.zeros((16000, 2), dtype=np.float32), 16000)
+
+
+def test_the_default_frame_grows_with_the_rate():
+    """2048 samples cannot hold two periods of 65 Hz at 96 kHz; the default
+    call used to be refused there."""
+    import kudio
+    sr = 96000
+    t = np.arange(sr) / sr
+    track = kudio.f0((0.3 * np.sin(2 * np.pi * 150 * t)).astype(np.float32), sr)
+    assert abs(track.median_hz - 150) < 3

@@ -6,6 +6,270 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-10-15
+
+A documentation site, and the fixes that writing it turned up. Every example
+on the site was run against the library, and where the output and the
+docstring disagreed, the library was usually the one at fault. A minor version
+rather than a patch, because several of the fixes change numbers that existing
+code may have stored: the `quantile` estimator, dither, DNSMOS, the report's
+noise floor and RT60 on a recorded response all read differently now, and
+`spec_augment` reads its input the other way round. Those are listed first.
+
+### Changed — results that move
+
+- **`spec_augment` reads `(frames, bins)`**, the layout of every spectrogram
+  kudio makes. It read `(freq, time)`, so on kudio's own spectrograms the
+  "frequency" masks blanked time and the "time" masks blanked frequency. The
+  default `mask_value=None` fills with the spectrogram's mean, as SpecAugment
+  does: the old fill of 0 is a power of 1 in log10 power, louder than most of
+  the cells it was meant to hide.
+- **The `quantile` noise estimate sits at the noise, not 7.9 dB under it.**
+  Steady noise power in a bin is exponentially distributed, so its 15th
+  percentile is 0.16 of its mean. The estimate is divided by `-ln(1 - q)` now,
+  which takes `quantile` from the weakest of the four estimators on the test
+  clips (2.8 dB of SI-SDR gained, averaged over the gain rules) to the best
+  (7.8 to 8.4). On the CLI page's example, `logmmse` over `quantile` goes from
+  8.69 to 14.95 dB.
+- **`bit_depth(dither=True)` adds TPDF dither two steps wide**, peak to peak.
+  One step loosened the tie between the error and the signal without
+  breaking it: a sine a quarter of a step high came back at 0.42 of its level
+  on average, and comes back whole now. It costs 4.7 dB of SNR at 8 bits
+  where one step cost 1.8, close to the 4.8 dB that tripling the noise power
+  predicts.
+- **`audio_report` takes the DC offset out before reading the noise floor.**
+  An offset of 0.03 read as a floor of -30.5 dBFS and an SNR of 6 dB on a
+  take whose real floor was -57.5 and SNR 31. When a tenth of the frames are
+  exact zeros the floor is digital silence, `-inf`, with an SNR of `inf`:
+  pauses of zeros were left out of the percentiles, so a perfectly clean clip
+  was reported at 0.7 dB.
+- **`rt60` measures from the onset**, the first sample within 20 dB of the
+  peak. A recorded response starts with the time the sound took to arrive,
+  and 5 ms of it in front of a 0.6 s room dropped EDT from 0.55 to 0.25 s and
+  failed `reliable()`. A response whose direct sound alone falls 10 dB has no
+  EDT; `reliable()` judges it on its fit instead of failing it, and the summary
+  says why EDT is missing.
+- **DNSMOS maps each window through the polynomial before averaging**, the
+  order DNS-Challenge's own script uses; with a quadratic the two orders
+  differ. Only `sig_bak_ovr.onnx` is looked for (`model_v8.onnx` is the P.808
+  model, one score rather than three), and the personalised model in
+  `pDNSMOS/` comes last in a search and warns when used.
+- **`STFT.n_frames` is right for an odd `n_fft`.** `n // hop + 1` promised 126
+  frames for 32000 samples at `n_fft=511` and `forward` gave 125.
+- **`lowpass` at or above Nyquist hands the clip back** as a copy rather than
+  raising, since there is nothing to remove. That includes the 8 kHz default
+  at 16 kHz and below.
+
+### Changed — interfaces
+
+- **The command line reports an error on one line and exits 2.** A file that
+  cannot be read or an argument the library refuses printed a traceback and
+  exited 1, the same code as a finding, so `kudio report missing.wav || echo
+  ...` could not tell the two apart. `-v` shows the traceback. Refusals and
+  warnings go to standard error, warnings as one line each, and `-v` raises
+  kudio's own logging only, not every library's.
+- **Problems with the audio are warnings, not log lines.** NaN or inf in a
+  loaded file, `normalize_lufs` pushing a peak past full scale, unknown keys in
+  a manifest and `syn(overwrite=False)` finding the folder full were logged, and
+  the `kudio` logger has a `NullHandler`, so nobody who had not set up logging
+  heard about them. Bookkeeping (a name taken, a folder emptied) stays in the
+  log.
+- **`AudioInfo.peak` is `None` when it was not measured** (`peak=False`); it
+  was 0.0, the peak of silence.
+- **A missing PyAudio raises `DependencyError`**, like every other extra,
+  rather than a plain `ImportError` that `except kudio.KudioError` let
+  through. It is still an `ImportError`. sounddevice installed on a system
+  without the PortAudio library raises `DeviceError`, which names the system
+  package, since pip cannot fix it.
+- **`STFT.from_dict` wants every key.** A stored geometry without `hop_length`
+  analysed at 256 without a word.
+- **`f0`'s `frame_length` defaults to `None`**: 2048 samples, or the next power
+  of two that holds more than two periods of `fmin`, 4096 at 88.2 and 96 kHz,
+  where the old default was refused. The check now asks for what librosa
+  needs, `2 * floor(sr / fmin) + 2` samples; at exactly two periods the lowest
+  pitches were lost and the rest looked fine.
+- **`file_load(sr=0)` raises `ValueError`**, a mistake in the call, rather
+  than an `AudioIOError` about the file. A `Synthesizer` input that does not
+  exist raises `FileNotFoundError` rather than `NotADirectoryError`.
+- **`melspectrogram` returns float32**, and with a path and `sr=` resamples the
+  file; `sr` was ignored for a path.
+- **`Standardizer.save` returns the path it wrote**, `.npz` included, and
+  `load("stats")` finds `stats.npz`.
+- **`copy_waves` returns where each file went, and renames a collision.** Two
+  talkers' `a.wav` copied into one folder left one file.
+- **`AudioEvaluate.get_df()` is an empty DataFrame** before anything is
+  scored, not an empty list.
+- **Manifests are written with forward slashes**, so one made on Windows names
+  real files on Linux and macOS, and `manifest()` returns them that way. The
+  noise-only files of `is_silence=True` are left out of it: the clean file
+  they were drawn for is not their reference. They are still in what `syn()`
+  returns.
+
+### Fixed — channels last
+
+kudio's multi-channel layout is `(frames, channels)`, and numpy, scipy and
+librosa read the last axis as time. Every place that handed such an array on
+without saying which axis was time worked along the channels.
+
+- `resample`, and `save_wave(d_sample=)` with it: a 1 s stereo clip came back
+  `(16000, 1)`, or as a 2 s mono file.
+- `highpass`, `lowpass`, `bandpass` and `bandstop` filtered across the
+  channels; `time_stretch` and `pitch_shift` worked across them too, and a
+  stereo second came back from `time_stretch` as one channel; `trim_silence`
+  cut nothing, so `convert_folder(mono=False, trim_db=...)` trimmed no stereo
+  file; and `reverb` failed on a stereo array.
+- `rt60`, `schroeder_curve` and `apply_rir` read a stereo array as one
+  interleaved signal: a two-column 0.6 s response measured 1.20 s with a fit
+  of 1.000. `f0` read a stereo clip at half its pitch, 65 Hz for a voice at
+  126, and `StreamEnhancer.process` denoised two channels as one. These take
+  mono and say so now, as do the metrics, which scored both channels as one
+  signal or failed with a numpy shape error depending on the metric, and the
+  spectrogram functions, which took each frame for a two-sample signal.
+- `play_audio` through PyAudio opened a stereo array as one channel and
+  played it at half speed; a path is now read with soundfile, so FLAC and
+  FLOAT WAV play too, and a 32-bit integer WAV no longer plays as float noise.
+- `Recorder.save(resample=)` resampled the interleaved channels as one signal
+  and stretched the take to `record_times`, which it never quite is, moving
+  every pitch.
+- The command line's `loudness` and `normalize` mixed a stereo file to mono
+  first. BS.1770 weights and sums the channels, so the mono mix of a file
+  with matching channels read 3 LU low, and `normalize` wrote mono.
+
+### Fixed — numbers that looked fine and were not
+
+- **A corrupt clip measured as silence.** One NaN runs through the K-weighting
+  filter into every block after it, the gate dropped them all, and the clip
+  read `-inf` LUFS. `loudness`, `true_peak` and `loudness_range` return `nan`
+  with a warning, a curve says how many windows it could not measure, and
+  `normalize_lufs` and `match_loudness` refuse the clip instead of handing it
+  back untouched.
+- **STOI's placeholder was averaged in as a score.** pystoi returns 1e-5 for a
+  clip with under about 0.4 s of speech, even for a perfect copy. kudio scores
+  that `nan` with a warning, `AudioEvaluate` leaves it out of the mean, and
+  `eval_metrics` returns `None` for it, as for any metric that cannot run.
+- **`pesq` called on its own skipped the length check** every other metric
+  has; and one file `AudioEvaluate` could not read or align ended the whole
+  run, throwing away every score before it. That file gets `nan` and a
+  warning now, and the list goes on.
+- **`compare_enhancers` scored any overlap of the reference**, and took a
+  keyword no method has (`alpah=0.5`) by running every method on its
+  defaults. It applies the length check, and refuses the keyword.
+- **A gain-rule parameter outside its range ran anyway.** `gain_floor_db=10`
+  clipped every gain to 1 and returned the input as its own denoised version.
+  The ranges in `METHODS` are enforced by `spectral_enhance`,
+  `enhance_folder` and `StreamEnhancer`. An unknown `noise_kwargs` key is
+  named by the estimator's public name, not a private class's.
+- **`trad_enhance` dropped the last overlap**, leaving its final 256 samples at
+  zero, and returned a different length from its input; it returns float32
+  of the input's length. `wavelet_low_pass_filter` took its threshold from the
+  signed maximum, so a clip below zero throughout got a negative threshold and
+  came back unfiltered.
+- **`STFT.inverse` and `save_spectrogram_as_wave` repeated one value** over the
+  last `len(y) % hop` samples instead of rebuilding them, and accepted a
+  spectrogram of the wrong shape.
+- **Integer audio wrapped round.** `gain` turned an int16 20000 at +6 dB into
+  -25631, `normalize` returned int16 as zeros, and `resample` truncated
+  integers toward zero. They round and clip within the type now. `save_wave`
+  divided every integer type by 32768, writing half-scale int32 clipped and
+  uint8 as near-silence; each type is scaled by its own full scale, and
+  `DOUBLE` keeps float64.
+- **`PCM_24` and `PCM_U8` came out a third and half a step low** on average,
+  because only `PCM_16` was rounded before libsndfile's flooring conversion.
+  Every PCM width is rounded now.
+- **`add_noise_snr` with constant noise returned the clean signal** at any
+  SNR, since the mean is removed before scaling. It raises, as `Synthesizer`
+  does, and takes mono only.
+- **A silent clean file made a silent mixture.** The noise is scaled against
+  the speech, so `Synthesizer` wrote a file of zeros labelled with an SNR. It
+  raises `SynthesisError` naming the file.
+- **The `SpectrogramStream` mel axis put its bands at the wrong
+  frequencies**: `n_mels` points spread from `fmin` to `fmax`, where the
+  filters are centred on the inner points of `n_mels + 2`. Its docstring also
+  promised dBFS, where a mel axis gives band power.
+
+### Fixed — files, folders and names
+
+- **`check_input` matched `.wav` case-sensitively** on Linux and macOS, so a
+  recorder's `ZOOM0001.WAV` was found on Windows only, and named directly it
+  was refused everywhere. `.txt` lists are read as UTF-8, with or without a
+  BOM, rather than in the system code page, where a list of Chinese names
+  raised `UnicodeDecodeError`.
+- **`convert_folder` and `enhance_folder` dropped an unusable entry without
+  a word**, so a list with a typo in it reported "1/1 written". It is a
+  failure in the result now. `enhance_folder` mirrors a list from the folder
+  its files share, as `convert_folder` does, where it wrote them flat and
+  renamed collisions. `convert_folder` leaves a `dst` inside `src` out of the
+  input, rather than converting the last run's output again one folder deeper.
+- **`kudio enhance --recursive` failed before reading a file** in 3.7.3:
+  `enhance_folder` did not take `n_fft`. It takes `n_fft`, `hop_length`,
+  `window` and `noise_kwargs` like `spectral_enhance`.
+- **`check_file("newdir/")` returned `newdir.wav`.** A trailing separator
+  means a folder, whether or not it exists yet.
+- **`Synthesizer` copied two talkers' clean files to one name** under
+  `RAW_DATA/`; the copies mirror the layout like the mixtures.
+  `syn_extra_mode()` resampled its output to the rate of the last `syn()` on
+  the same object, takes `is_pool=`, and warns when clean files share a
+  name. A requested `is_silence` share rounds to at least one file, and
+  `rdn_choice_num` above the corpus size warns.
+- **`load_labels` read Audacity's frequency rows as labels**, the `\` lines
+  that follow a label with a frequency range.
+- **`channel_spec` checked `burst` and `packet_ms` only on the first clip**,
+  after `Synthesizer` had emptied its output folder. They are checked when
+  the link is described. `channel_tag` named the A-law telephone band
+  `banda_law`; it is `telephone_a`, the preset's name.
+
+### Fixed — live audio
+
+- **A timed-out `FetchBuffer` capture kept waiting** on the buffer and took
+  the next capture's frames. `get_fixed_size_data(timeout=)` ends the capture
+  with the timeout, and a frame count of 2.5 or `'3'` is refused rather than
+  read as 2 or 3.
+- **`StreamRecorder.start()` after `stop()` failed** on the closed PortAudio
+  handle; it opens the stream again and carries on the take.
+- **`RemoteStreamReader` dropped chunks that arrived split**, because each
+  further read asked for a whole chunk and ran into the next; a chunk of
+  silence, all zero bytes, was taken for a text reply; `start()` before
+  connecting spun a core forever; and a retry left the previous PortAudio
+  instance running.
+- **`CheckDevice` raised while describing a device it could not describe**,
+  from inside the message meant to explain the failure.
+
+### Fixed — the command line
+
+- `kudio synth` prints the seed it used, so a run without `--seed` can be
+  rebuilt, and `--snr` takes fractions. `--channel-loss` and
+  `--channel-burst` without `--channel` are refused rather than ignored.
+- `kudio convert` applied `--lufs` and `--trim-db` to folders only, and
+  ignored them on a single file without a message.
+- `kudio enhance --rate` resampled in folder mode only.
+- `kudio compare --write-to --noises` named each file after the method, so
+  every estimator overwrote the last; the estimator is in the name when
+  several run.
+- `kudio pitch` takes the same automatic frame length as `f0`.
+- `kudio align --metrics` on two files too different in length to score
+  stopped with a traceback after printing the delay; it says so and still
+  prints the aligned score.
+- `kudio room --make FILE` with a file as well is refused rather than ignoring
+  the file, and `kudio normalize` refuses digital silence and a `--peak`
+  outside (0, 1].
+
+### Added
+
+- **A documentation site**, at https://recklight.github.io/Kudio/: getting
+  started, ten guide pages from reading files to recording, the command line,
+  migrating from 2.x, and the API reference generated from the docstrings.
+  Every figure is drawn by a script in `tools/docs/`, and CI builds the site
+  with `--strict` on every push and publishes it from `master`.
+- The `[docs]` extra installs what the site needs.
+
+### Documentation
+
+- README: the error and logging sections say what is raised, warned and
+  logged; the enhancement caveats and the spreads between gain rules and
+  estimators are re-measured on a named clip; the PESQ note no longer claims
+  one scale for "most papers"; the migration table lists the helpers that
+  moved out of the top level.
+
 ## [3.7.3] - 2026-10-14
 
 Documentation and packaging metadata only; nothing in the library behaves

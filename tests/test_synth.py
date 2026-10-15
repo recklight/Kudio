@@ -63,7 +63,7 @@ def test_bad_inputs(clean_noise_dirs, tmp_path):
     clean, noise = clean_noise_dirs
     with pytest.raises(TypeError):
         Synthesizer(clean, noise, snr_ratio="5")
-    with pytest.raises(NotADirectoryError):
+    with pytest.raises(FileNotFoundError):
         Synthesizer(tmp_path / "nope", noise)
     syx = Synthesizer(clean, noise, out_path=str(tmp_path / "x"), snr_ratio=[0])
     with pytest.raises(ValueError):
@@ -971,9 +971,13 @@ def test_extra_mode_keeps_the_speech_and_the_working_directory(
     out = tmp_path / "extra"
     result = Synthesizer(clean, noise, out_path=str(out), snr_ratio=[20]) \
         .syn_extra_mode(background, background_snr=(5,), seed=0)
-    # 2 clean x (1 stage-one mixture + 1 noise + 1 background) x 1 SNR
-    assert len(result) == 6
-    for path, clean_file, _, _ in result:
+    # 2 clean x (1 stage-one mixture + 1 noise + 1 background) x 1 SNR, and
+    # one noise-only file: the 2% share rounds to none on six, and a share
+    # that was asked for is never none
+    assert len(result) == 7
+    mixtures = [r for r in result if not Path(r[0]).stem.endswith("_n00")]
+    assert len(mixtures) == 6
+    for path, clean_file, _, _ in mixtures:
         assert _correlation(path, clean_file) > 0.9
     assert (work / "tmp_mixed" / "keep.txt").read_text() == "not yours"
 

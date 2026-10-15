@@ -54,11 +54,16 @@ _BAND_LIMITED_RATIO = 0.9
 _COMMON_RATES = (8000, 11025, 16000, 22050, 32000, 44100, 48000)
 
 
-def _nearest_common_rate(hz: float) -> Optional[int]:
-    """The standard rate *hz* is probably a measurement of, if any is close."""
-    if hz <= 0:
+def _nearest_common_rate(hz: float, below: Optional[int] = None) -> Optional[int]:
+    """The standard rate *hz* is probably a measurement of, if any is close.
+
+    *below* keeps the answer under the file's own rate: a file cannot have
+    been upsampled from the rate it is at.
+    """
+    rates = [r for r in _COMMON_RATES if below is None or r < below]
+    if hz <= 0 or not rates:
         return None
-    rate = min(_COMMON_RATES, key=lambda r: abs(r - hz))
+    rate = min(rates, key=lambda r: abs(r - hz))
     return rate if abs(rate - hz) <= 0.15 * rate else None
 
 
@@ -101,7 +106,7 @@ class AudioReport:
             # corrupt clip came to be reported as a muted microphone, the one
             # answer that stops anybody looking any further.
             return [f"{self.non_finite_samples} samples are not finite (NaN "
-                    f"or inf) -- the clip is corrupt, not quiet, and every "
+                    f"or inf) — the clip is corrupt, not quiet, and every "
                     f"measurement here is meaningless. Repair it or drop it "
                     f"from the set"]
         if self.peak_dbfs == float('-inf'):
@@ -116,7 +121,9 @@ class AudioReport:
                          f"it will clip the moment it is written to an integer "
                          f"format")
         elif self.peak_dbfs > -0.5:
-            found.append(f"peaks at {self.peak_dbfs:.1f} dBFS, right against the "
+            # + 0.0 so a peak of 32767/32768 prints as 0.0, not -0.0
+            found.append(f"peaks at {round(self.peak_dbfs, 1) + 0.0:.1f} dBFS, "
+                         f"right against the "
                          f"ceiling — one more gain stage will clip it")
         if self.peak_dbfs < -30.0:
             found.append(f"peaks at only {self.peak_dbfs:.1f} dBFS — very quiet, "
@@ -125,9 +132,9 @@ class AudioReport:
             found.append(f"DC offset of {self.dc_offset:+.3f} — the waveform is "
                          f"not centred on zero, which wastes headroom")
         if self.band_limited:
-            source = _nearest_common_rate(2 * self.bandwidth_hz)
+            source = _nearest_common_rate(2 * self.bandwidth_hz, below=self.sr)
             came_from = (f"upsampled from {source} Hz" if source
-                         else f"band-limited to about {2 * self.bandwidth_hz:.0f} Hz")
+                         else f"band-limited to about {self.bandwidth_hz:.0f} Hz")
             found.append(
                 f"content stops at {self.bandwidth_hz:.0f} Hz although the file "
                 f"claims {self.sr} Hz — it was very likely {came_from}, and the "
@@ -226,9 +233,19 @@ def audio_report(y: np.ndarray, sr: int) -> AudioReport:
     content stops at 3844 Hz although the file claims 16000 Hz — ...
 
     A clip carrying NaN or inf is measured and counted rather than refused:
-    the count is the finding, reported by :meth:`AudioReport.problems`, and
-    the numbers beside it come out nan. Inspecting a corpus is exactly when
-    you want to be told which files are broken, not stopped at the first one.
+    the count is the finding, reported first by :meth:`AudioReport.problems`.
+    The peak, RMS and loudness come out nan; the noise floor, the SNR estimate
+    and the silence share are taken over the frames that are finite. Inspecting
+    a corpus is exactly when you want to be told which files are broken, not
+    stopped at the first one.
+
+    The noise floor is read from frames with the DC offset taken out, so an
+    offset is reported as an offset rather than as noise. When at least a
+    tenth of the frames are digital silence, the floor *is* digital silence:
+    ``-inf``, with an SNR estimate of ``inf``.
+
+    Clipping is counted in runs of three or more pinned samples; a run of one
+    or two is indistinguishable from a peak that touched full scale.
 
     :raises FeatureError: on a non-mono array or a non-positive rate.
     """
@@ -246,16 +263,30 @@ def audio_report(y: np.ndarray, sr: int) -> AudioReport:
     clipped = _clipped_run_count(y)
 
     size = max(16, int(round(_FRAME * sr)))
-    frame_rms = np.sqrt(np.mean(_frame(y, size, max(1, int(round(_HOP * sr)))) ** 2,
-                                axis=-1))
-    with np.errstate(divide='ignore'):
+    # the offset out first: left in, a 0.03 offset read as a noise floor of
+    # -30 dBFS on a take whose real floor was -57
+    usable = np.isfinite(y)
+    centred = y - (float(np.mean(y[usable])) if usable.any() else 0.0)
+    frame_rms = np.sqrt(np.mean(_frame(centred, size, max(1, int(round(_HOP * sr))))
+                                ** 2, axis=-1))
+    with np.errstate(divide='ignore', invalid='ignore'):
         frame_db = 20.0 * np.log10(np.maximum(frame_rms, 0.0))
 
     finite = frame_db[np.isfinite(frame_db)]
+    # exact zeros are found on the samples as they are: with the mean taken
+    # out, a zeroed pause is a tiny constant rather than nothing
+    hop = max(1, int(round(_HOP * sr)))
+    zero_frames = np.all(_frame(y, size, hop) == 0.0, axis=-1)
+    digital_silence = float(np.mean(zero_frames)) if zero_frames.size else 0.0
     if finite.size:
         loud = float(np.percentile(finite, 95))
         floor = float(np.percentile(finite, 10))
-        silence_ratio = float(np.mean(frame_db < loud - _SILENCE_REL_DB))
+        if digital_silence >= 0.1:
+            # pauses of exact zeros: the floor is silence, not the quietest
+            # stretch of speech, which is what the percentile used to land on
+            floor = float('-inf')
+        silence_ratio = float(np.mean((frame_db < loud - _SILENCE_REL_DB)
+                                      | zero_frames))
         snr = loud - floor
     else:                                       # every frame is exact silence
         loud = floor = float('-inf')

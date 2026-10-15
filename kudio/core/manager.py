@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from kudio.core.feature import wave_separate
-from kudio.core.io import load_waves, save_wave
+from kudio.core.io import file_load, save_wave
 from kudio.core.stream import play_audio
 
 __all__ = ['AudioDataManager']
@@ -68,6 +68,9 @@ class AudioDataManager:
         return item['sr'] if item is not None else None
 
     def add_local_file(self, dir, name: Optional[str] = None) -> None:
+        """Load *dir* into the manager as a mono downmix (``ch`` 1), whatever
+        :meth:`set_params` says, so :meth:`save_all` writes it back as mono.
+        Any format soundfile reads is fine."""
         dir = Path(dir)
         if not dir.is_file():
             raise FileNotFoundError(f"File not found: {dir}")
@@ -77,7 +80,7 @@ class AudioDataManager:
             return
         self.audios_[name] = deepcopy(self.default_dict)
         self.audios_[name]["dir"] = str(dir)
-        wave_, rate_ = load_waves(dir)[0]
+        wave_, rate_ = file_load(dir, mono=True)
         self.audios_[name]["wave"].append(wave_)
         self.audios_[name]["sr"] = rate_
         self.audios_[name]["ch"] = 1

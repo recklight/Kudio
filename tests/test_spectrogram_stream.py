@@ -254,3 +254,14 @@ def test_impossible_settings_are_refused_at_construction(kwargs):
 def test_a_bad_rate_is_refused():
     with pytest.raises(FeatureError, match="positive rate"):
         kudio.SpectrogramStream(0)
+
+
+def test_mel_rows_are_labelled_with_their_band_centres():
+    """mel_frequencies(n_mels) runs from fmin to fmax inclusive; the filters
+    sit on the inner points of mel_frequencies(n_mels + 2)."""
+    import librosa
+    import kudio
+    view = kudio.SpectrogramStream(16000, n_mels=64)
+    expected = librosa.mel_frequencies(n_mels=66, fmin=0.0, fmax=8000.0)[1:-1]
+    assert np.allclose(view.freqs, expected)
+    assert view.freqs[0] > 0 and view.freqs[-1] < 8000

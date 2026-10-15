@@ -1,0 +1,10 @@
+/* Figures are drawn twice, once per palette (see tools/docs/figstyle.py);
+   give them a little air and keep a caption close underneath. */
+.md-typeset figure img {
+  border-radius: 0.2rem;
+}
+
+.md-typeset figcaption {
+  max-width: none;
+  margin-top: 0.4em;
+}

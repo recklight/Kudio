@@ -366,3 +366,46 @@ def test_context_frames_refuses_bad_input():
         ContextFrames([], context=1)
     single = ContextFrames(np.ones((3, 4), np.float32), context=1)
     assert single.shape == (3, 12)
+
+
+# -- shapes, files and saved statistics ----------------------------------------
+
+def test_standardizer_save_returns_the_file_it_wrote(tmp_path):
+    from kudio import Standardizer
+    std = Standardizer().fit(np.random.default_rng(0).standard_normal((50, 4)))
+    path = std.save(tmp_path / "stats")
+    assert path.name == "stats.npz" and path.exists()
+    assert np.allclose(Standardizer.load(path).mean, std.mean)
+    assert np.allclose(Standardizer.load(tmp_path / "stats").std, std.std)
+
+
+def test_a_stereo_waveform_is_not_read_as_a_spectrogram():
+    import kudio
+    from kudio.exceptions import FeatureError
+    with pytest.raises(FeatureError, match="mono"):
+        kudio.waveform_to_spectrogram(np.zeros((16000, 2), dtype=np.float32))
+
+
+def test_melspectrogram_resamples_a_file_when_asked(tmp_path):
+    """sr= used to be overwritten by the file's own rate."""
+    import kudio
+    sr = 44100
+    path = tmp_path / "44k.wav"
+    kudio.save_wave(path, 0.3 * np.sin(2 * np.pi * 440 * np.arange(2 * sr) / sr), sr)
+    native = kudio.melspectrogram(path, n_frames=1)
+    at_16k = kudio.melspectrogram(path, sr=16000, n_frames=1)
+    assert native.dtype == at_16k.dtype == np.float32
+    assert len(at_16k) == 1 + 32000 // 512 and len(native) == 1 + 88200 // 512
+
+
+def test_stack_context_zero_is_a_copy():
+    from kudio import stack_context
+    x = np.zeros((5, 3), dtype=np.float32)
+    assert stack_context(x, 0) is not x
+
+
+def test_frame_windows_says_when_there_is_nothing_to_cut():
+    from kudio import frame_windows
+    from kudio.exceptions import FeatureError
+    with pytest.raises(FeatureError, match="no frames"):
+        frame_windows(np.zeros((0, 64)), 16)

@@ -16,16 +16,26 @@ __all__ = ['trad_enhance', 'wavelet_low_pass_filter']
 
 def wavelet_low_pass_filter(y: np.ndarray, thres: float = 0.8,
                             wavelet: str = 'db2') -> np.ndarray:
-    """Soft-threshold the detail coefficients of a wavelet decomposition."""
+    """Soft-threshold the detail coefficients of a wavelet decomposition.
+
+    The threshold is *thres* times the clip's peak, ``max |y|``.
+    """
+    # the peak, not the signed maximum: a clip below zero throughout got a
+    # negative threshold and came back unfiltered
+    level = thres * float(np.nanmax(np.abs(y))) if np.size(y) else 0.0
     coeff = pywt.wavedec(y, wavelet, mode='periodization')
-    coeff[1:] = (pywt.threshold(i, value=thres * np.nanmax(y), mode='soft')
+    coeff[1:] = (pywt.threshold(i, value=level, mode='soft')
                  for i in coeff[1:])
     return pywt.waverec(coeff, wavelet, mode='periodization')
 
 
 def trad_enhance(y: np.ndarray, sr: int) -> np.ndarray:
     """Enhance waveform *y* using spectral subtraction with MCRA noise
-    estimation and a Wiener-style gain function."""
+    estimation and a Wiener-style gain function.
+
+    Returns float32 of the same length as *y*. The last partial frame, under
+    256 samples, has no frame of its own and comes back silent.
+    """
     len_ = 512           # frame size in samples
     PERC = 50            # window overlap as percent of frame
     len1 = len_ * PERC // 100
@@ -93,7 +103,14 @@ def trad_enhance(y: np.ndarray, sr: int) -> np.ndarray:
         x_old = xi[len1: len_]
         k = k + len2
 
-    return winGain * xfinal
+    # the last frame's second half has no later frame to overlap with; it
+    # used to be dropped, leaving the final 256 samples at zero
+    if Nframes > 0:
+        xfinal[k - 1: k - 1 + len1] = x_old
+    out = np.zeros(len(y), dtype=np.float32)
+    n = min(len(y), len(xfinal))
+    out[:n] = winGain * xfinal[:n]
+    return out
 
 
 class INIT:

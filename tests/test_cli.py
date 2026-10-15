@@ -453,8 +453,9 @@ def test_room_command_refuses_a_file_that_is_not_an_impulse_response(tmp_path,
 
 
 def test_room_command_needs_something_to_do(capsys):
-    assert main(["room"]) == 1
-    assert "--make" in capsys.readouterr().out
+    # a usage mistake: exit 2, said on stderr, like argparse's own
+    assert main(["room"]) == 2
+    assert "--make" in capsys.readouterr().err
 
 
 def test_channel_command_puts_a_file_through_a_phone_line(tmp_path, capsys):
@@ -502,8 +503,8 @@ def test_channel_command_stacks_what_it_is_asked_for(tmp_path, capsys):
 def test_channel_command_needs_something_to_do(tmp_path, capsys):
     src, dst = tmp_path / "s.wav", tmp_path / "d.wav"
     _write_speech(src)
-    assert main(["channel", str(src), str(dst)]) == 1
-    assert "nothing asked for" in capsys.readouterr().out
+    assert main(["channel", str(src), str(dst)]) == 2
+    assert "nothing asked for" in capsys.readouterr().err
 
 
 def test_channel_command_loses_packets_in_runs_when_asked(tmp_path, capsys):
@@ -593,3 +594,52 @@ def test_synth_command_writes_reverberant_targets(tmp_path, capsys):
     assert all(pathlib.Path(p.target).is_file() for p in pairs)
     assert all(pathlib.Path(p.target).name == pathlib.Path(p.noisy).name
                for p in pairs)
+
+
+def test_enhance_a_folder_with_its_own_fft_size(tmp_path):
+    """--recursive handed n_fft to enhance_folder, which refused it."""
+    src = tmp_path / "noisy"
+    src.mkdir()
+    _write(src / "a.wav")
+    assert main(["enhance", str(src), str(tmp_path / "out"), "--recursive",
+                 "--n-fft", "1024"]) == 0
+    assert (tmp_path / "out" / "a.wav").exists()
+
+
+
+def test_a_missing_file_is_one_line_not_a_traceback(tmp_path, capsys):
+    assert main(["info", str(tmp_path / "nope.wav")]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("kudio info:") and "Traceback" not in err
+
+
+def test_loudness_of_a_stereo_file_keeps_its_channels(tmp_path, capsys):
+    """Measured on the mono mix, two identical channels read 3 LU low."""
+    import kudio
+    sr = 16000
+    t = np.arange(4 * sr) / sr
+    tone = (0.1 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)
+    kudio.save_wave(tmp_path / "st.wav", np.stack([tone, tone], axis=1), sr)
+    assert main(["loudness", str(tmp_path / "st.wav")]) == 0
+    stereo = float(capsys.readouterr().out.split()[1])
+    assert stereo == pytest.approx(kudio.loudness(np.stack([tone, tone], axis=1), sr), abs=0.01)
+
+
+def test_synth_says_which_seed_it_drew(tmp_path, capsys):
+    clean, noise = tmp_path / "clean", tmp_path / "noise"
+    clean.mkdir()
+    noise.mkdir()
+    _write_speech(clean / "a.wav")
+    _write(noise / "n.wav", freq=3000)
+    assert main(["synth", "--clean", str(clean), "--noise", str(noise),
+                 "--out", str(tmp_path / "out"), "--snr", "2.5"]) == 0
+    assert "(seed " in capsys.readouterr().out
+
+
+def test_compare_writes_one_file_per_method_and_estimator(tmp_path):
+    src = tmp_path / "s.wav"
+    _write_speech(src)
+    assert main(["compare", str(src), "--methods", "wiener", "--noises",
+                 "mcra", "minimum", "--write-to", str(tmp_path / "w")]) == 0
+    assert sorted(p.name for p in (tmp_path / "w").iterdir()) == [
+        "s_wiener_mcra.wav", "s_wiener_minimum.wav"]

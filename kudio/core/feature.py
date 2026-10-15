@@ -22,6 +22,7 @@ The aliases still work but emit a ``DeprecationWarning``.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
@@ -41,6 +42,7 @@ __all__ = [
     'file_to_spectrogram', 'save_spectrogram_as_wave',
     'mfcc', 'mfcc_from_files', 'logspec_from_files', 'melspectrogram',
     'denoise_wav2spec', 'denoise_spec2wav',
+    'stack_context', 'ContextFrames', 'frame_windows', 'Standardizer',
     # deprecated aliases (kept for compatibility)
     'w2s', 'wavform2spec', 'spec2wavform', 'f2s', 'wav2spec', 's2w', 'spec2wav',
     'w2mfcc', 'wav2mfcc', 'concat_mfcc', 'concat_mfcc_', 'concat_logspec',
@@ -73,18 +75,25 @@ def waveform_to_spectrogram(y: np.ndarray,
                             win_length: Optional[int] = None,
                             window: str = 'hamming',
                             desired_length: Optional[int] = None) -> np.ndarray:
-    """Waveform -> log-power spectrogram.
+    """Waveform -> log-power spectrogram ``(frames, bins)``, ``log10(|X|^2)``.
 
-    Parameters
-    ----------
-    y : waveform, shape ``(n,)``
-    sequence : return a 3-D time-series array ``(1, frames, dim)``
-    forward_backward : if > 0, stack that many context frames on each side
-        (zero-padded; see :func:`stack_context` for the standalone version)
-    norm : per-frequency-bin mean/std normalization
-    win_length : defaults to *n_fft*
-    desired_length : truncate the waveform to this many samples first
+    :param y: a mono waveform, shape ``(n,)``.
+    :param sequence: return ``(1, frames, dim)`` instead, for a sequence model.
+    :param forward_backward: stack this many context frames on each side,
+        zero-padded (:func:`stack_context` does the same for any feature).
+    :param norm: standardise each frequency bin over this clip.
+    :param hop_length: samples between frames.
+    :param n_fft: FFT size; there are ``n_fft // 2 + 1`` bins.
+    :param win_length: window length, defaulting to *n_fft*.
+    :param window: any window name librosa takes.
+    :param desired_length: cut the waveform to this many samples first.
+    :raises FeatureError: for anything but a 1-D waveform. A
+        ``(frames, channels)`` array would be read as one short frame per
+        sample, so pick a channel or mix down first.
     """
+    y = np.asarray(y)
+    if y.ndim != 1:
+        raise FeatureError(f"expected a mono waveform (n,), got shape {y.shape}")
     if desired_length and desired_length < len(y):
         y = y[:desired_length]
     D = librosa.stft(y, n_fft=n_fft, hop_length=hop_length,
@@ -104,8 +113,6 @@ def waveform_to_spectrogram(y: np.ndarray,
         Sxx_r = np.array(Sxx)
 
     if forward_backward:
-        # same zero-padded stacking as before, now sharing one implementation
-        # with the standalone stack_context()
         stacked = stack_context(Sxx_r.T, forward_backward, pad='zero')
         if sequence:
             return stacked.reshape(1, *stacked.shape)
@@ -122,18 +129,30 @@ def spectrogram_to_waveform(y: np.ndarray, enhanced_spec: np.ndarray,
                             n_fft: int = 512,
                             win_length: Optional[int] = None,
                             window: str = 'hamming') -> np.ndarray:
-    """Log-power spectrogram -> waveform, reusing the phase of reference *y*."""
+    """Log-power spectrogram -> waveform, reusing the phase of reference *y*.
+
+    *enhanced_spec* is ``(frames, bins)`` with one row per frame of *y*, the
+    shape :func:`waveform_to_spectrogram` gives for it. The result has exactly
+    ``len(y)`` samples.
+    """
     if sequence:
         enhanced_spec = enhanced_spec.squeeze()
-    D = librosa.stft(y.astype('float32'), hop_length=hop_length,
+    D = librosa.stft(np.asarray(y, dtype=np.float32), hop_length=hop_length,
                      n_fft=n_fft, win_length=win_length, window=window)
     D = D + _EPS
+    enhanced_spec = np.asarray(enhanced_spec)
+    if enhanced_spec.shape != D.T.shape:
+        raise FeatureError(
+            f"the spectrogram is {enhanced_spec.shape} but the reference gives "
+            f"{D.T.shape} (frames, bins): it needs one row per frame of the "
+            f"reference, with no context stacked and no window padding")
     phase = np.exp(1j * np.angle(D))
-    magnitude = np.sqrt(10 ** np.array(enhanced_spec)).T
+    magnitude = np.sqrt(10 ** enhanced_spec).T
     reverse = np.multiply(magnitude, phase)
-    result = librosa.istft(reverse, hop_length=hop_length,
-                           win_length=win_length, window=window)
-    return librosa.util.fix_length(result, size=len(y), mode='edge')
+    # length= has istft rebuild the last partial hop; trimming and padding
+    # afterwards repeated one sample over the last len(y) % hop_length
+    return librosa.istft(reverse, hop_length=hop_length, win_length=win_length,
+                         window=window, n_fft=n_fft, length=len(y))
 
 
 def file_to_spectrogram(file,
@@ -173,12 +192,17 @@ def mfcc(y: np.ndarray, sr: int, n_mfcc: int = 40) -> np.ndarray:
 def mfcc_from_files(wav_list: Sequence, n_mfcc: int = 40,
                     desired_samples: Optional[int] = None,
                     desired_length: Optional[int] = None) -> np.ndarray:
-    """Load each wave file and stack their MFCC matrices ``(n_files, frames, n_mfcc)``."""
+    """Load each wave file and stack their MFCC matrices ``(n_files, frames, n_mfcc)``.
+
+    :param desired_samples: cut each file to this many samples.
+    :param desired_length: cut each file to this many **seconds** (the
+        spectrogram functions' ``desired_length`` counts samples).
+    """
     mfcc_list = []
     for wav_dir in tqdm(wav_list, desc="[kudio] MFCC"):
         y, sr = file_load(wav_dir)
         if desired_length:
-            y = y[:sr * desired_length]
+            y = y[:int(round(sr * desired_length))]
         if desired_samples and desired_samples < len(y):
             y = y[:desired_samples]
         m = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc).T
@@ -210,34 +234,44 @@ def melspectrogram(source, n_mels: int = 64, n_frames: int = 5,
                    sr: Optional[int] = None) -> np.ndarray:
     """Audio -> stacked log-mel feature vectors ``(n_vectors, n_mels * n_frames)``.
 
-    *source* is a file path **or** a waveform array; arrays require *sr*, the
-    same way :func:`mfcc` does.
+    *source* is a file path **or** a waveform; a waveform requires *sr*, the
+    same way :func:`mfcc` does. With a path, *sr* resamples the file to that
+    rate, and leaving it out keeps the file's own.
+
+    The window is librosa's Hann, not the Hamming of :class:`STFT` and
+    :func:`waveform_to_spectrogram`.
 
     >>> feats = kudio.melspectrogram('clip.wav')            # doctest: +SKIP
     >>> feats = kudio.melspectrogram(y, sr=16000)           # doctest: +SKIP
     """
     dims = n_mels * n_frames
-    if isinstance(source, np.ndarray):
+    if isinstance(source, (str, os.PathLike)):
+        # sr used to be overwritten by the file's own rate without a word
+        y, sr = file_load(source, sr=sr, mono=True)
+    else:
         if sr is None:
             raise FeatureError("melspectrogram() needs sr= when given a waveform")
-        y = source
-    else:
-        y, sr = file_load(source, mono=True)
+        y = np.asarray(source, dtype=np.float32)
     mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft,
                                          hop_length=hop_length, n_mels=n_mels,
                                          power=power)
     log_mel = 20.0 / power * np.log10(np.maximum(mel, sys.float_info.epsilon))
     n_vectors = log_mel.shape[1] - n_frames + 1
     if n_vectors < 1:
-        return np.empty((0, dims))
-    vectors = np.zeros((n_vectors, dims))
+        return np.empty((0, dims), dtype=np.float32)
+    vectors = np.zeros((n_vectors, dims), dtype=np.float32)
     for t in range(n_frames):
         vectors[:, n_mels * t: n_mels * (t + 1)] = log_mel[:, t: t + n_vectors].T
     return vectors
 
 
 def denoise_wav2spec(waveform: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """Peak-normalized magnitude spectrogram + phase, for denoising models."""
+    """Peak-normalized magnitude spectrogram + phase, for denoising models.
+
+    The two come back in different layouts: the spectrogram as
+    ``(1, frames, bins)`` and the phase as ``(bins, frames)``, the way
+    :func:`denoise_spec2wav` takes them back.
+    """
     D = librosa.stft(waveform / np.max(np.abs(waveform)),
                      n_fft=512, hop_length=256, win_length=512, window='hann')
     D += np.finfo(float).eps
@@ -267,11 +301,12 @@ def stack_context(frames: np.ndarray, context: int,
 
     Works on *any* feature matrix — MFCC, mel, log-spectrogram — unlike the
     ``forward_backward`` argument of :func:`waveform_to_spectrogram`, which
-    only reaches the spectrogram it computes itself (and now delegates here).
+    only reaches the spectrogram it computes itself.
 
-    :param pad: ``'edge'`` repeats the first/last frame, ``'zero'`` pads with
-        silence. ``'zero'`` is what ``forward_backward`` has always done;
-        ``'edge'`` avoids inventing a spectral discontinuity at the boundary.
+    :param pad: ``'edge'`` repeats the first/last frame; ``'zero'`` pads with
+        zeros, which is what ``forward_backward`` uses. Zero is not silence: in
+        log10 power it is a power of 1, and after a :class:`Standardizer` it is
+        the mean frame. ``'edge'`` avoids inventing a step at the boundary.
 
     >>> stack_context(np.zeros((10, 40)), context=2).shape
     (10, 200)
@@ -282,7 +317,7 @@ def stack_context(frames: np.ndarray, context: int,
     if context < 0:
         raise FeatureError(f"context must be >= 0, got {context}")
     if context == 0:
-        return frames
+        return frames.copy()                   # never the caller's own array
     if pad not in ('edge', 'zero'):
         raise FeatureError(f"pad must be 'edge' or 'zero', got {pad!r}")
 
@@ -312,7 +347,8 @@ class ContextFrames:
 
     Row *i* is row *i* of ``np.vstack([stack_context(f, context, pad) for f in
     features])``, so a target built with ``np.vstack(targets)`` lines up with
-    it index for index.
+    it index for index. A single ``(frames, dim)`` matrix is one utterance; a
+    3-D array is read as a stack of them.
     """
 
     def __init__(self, utterances, context: int, pad: str = 'edge'):
@@ -346,6 +382,7 @@ class ContextFrames:
 
     @property
     def shape(self) -> Tuple[int, int]:
+        """``(rows, dim * (2 * context + 1))``, as ``np.vstack`` would give."""
         return len(self), self.dim * len(self._window)
 
     def __len__(self) -> int:
@@ -386,6 +423,9 @@ def frame_windows(frames: np.ndarray, n_frames: int,
         raise FeatureError(f"pad must be 'edge' or 'zero', got {pad!r}")
 
     n, dim = frames.shape
+    if n == 0:
+        raise FeatureError("there are no frames to cut into windows; a clip "
+                           "too short for its features gives an empty matrix")
     n_windows = max(1, int(np.ceil(n / n_frames)))
     missing = n_windows * n_frames - n
     if missing:
@@ -422,6 +462,8 @@ class Standardizer:
         return self.mean is not None and self.std is not None
 
     def fit(self, frames: np.ndarray) -> "Standardizer":
+        """Learn each column's mean and standard deviation from *frames*
+        ``(rows, dim)`` -- the training set, never the data it is applied to."""
         frames = np.asarray(frames, dtype=np.float32)
         if frames.ndim != 2:
             raise FeatureError(f"frames must be 2-D, got shape {frames.shape}")
@@ -430,6 +472,7 @@ class Standardizer:
         return self
 
     def transform(self, frames: np.ndarray) -> np.ndarray:
+        """``(frames - mean) / std``, column by column, as float32."""
         self._check()
         return ((np.asarray(frames, dtype=np.float32) - self.mean)
                 / self.std).astype(np.float32)
@@ -441,6 +484,7 @@ class Standardizer:
                 + self.mean).astype(np.float32)
 
     def fit_transform(self, frames: np.ndarray) -> np.ndarray:
+        """:meth:`fit` on *frames*, then :meth:`transform` them."""
         return self.fit(frames).transform(frames)
 
     def _check(self) -> None:
@@ -448,14 +492,25 @@ class Standardizer:
             raise FeatureError("Standardizer has not been fitted")
 
     def save(self, path) -> Path:
+        """Write the statistics to an ``.npz`` file and return its path.
+
+        numpy adds ``.npz`` to a name without it, so the path returned is the
+        file actually written: ``save('stats')`` returns ``stats.npz``.
+        """
         self._check()
         path = Path(path)
+        if path.suffix != '.npz':
+            path = path.parent / (path.name + '.npz')
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez(str(path), mean=self.mean, std=self.std)
         return path
 
     @classmethod
     def load(cls, path) -> "Standardizer":
+        """Read statistics :meth:`save` wrote. ``'stats'`` finds ``stats.npz``."""
+        path = Path(path)
+        if not path.exists() and path.suffix != '.npz':
+            path = path.parent / (path.name + '.npz')
         with np.load(str(path)) as data:
             return cls(mean=data['mean'], std=data['std'])
 

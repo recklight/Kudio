@@ -241,6 +241,24 @@ def test_the_docs_toolchain_is_declared_somewhere_pip_can_read_it():
     assert 'mkdocstrings' in docs, docs          # the plugin mkdocs.yml selects
 
 
+def test_the_docs_build_stays_on_mkdocs_1():
+    """MkDocs 2.0 drops the plugin system Material and mkdocstrings are built
+    on. Material 9 holds it back today; the cap in [docs] means the site does
+    not depend on that staying true."""
+    pins = [s.replace(' ', '') for s in _extras().get('docs', [])
+            if re.match(r'mkdocs\s*[<>=!~]', s)]
+    assert pins and '<2' in pins[0], f"[docs] lets pip install MkDocs 2: {pins}"
+
+
+def test_the_documentation_link_is_where_the_site_is_published():
+    """PyPI shows pyproject's Documentation URL; mkdocs.yml says which address
+    the site is built for. Two places naming one address have to agree."""
+    site_url = re.search(r'^site_url:\s*(\S+)\s*$', _read('mkdocs.yml'), re.M)
+    assert site_url, "mkdocs.yml has no site_url"
+    assert _urls().get('Documentation') == site_url.group(1), (
+        _urls().get('Documentation'), site_url.group(1))
+
+
 def test_ci_actions_are_off_the_deprecated_node_runtime():
     """checkout and setup-python below v7 run on Node 20, which is retired."""
     stale = re.findall(r'uses: *(actions/(?:checkout|setup-python)@v[1-6])\b',

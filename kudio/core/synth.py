@@ -101,61 +101,51 @@ def _file_seed(base: int, out, root) -> int:
 class Synthesizer:
     """Mix clean audio with noise at the requested SNRs.
 
-    Parameters
-    ----------
-    clean, noise :
-        Any input accepted by :func:`kudio.check_input` -- a directory, a
-        ``.wav`` file, a ``.txt`` manifest with one path per line, or a list
-        of those. A list is how a subset is synthesised without copying it
-        out first.
-    out_path :
-        Output directory for the mixed files (default ``mixed``). With
-        ``overwrite=True`` :meth:`syn` empties it first -- and refuses to when
-        it holds an input file, the working directory or the home directory.
-    snr_ratio :
-        One or more SNR values in dB.
-    rt60 :
-        One or more reverberation times in seconds. ``None`` (the default)
-        keeps the existing behaviour exactly -- no room, no change to the
-        output names, no change to what :meth:`syn` returns. Given, it becomes
-        a fourth axis: in ``inc`` mode the output count is multiplied by it.
-    drr_db :
-        Direct-to-reverberant ratio for the rooms, in dB. Distance in a
-        readable unit -- +10 and above is a close microphone, 0 is a metre or
-        two, negative is the far end of a hall.
-    channel :
-        A link for the finished mixture to travel down: a preset name
-        (``'telephone'``, ``'voip'``, ``'mu_law'``, ...), a dict of
-        :data:`kudio.CHANNEL_DEFAULTS`, or ``None`` for none. Constant across
-        the run -- see the module docstring on why it is not an axis. Packet
-        loss is seeded per output file, so a rerun drops the same packets.
-    write_targets :
-        Also write the reverberant-but-clean signal to a ``TARGETS``
-        directory beside the mixtures, and record it in :meth:`manifest`.
-        Only meaningful with ``rt60=``: with no room the clean file already
-        *is* that signal, and a copy of it would be a second name for one
-        file.
-    root :
-        The folder the clean files' layout is measured from; the output
-        mirrors that layout. Defaults to *clean* when it is a directory and
-        otherwise to the deepest folder the clean files share, so two talkers'
-        ``sx133.wav`` stay two files.
-    subtype :
-        How the files are written: ``'PCM_16'`` (the default), ``'PCM_24'``,
-        ``'FLOAT'``, ... A mixture is a sum and can land past full scale. A
-        fixed-point subtype clips it there, rounding to the nearest step, and
-        :meth:`syn` warns with the count -- the files are in :attr:`clipped`.
-        ``'FLOAT'`` keeps the samples as they are.
-
-    Examples
-    --------
     >>> syx = Synthesizer('data/train/clean', 'data/train/noise',
     ...                   out_path='data/train/mixed', snr_ratio=(-5, 0, 5))
-    >>> syn_list = syx.syn(mode='inc')          # 每筆 clean x noise x SNR
-    >>> syn_list = syx.syn(mode='reg')          # 輸出數量與 clean 相同
+    >>> syn_list = syx.syn(mode='inc')     # every clean x noise x SNR
+    >>> syn_list = syx.syn(mode='reg')     # one output per clean file
     >>> syn_list = syx.syn_extra_mode('data/backgroundnoise', background_snr=(5,))
 
     ``syn`` returns ``[(out_path, clean, noise, snr), ...]``.
+
+    :param clean: any input :func:`kudio.check_input` accepts -- a directory,
+        a ``.wav`` file, a ``.txt`` list with one path per line, or a list of
+        those. A list is how a subset is synthesised without copying it out
+        first.
+    :param noise: the same, for the noise.
+    :param out_path: output directory for the mixed files (default
+        ``mixed``). With ``overwrite=True`` :meth:`syn` empties it first, and
+        refuses to when it is the root of a filesystem or holds an input file,
+        the working directory or the home directory.
+    :param snr_ratio: one or more SNR values in dB.
+    :param rt60: one or more reverberation times in seconds. ``None`` (the
+        default) puts no room on the speech and leaves it out of the output
+        names. Several values are another axis: every output the mode would
+        write is written once per room, in ``reg`` mode as much as in ``inc``.
+    :param drr_db: direct-to-reverberant ratio for the rooms, in dB. Distance
+        in a readable unit -- +10 and above is a close microphone, 0 is a
+        metre or two, negative is the far end of a hall.
+    :param channel: a link for the finished mixture to travel down: a preset
+        name (``'telephone'``, ``'voip'``, ``'mu_law'``, ...), a dict of
+        :data:`kudio.CHANNEL_DEFAULTS`, or ``None`` for none. Constant across
+        the run -- see the module docstring on why it is not an axis. Packet
+        loss is seeded per output file, so a rerun drops the same packets.
+    :param write_targets: also write the reverberant-but-clean signal to a
+        ``TARGETS`` folder inside *out_path*, and record it in
+        :meth:`manifest`. Only meaningful with ``rt60=``: with no room the
+        clean file already *is* that signal. Anything that later collects
+        ``.wav`` files from *out_path* by folder collects these too.
+    :param root: the folder the clean files' layout is measured from; the
+        output mirrors that layout. Defaults to *clean* when it is a directory
+        and otherwise to the deepest folder the clean files share, so two
+        talkers' ``sx133.wav`` stay two files.
+    :param subtype: how the files are written: ``'PCM_16'`` (the default),
+        ``'PCM_24'``, ``'FLOAT'``, ... A mixture is a sum and can land past
+        full scale. A fixed-point subtype clips it there (every ``PCM_*`` width
+        rounded to its nearest step), and :meth:`syn` warns with the count --
+        the files are in :attr:`clipped`. ``'FLOAT'`` keeps the samples as
+        they are.
     """
 
     def __init__(self, clean, noise, out_path: str = '',
@@ -168,7 +158,7 @@ class Synthesizer:
                  subtype: str = 'PCM_16'):
         for what, given in (('clean', clean), ('noise', noise)):
             if isinstance(given, (str, PurePath)) and not Path(given).exists():
-                raise NotADirectoryError(f"{what} input not found: {str(given)!r}")
+                raise FileNotFoundError(f"{what} input not found: {str(given)!r}")
         self.cleanWaves, bad_clean = check_input(clean)
         self.noiseWaves, bad_noise = check_input(noise)
         if not self.cleanWaves:
@@ -315,7 +305,12 @@ class Synthesizer:
                 log.warning("Output path exists, overwriting -> %s", self.noisyDir)
                 shutil.rmtree(self.noisyDir)
             else:
-                log.warning("Output path exists -> %s, aborted", self.noisyDir)
+                # a warning rather than a log line: returning None from a
+                # call that looked like it ran is easy to miss
+                warnings.warn(f"{self.noisyDir} is not empty, so nothing was "
+                              f"synthesised. Pass overwrite=True to replace it, "
+                              f"or point out_path= somewhere else.",
+                              UserWarning, stacklevel=2)
                 return None
         self.noisyDir.mkdir(parents=True, exist_ok=True)
 
@@ -330,6 +325,10 @@ class Synthesizer:
         self.target_sr = target_sr
 
         # optionally sample N clean files at random
+        if rdn_choice_num > len(self.cleanWaves):
+            warnings.warn(f"rdn_choice_num={rdn_choice_num} asks for more clean "
+                          f"files than there are ({len(self.cleanWaves)}), so "
+                          f"all of them are used.", UserWarning, stacklevel=2)
         if len(self.cleanWaves) >= rdn_choice_num > 0:
             picks = rng.choice(len(self.cleanWaves), size=rdn_choice_num,
                                replace=False)
@@ -340,9 +339,13 @@ class Synthesizer:
         # optionally copy the raw clean files alongside the output
         if is_add_clean:
             dir_ = self.noisyDir / "RAW_DATA"
-            dir_.mkdir(parents=True, exist_ok=True)
             for cln in clnWaves:
-                shutil.copy(cln, dir_ / f"{cln.stem}_raw.wav")
+                # mirrored like the mixtures, or two talkers' sa1.wav would
+                # be one copy
+                where = dir_ / (_relative(cln, self.clean_root).parent
+                                if mkdir_parents else Path())
+                where.mkdir(parents=True, exist_ok=True)
+                shutil.copy(cln, where / f"{cln.stem}_raw.wav")
 
         clnLen, nosLen, snrLen = len(clnWaves), len(self.noiseWaves), len(self.snrRatio)
         log.info("Clean: %d, Noise: %d, SNR: %s", clnLen, nosLen, self.snrRatio)
@@ -356,8 +359,9 @@ class Synthesizer:
                 log.info("%d outputs hold %d of the %d noise x SNR combinations",
                          clnLen, clnLen, nosLen * snrLen)
         else:
-            log.info("%d noisy files from %d SNRs and %d noises",
-                     clnLen * nosLen * snrLen, snrLen, nosLen)
+            log.info("%d noisy files from %d SNRs, %d noises and %d room(s)",
+                     clnLen * nosLen * snrLen * max(1, len(self.rt60Ratio)),
+                     snrLen, nosLen, max(1, len(self.rt60Ratio)))
             clnWaves = [c for c in clnWaves for _ in range(nosLen * snrLen)]
             nosWaves = [n for n in self.noiseWaves for _ in range(snrLen)] * clnLen
             snrSeqs = list(self.snrRatio) * (clnLen * nosLen)
@@ -428,6 +432,7 @@ class Synthesizer:
                                       (file_seed * 2654435761) & 0x7FFFFFFF)
 
         self.synWavesList = entries
+        self._noise_only = silent
         peaks = self.__syn_pool(entries, is_pool=is_pool, subtype=self.subtype,
                                 seeds=seeds, silent=silent, rooms=self.rooms,
                                 channels=self.channels, targets=self.targets)
@@ -448,7 +453,9 @@ class Synthesizer:
         Each row is a file this run wrote and the clean signal it was built
         from. A clean file that lost its output name to another one is not
         here -- there is no mixture of it to point at -- and :meth:`syn` warns
-        when that happens.
+        when that happens. Nor are the noise-only files ``is_silence=True``
+        adds: there is no speech in them, so the clean file is not their
+        reference, and they are in what :meth:`syn` returns instead.
 
         >>> pairs = syx.manifest()                           # doctest: +SKIP
         >>> kudio.save_manifest("runs/exp/manifest.json", pairs)  # doctest: +SKIP
@@ -456,25 +463,35 @@ class Synthesizer:
         if not self.synWavesList:
             return []
         tag = self.channel_tag or None
-        return [Pair(noisy=str(out), clean=str(cln), noise=Path(nos).stem,
+        # forward slashes, as save_manifest writes them, so a manifest read
+        # back compares equal to the one that was saved
+        return [Pair(noisy=Path(out).as_posix(), clean=Path(cln).as_posix(),
+                     noise=Path(nos).stem,
                      snr_db=_snr_value(snr),
                      rt60=self.rooms.get(Path(out), (None,))[0],
                      channel=tag if Path(out) in self.channels else None,
-                     target=(str(self.targets[Path(out)])
+                     target=(self.targets[Path(out)].as_posix()
                              if Path(out) in self.targets else None))
-                for out, cln, nos, snr in self.synWavesList]
+                for out, cln, nos, snr in self.synWavesList
+                if Path(out) not in getattr(self, '_noise_only', ())]
 
     def syn_extra_mode(self, background_path='../data/backgroundnoise',
                        background_snr: Union[float, Sequence[float]] = (5,),
-                       seed: Optional[int] = None) -> list:
+                       seed: Optional[int] = None,
+                       is_pool: bool = True) -> list:
         """Two-stage mixing: noise x background first, then everything x clean.
 
         Stage one mixes every noise with every background at *background_snr*
         in a temporary folder. Stage two mixes every clean file with each of
         those mixtures, noises and backgrounds at every SNR, and writes a 2%
         share again as noise alone. The output folder is emptied first, under
-        the same guard as :meth:`syn`; *seed* is as there. Rooms and the link
-        are not applied in this mode.
+        the same guard as :meth:`syn`; *seed* is as there. Rooms, the link
+        and resampling are not applied in this mode, and the output is written
+        flat, one folder for everything.
+
+        :param is_pool: write stage two through a process pool once it holds
+            more than 200 files. A pool needs the calling script's top level
+            behind ``if __name__ == '__main__':`` on Windows and macOS.
         """
         if isinstance(background_snr, str):
             raise TypeError("background_snr can't be str")
@@ -492,6 +509,8 @@ class Synthesizer:
         base = self._base_seed(seed)
         rng = np.random.default_rng(base)
         self.rooms, self.channels, self.targets = {}, {}, {}
+        # no resampling in this mode, whatever an earlier syn() asked for
+        self.target_sr = None
         cleanWaves = self.cleanWaves
         for cln in cleanWaves:
             shutil.copy(cln, self.noisyDir / f"{cln.stem}_n0{cln.suffix}")
@@ -527,10 +546,12 @@ class Synthesizer:
                             in zip(fullCleanWaves, fullNoiseWaves, fullSnrSequence)]
             entries = list(zip(fullOutPaths, fullCleanWaves, fullNoiseWaves,
                                fullSnrSequence))
-            extra = self._silence_share(entries, rng, 0.02)
+            self._warn_collisions([out for out, *_ in entries], False)
+            extra = self._silence_share(entries, rng, 0.02, flat=True)
             entries += extra
             self.synWavesList = entries
-            peaks = self.__syn_pool(entries, is_pool=True, subtype=self.subtype,
+            self._noise_only = {out for out, *_ in extra}
+            peaks = self.__syn_pool(entries, is_pool=is_pool, subtype=self.subtype,
                                     seeds=self._seeds(entries, base, self.noisyDir),
                                     silent={out for out, *_ in extra})
         message = self._clipping(entries, peaks)
@@ -554,15 +575,17 @@ class Synthesizer:
         return {Path(out): _file_seed(base, out, root) for out, *_ in entries}
 
     @staticmethod
-    def _silence_share(entries: list, rng, p_silence: float) -> list:
+    def _silence_share(entries: list, rng, p_silence: float,
+                       flat: bool = False) -> list:
         """A *p_silence* share of *entries* again, to be written as noise alone.
 
         The name follows the same ``clean_noise_snr`` shape as every other
-        output, with ``n00`` standing in for the SNR. It used to join the two
-        stems with nothing between them, which made ``ab`` + ``c`` and ``a`` +
-        ``bc`` one file.
+        output, with ``n00`` standing in for the SNR, so ``ab`` + ``c`` and
+        ``a`` + ``bc`` stay two files. At least one is written: asked for, a
+        share that rounds to none on a small run is a share nobody gets.
         """
-        n = min(len(entries), int(round(len(entries) * p_silence)))
+        n = min(len(entries), max(1, int(round(len(entries) * p_silence)))) \
+            if entries else 0
         chosen: Dict[tuple, tuple] = {}
         for k in rng.choice(len(entries), size=n, replace=False):
             out, cln, nos, _ = entries[k]
@@ -583,11 +606,14 @@ class Synthesizer:
                    if len(found) > 1}
         if clashes:
             first = next(iter(clashes))
+            advice = ("Give the inputs distinct stems: this mode writes "
+                      "everything into one folder." if flat else
+                      "Keep mkdir_parents on so the folder layout separates "
+                      "them, or give the inputs distinct stems.")
             warnings.warn(
                 f"{sum(len(v) - 1 for v in clashes.values())} noise-only "
                 f"file(s) share a name with another and only one of each is "
-                f"written, e.g. {first}. Keep mkdir_parents on so the folder "
-                f"layout separates them, or give the inputs distinct stems.",
+                f"written, e.g. {first}. {advice}",
                 UserWarning, stacklevel=3)
         return [found[0] for found in by_path.values()]
 
@@ -767,7 +793,13 @@ class Synthesizer:
             peak = float(np.max(np.abs(y_clean))) if y_clean.size else 0.0
             save_wave(target_path, y_clean, int(sr_clean), subtype=subtype)
 
-        clean_pwr = np.sum(np.abs(y_clean) ** 2) / len(y_clean)
+        clean_pwr = np.sum(np.abs(y_clean) ** 2) / len(y_clean) if len(y_clean) else 0.0
+        if not clean_pwr > 0.0:
+            # the noise is scaled against the speech, so silent speech made a
+            # silent mixture: a file of zeros labelled with an SNR
+            raise SynthesisError(
+                f"clean file has no signal to set an SNR against: {clean_file}. "
+                f"It is empty or digital silence. Drop it from the clean set.")
         if len(y_noise) < len(y_clean):
             repeats = len(y_clean) // len(y_noise) + 1
             y_noise = np.tile(y_noise, repeats)[:len(y_clean)]

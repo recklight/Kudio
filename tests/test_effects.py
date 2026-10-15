@@ -75,11 +75,22 @@ def test_reverb():
 
 def test_spec_augment_masks():
     y = _tone()
-    spec = waveform_to_spectrogram(y)          # (freq, time)
-    masked = spec_augment(spec, freq_mask_width=5, time_mask_width=5, seed=0)
+    spec = waveform_to_spectrogram(y)          # (frames, bins), like every kudio spectrogram
+    masked = spec_augment(spec, n_freq_masks=0, time_mask_width=5, seed=0)
     assert masked.shape == spec.shape
-    # at least some values were zeroed
-    assert np.count_nonzero(masked == 0.0) >= np.count_nonzero(spec == 0.0)
+    rows = np.flatnonzero(np.any(masked != spec, axis=1))
+    assert rows.size and np.all(masked[rows] == masked[rows][0, 0]), "a time mask blanks whole frames"
+    masked = spec_augment(spec, n_time_masks=0, freq_mask_width=5, seed=0)
+    cols = np.flatnonzero(np.any(masked != spec, axis=0))
+    assert cols.size and cols.max() - cols.min() < 5, "a frequency mask blanks a few bins"
+
+
+def test_spec_augment_masks_with_the_mean_by_default():
+    """0 is a power of 1 on log10 power: louder than most of what it hides."""
+    spec = waveform_to_spectrogram(_tone())
+    masked = spec_augment(spec, n_freq_masks=0, time_mask_width=5, seed=0)
+    hidden = masked[np.any(masked != spec, axis=1)]
+    assert np.allclose(hidden, np.mean(spec))
 
 
 # -- normalisation --------------------------------------------------------------
@@ -131,3 +142,67 @@ def test_normalize_db_rejects_positive_dbfs():
 
     with pytest.raises(ValueError, match="dbfs must be <= 0"):
         normalize_db(np.ones(4, dtype=np.float32), dbfs=3.0)
+
+
+# -- channels last and integer audio -------------------------------------------
+
+SR_ = 16000
+
+
+def _stereo():
+    t = np.arange(SR_) / SR_
+    left = np.sin(2 * np.pi * 220 * t) * np.r_[np.zeros(4000), np.ones(8000), np.zeros(4000)]
+    return np.stack([0.5 * left, 0.25 * left], axis=1).astype(np.float32)
+
+
+def test_filters_work_along_the_frames_of_a_stereo_clip():
+    import kudio
+    st = _stereo()
+    out = kudio.highpass(st, SR_, cutoff=1000)
+    assert out.shape == st.shape
+    assert np.allclose(out[:, 1], kudio.highpass(st[:, 1], SR_, cutoff=1000), atol=1e-6)
+    causal = kudio.highpass(st, SR_, cutoff=1000, zero_phase=False)
+    assert np.allclose(causal[:, 0], kudio.highpass(st[:, 0], SR_, cutoff=1000, zero_phase=False), atol=1e-6)
+
+
+def test_trim_and_split_work_along_the_frames_and_copy():
+    import kudio
+    st = _stereo()
+    clip, (a, b) = kudio.trim_silence(st, top_db=30)
+    # librosa trims in 2048-sample frames, so the edges land within one of the tone
+    assert clip.shape[1] == 2 and 2000 < a <= 4000 and 12000 <= b < 14100
+    clip[:] = 0
+    assert np.any(st != 0), "the trimmed clip is a copy"
+    pieces = kudio.split_on_silence(st, top_db=30)
+    assert len(pieces) == 1 and pieces[0].shape[1] == 2
+
+
+def test_time_stretch_and_pitch_shift_keep_the_channels():
+    import kudio
+    st = _stereo()
+    assert kudio.time_stretch(st, 2.0).shape == (8000, 2)
+    assert kudio.pitch_shift(st, SR_, 2).shape == st.shape
+    assert kudio.reverb(st, SR_).shape == st.shape
+
+
+def test_integer_audio_is_rounded_and_clipped_not_wrapped():
+    import kudio
+    y = np.array([20000, -20000, 100], dtype=np.int16)
+    assert kudio.gain(y, 6.0).tolist() == [32767, -32768, 200]
+    loud = kudio.normalize(y, peak=0.5)
+    assert loud.dtype == np.int16 and np.max(np.abs(loud)) == 16384
+
+
+def test_noise_with_nothing_in_it_is_refused():
+    import kudio
+    from kudio.exceptions import FeatureError
+    y = _tone()
+    for noise in (np.zeros(1000), np.full(1000, 0.3, dtype=np.float32)):
+        with pytest.raises(FeatureError, match="no variation"):
+            kudio.add_noise_snr(y, noise, snr_db=5, seed=0)
+
+
+def test_splice_of_one_part_is_a_copy():
+    import kudio
+    y = _tone()
+    assert kudio.splice([y], 16000) is not y

@@ -45,7 +45,8 @@ dependencies = [
 [project.optional-dependencies]
 audio = ["PyAudio>=0.2.13", "sounddevice>=0.4.5"]     # live capture / playback
 # bss_eval_sources, which `sdr` calls, is deprecated in mir_eval 0.8 and
-# removed in 0.9, so the upper bound is load-bearing rather than caution.
+# announced for removal in 0.9, so the upper bound is load-bearing rather than
+# caution.
 eval = ["mir_eval>=0.7,<0.9", "pystoi>=0.3.3"]  # STOI / SDR (PESQ: see [pesq])
 # PESQ (ITU-T P.862 / P.862.2). PyPI carries `pesq` as source only, so this
 # compiles it: it needs a C compiler -- the MSVC Build Tools on Windows. That
@@ -65,10 +66,11 @@ dev = ["pytest>=7.0", "kudio[data]"]   # [data] lets the full test suite run
 # meter against someone else's. Separate from [dev] because [dev] has to stay
 # small enough to install anywhere, while CI can afford this.
 check = ["pyloudnorm>=0.1"]
-# The toolchain mkdocs.yml needs. The floors are not feature requirements --
-# the options that file sets are all older than these -- they just stop pip
-# reaching back years when it resolves on an old interpreter.
-docs = ["mkdocs>=1.5", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.25"]
+# The toolchain mkdocs.yml needs. MkDocs stays below 2.0, which drops the
+# plugin system Material and mkdocstrings are built on. mkdocstrings-python 2.0
+# is a real floor: it brings the griffe that tools/docs/griffe_markdown.py hooks
+# into. ruff is only there so mkdocstrings can wrap long signatures.
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings>=1.0", "mkdocstrings-python>=2.0", "ruff"]
 
 [project.scripts]
 kudio = "kudio.cli:main"
@@ -81,6 +83,7 @@ Issues = "https://github.com/recklight/kudio/issues"
 # /blob/main/ link is a 404 that PyPI then publishes for good. Anything added
 # below that names a branch names master too.
 Changelog = "https://github.com/recklight/kudio/blob/master/CHANGELOG.md"
+Documentation = "https://recklight.github.io/Kudio/"
 
 [tool.setuptools]
 include-package-data = true

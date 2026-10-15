@@ -11,8 +11,11 @@ This decides per frame instead, on three cheap signals:
 
 * **level against the recording's own noise floor**, rather than against a
   fixed threshold, so it adapts to how noisy the file happens to be;
-* **spectral flatness** — speech is harmonic and therefore peaky, steady noise
-  is flat. This is what separates "a loud fan" from "a quiet voice";
+* **spectral flatness** — speech is harmonic and therefore peaky, broadband
+  noise is flat. This is what separates "a loud hiss" from "a quiet voice".
+  Flatness is taken over the whole band, so noise confined to part of it (a
+  hum, a rumble, a fan with a strong tone) is peaky too and can pass as voice
+  on this test alone;
 * **zero-crossing rate**, which keeps the unvoiced fricatives (*s*, *f*, *sh*)
   that carry almost no energy and would otherwise be cut off the ends of words
   — but only where they sit **next to** something voiced, because on its own a
@@ -43,11 +46,15 @@ log = logging.getLogger(__name__)
 
 #: Analysis frame / hop in seconds. 30 ms sits inside a single phoneme.
 FRAME = 0.030
+#: Seconds between frames.
 HOP = 0.010
 
 #: How far above the estimated noise floor a frame has to be, in dB.
 THRESHOLD_DB = 8.0
-#: Spectral flatness above this is noise-like, not voice. 1.0 is white noise.
+#: Spectral flatness above this is noise-like, not voice. A perfectly even
+#: spectrum is 1.0; white noise on these 30 ms frames measures about 0.56,
+#: because one frame's spectrum is not flat, and noise confined to a band
+#: measures lower still.
 FLATNESS_MAX = 0.40
 #: A frame this far under the loudest one is silence whatever else says.
 FLOOR_REL_DB = 45.0
@@ -211,9 +218,10 @@ def vad_frames(y: np.ndarray, sr: int, *, hop_length: int = 256,
     """:func:`vad` as one decision per STFT frame, ``True`` for speech.
 
     A frame is speech when its centre falls inside a span :func:`vad` found.
-    The frames are the ones :func:`kudio.waveform_to_spectrogram` and
-    :class:`kudio.STFT` make with the same *hop_length*, *n_fft* and *center*,
-    so the mask indexes their rows directly::
+    With the default ``center=True`` the frames are the ones
+    :func:`kudio.waveform_to_spectrogram` and :class:`kudio.STFT` make with
+    the same *hop_length*, both of which centre their frames, so the mask
+    indexes their rows directly; *n_fft* only matters with ``center=False``::
 
         >>> spec = kudio.waveform_to_spectrogram(y)       # (frames, bins)
         >>> speech = kudio.vad_frames(y, sr)              # (frames,) bool
@@ -248,8 +256,10 @@ def vad_frames(y: np.ndarray, sr: int, *, hop_length: int = 256,
 def speech_ratio(y: np.ndarray, sr: int, **kwargs) -> float:
     """Fraction of the clip that :func:`vad` calls speech, in ``[0, 1]``.
 
-    Useful as a dataset filter: a "speech" file at 0.02 is a mislabelled
-    recording of a room.
+    Useful as a dataset filter: a "speech" file at 0.02 is usually a
+    mislabelled recording of a room. The floor :func:`vad` measures against
+    comes from the quietest 15% of the clip, though, so a clip cut tight
+    around speech, with no room tone left in it, reads near 0 as well.
     """
     y = np.asarray(y)
     if y.size == 0:

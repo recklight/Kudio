@@ -176,7 +176,7 @@ def splice(parts, sr: int, duration: float = DEFAULT_CROSSFADE,
     usable = [np.asarray(p) for p in parts if np.asarray(p).size]
     if not usable:
         return np.zeros(0, dtype=np.float32)
-    merged = usable[0]
+    merged = usable[0].copy()                  # never hand back the caller's array
     for part in usable[1:]:
         merged = crossfade(merged, part, sr, duration, shape)
     return merged

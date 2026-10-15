@@ -15,9 +15,11 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 import numpy as np
+import soundfile as sf
 
 from kudio.core.buffer import AudioBuffer
 from kudio.core.io import check_file
+from kudio.exceptions import DependencyError, DeviceError
 from kudio.util.check import CheckDevice
 
 __all__ = [
@@ -45,19 +47,19 @@ def record(seconds: float, sr: int = 16000, channels: int = 1,
     :func:`kudio.list_devices`, not from :class:`kudio.CheckDevice`, which
     numbers devices through PyAudio for the streaming classes.
     """
-    try:
-        import sounddevice as sd
-    except ImportError as e:
-        from kudio.exceptions import DependencyError
-        raise DependencyError('sounddevice', extra='audio') from e
+    from kudio.util.check import _sounddevice
+    sd = _sounddevice()
     frames = int(seconds * sr)
     data = sd.rec(frames, samplerate=sr, channels=channels,
                   dtype='float32', device=device)
     sd.wait()
     return data.squeeze()
 
-# stable PortAudio format codes (== pyaudio.paFloat32 / pyaudio.paInt16)
+#: PortAudio's code for 32-bit float samples (``pyaudio.paFloat32``), for
+#: ``LocalStreamReader(wav_format=...)``.
 PA_FLOAT32 = 1
+#: PortAudio's code for 16-bit integer samples (``pyaudio.paInt16``), the
+#: default ``wav_format``.
 PA_INT16 = 8
 
 
@@ -66,9 +68,9 @@ def _pyaudio():
         import pyaudio
         return pyaudio
     except ImportError as e:
-        raise ImportError(
-            "PyAudio is required for audio streaming: pip install kudio[audio]"
-        ) from e
+        # a DependencyError like every other extra, so `except
+        # kudio.KudioError` catches it too; it is still an ImportError
+        raise DependencyError('PyAudio', extra='audio') from e
 
 
 def wave_decode(in_data: bytes, channels: int) -> np.ndarray:
@@ -86,9 +88,24 @@ def wave_encode(signal: np.ndarray) -> bytes:
 def play_audio(wav, rate: Optional[int] = None, channels: int = 1):
     """Play audio from a file path, an opened ``wave.Wave_read``, or an ndarray.
 
-    ndarray input must be int16 or float32; *rate* is required in that case.
-    Returns an error message string on failure, else ``None``.
+    ndarray input must be int16 or float32; *rate* is required in that case,
+    and a ``(frames, channels)`` array plays on as many channels. A path is
+    read with soundfile, so any format :func:`kudio.file_load` reads plays.
+    Returns an error message string when the audio cannot be played, else
+    ``None``.
+
+    :raises DependencyError: when neither sounddevice nor PyAudio is there.
     """
+    if isinstance(wav, (str, Path)):
+        if not Path(wav).is_file():
+            return "input file can't be played"
+        try:
+            data, file_rate = sf.read(str(wav), dtype='float32', always_2d=False)
+        except Exception as e:                                # noqa: BLE001
+            log.error("play_audio: %s", e)
+            return "input file can't be played"
+        return play_audio(data, file_rate)
+
     if isinstance(wav, np.ndarray):
         if wav.dtype not in (np.int16, np.float32):
             log.error("play_audio: unsupported dtype %s", wav.dtype)
@@ -103,7 +120,11 @@ def play_audio(wav, rate: Optional[int] = None, channels: int = 1):
         pya = pyaudio.PyAudio()
         try:
             fmt = pyaudio.paInt16 if wav.dtype == np.int16 else pyaudio.paFloat32
-            stream = pya.open(format=fmt, channels=channels, rate=rate, output=True)
+            # the array's own channel count, as sounddevice uses it: a stereo
+            # array opened as one channel played at half speed
+            n_channels = wav.shape[1] if wav.ndim == 2 else channels
+            stream = pya.open(format=fmt, channels=n_channels, rate=rate,
+                              output=True)
             stream.write(wav.tobytes())
             stream.stop_stream()
             stream.close()
@@ -114,16 +135,15 @@ def play_audio(wav, rate: Optional[int] = None, channels: int = 1):
         finally:
             pya.terminate()
 
-    if isinstance(wav, (str, Path)):
-        if not Path(wav).is_file():
-            return "input file can't be played"
-        wav = wave.open(str(wav), "rb")
-
     if isinstance(wav, wave.Wave_read):
         pyaudio = _pyaudio()
         pya = pyaudio.PyAudio()
         try:
-            stream = pya.open(format=pya.get_format_from_width(wav.getsampwidth()),
+            # `wave` only reads integer PCM, but PyAudio maps a 4-byte width
+            # to float32, which played a PCM_32 file as noise
+            width = wav.getsampwidth()
+            fmt = pyaudio.paInt32 if width == 4 else pya.get_format_from_width(width)
+            stream = pya.open(format=fmt,
                               channels=wav.getnchannels(),
                               rate=wav.getframerate(),
                               output=True)
@@ -215,9 +235,14 @@ class Recorder:
             rate = self.rate
             if resample is not None and resample != self.rate:
                 import scipy.signal
+                # from the frames actually captured: the take is a whole
+                # number of buffers, so it is never quite record_times long,
+                # and stretching it to that length moved every pitch
+                frames = len(data) // self.channels
+                target = int(round(frames * resample / self.rate))
                 data = scipy.signal.resample(
-                    data, resample * self.record_times * self.channels)
-                data = np.clip(data, np.iinfo(np.int16).min,
+                    data.reshape(frames, self.channels), target, axis=0).reshape(-1)
+                data = np.clip(np.round(data), np.iinfo(np.int16).min,
                                np.iinfo(np.int16).max).astype(np.int16)
                 rate = resample
             with wave.open(file_dir, 'wb') as wf:
@@ -275,14 +300,20 @@ class RemoteStreamReader(threading.Thread):
         self.sk.send(input_data.encode("utf-8"))
         data = self.sk.recv(recv_buffer_size)
         try:
-            log.info("Stream: %s", data.decode('utf-8'))
-            return None
+            text = data.decode('utf-8')
         except UnicodeDecodeError:
-            while len(data) < recv_buffer_size:
-                data += self.sk.recv(recv_buffer_size)
-            waves = np.frombuffer(data, dtype=np.int16)
-            log.info("Stream: wave shape %s", waves.shape)
-            return waves
+            text = None
+        # printable text is a reply; anything else is audio. A silent reply,
+        # all zero bytes, decodes as UTF-8 too, and used to be taken for text
+        if text is not None and text.strip() and \
+                all(c.isprintable() or c.isspace() for c in text):
+            log.info("Stream: %s", text)
+            return None
+        while len(data) < recv_buffer_size:
+            data += self.sk.recv(recv_buffer_size - len(data))
+        waves = np.frombuffer(data, dtype=np.int16)
+        log.info("Stream: wave shape %s", waves.shape)
+        return waves
 
     def initialize_params(self, frame_size: int = 2048,
                           wav_format: str = '16bit') -> None:
@@ -305,17 +336,30 @@ class RemoteStreamReader(threading.Thread):
             log.info("Stream: play stream opened")
 
     def run(self) -> None:
+        if getattr(self, 'receive_buffer_size_', None) is None or self.sk is None:
+            # recv(None) raised inside a loop that swallowed it, so starting
+            # without either of these spun a core at 100% forever
+            log.error("Stream: call connect_remote_device() and "
+                      "initialize_params() before start()")
+            return
         self.isReceiving.set()
         while self.isReceiving.is_set():
             try:
                 data = self.sk.recv(self.receive_buffer_size_)
                 cnt = 0
-                while len(data) < self.receive_buffer_size_:
+                while data and len(data) < self.receive_buffer_size_:
                     cnt += 1
-                    data += self.sk.recv(self.receive_buffer_size_)
+                    # only the rest of this frame: asking for a whole frame
+                    # again ran into the next one and threw both away
+                    data += self.sk.recv(self.receive_buffer_size_ - len(data))
                     if cnt > self.break_count:
                         log.warning("Stream: auto break by break_count")
                         self.terminate()
+                        break
+                if not data:
+                    log.warning("Stream: the server closed the connection")
+                    self.isReceiving.clear()
+                    break
 
                 if len(data) != self.receive_buffer_size_:
                     log.warning("Stream: unexpected data size (%d)", len(data))
@@ -325,8 +369,12 @@ class RemoteStreamReader(threading.Thread):
 
                 if self.isPlaying.is_set():
                     self.play_stream.write(data)
-            except Exception:
-                pass
+            except socket.timeout:
+                continue                    # nothing arrived for 5 s; keep waiting
+            except OSError as e:
+                log.warning("Stream: %s", e)
+                self.isReceiving.clear()
+                break
         log.info("Stream: stopped receiving")
 
     def terminate(self) -> None:
@@ -404,6 +452,9 @@ class LocalStreamReader:
                    channels: int = 1, frame_size: int = 2048,
                    wav_format: int = PA_INT16) -> bool:
         pyaudio = _pyaudio()
+        if self.p is not None:
+            # a retry used to leave the previous PortAudio instance running
+            self.p.terminate()
         self.p = pyaudio.PyAudio()
         try:
             with CheckDevice() as check:
@@ -413,6 +464,8 @@ class LocalStreamReader:
             # no usable input device yet — stay uninitialized so the caller can
             # retry later (see get_status()) instead of crashing at construction
             log.warning("Stream: no input device available (%s)", e)
+            self.p.terminate()
+            self.p = None
             self.isInitial.clear()
             return False
 
@@ -458,8 +511,9 @@ class LocalStreamReader:
                 try:
                     self.on_frame(data)
                 except Exception:
-                    # an exception here would silently kill the audio thread
-                    # and the stream would just stop delivering
+                    # caught here so one bad frame costs one frame: PyAudio
+                    # would print the traceback and stop calling back, and
+                    # the take would end without anyone stopping it
                     log.exception("Stream: on_frame callback raised")
         return in_data, pyaudio.paContinue
 
@@ -491,6 +545,7 @@ class LocalStreamReader:
             log.info("Stream: recording stream stopped")
         if self.p is not None:
             self.p.terminate()
+            self.p = None
 
 
 class StreamRecorder:
@@ -521,7 +576,9 @@ class StreamRecorder:
         """
         :param device: **PyAudio** input index (:class:`kudio.CheckDevice`),
             not a sounddevice one — the two number devices independently.
-        :param sr: sample rate; the device default when omitted.
+        :param sr: sample rate. Omitted, the first of 16000, 22050 and 44100
+            the device accepts, and its own default only when none of them
+            opens.
         :param max_seconds: hard cap on the take, so a recorder left running
             cannot fill memory. ``None`` removes the cap.
         :param monitor: echo the input to the default output while recording.
@@ -536,6 +593,7 @@ class StreamRecorder:
         self._max_seconds = max_seconds
         self._monitor = monitor
 
+        self._stream_args = (device, sr, self._channels, frame_size, PA_FLOAT32)
         self._reader = LocalStreamReader(
             device=device, rate=sr, channels=self._channels,
             frame_size=frame_size, wav_format=PA_FLOAT32,
@@ -588,6 +646,11 @@ class StreamRecorder:
         """Open the stream and begin capturing. Idempotent."""
         if self.recording:
             return self
+        if not self._reader.get_status():
+            # stop() closes PortAudio; opening it again is what lets one
+            # recorder take a second take instead of failing on a dead handle
+            if not self._reader.set_stream(*self._stream_args):
+                raise DeviceError("no input device could be opened")
         if self._monitor:
             self._reader.play_audio()
         self._reader.stream_start()

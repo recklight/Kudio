@@ -167,7 +167,7 @@ def test_a_whole_spectrogram_method_is_refused():
     with pytest.raises(FeatureError) as excinfo:
         kudio.StreamEnhancer(SR, 'specsub')
     message = str(excinfo.value)
-    assert "cannot run on a stream" in message
+    assert "does not run on a stream" in message
     assert "spectral_enhance" in message          # ...and where it does work
 
 
@@ -182,7 +182,7 @@ def test_make_noise_tracker_refuses_quantile():
 
 
 def test_an_unknown_method_or_parameter_is_refused():
-    with pytest.raises(FeatureError, match="cannot run on a stream"):
+    with pytest.raises(FeatureError, match="does not run on a stream"):
         kudio.StreamEnhancer(SR, 'telepathy')
     with pytest.raises(FeatureError, match="does not take"):
         kudio.StreamEnhancer(SR, 'wiener', q=0.4)
@@ -223,3 +223,10 @@ def test_the_two_paths_share_the_a_priori_snr_estimator(noisy_and_clean):
 def test_make_gain_rule_refuses_a_non_recursive_method():
     with pytest.raises(FeatureError, match="not a per-frame gain rule"):
         kudio.make_gain_rule('spectral_gate')
+
+
+def test_a_stereo_block_is_refused():
+    """reshape(-1) used to read it as one interleaved signal."""
+    enhancer = kudio.StreamEnhancer(16000)
+    with pytest.raises(FeatureError, match="mono"):
+        enhancer.process(np.zeros((1024, 2)))

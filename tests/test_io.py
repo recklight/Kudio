@@ -218,9 +218,11 @@ def test_audio_info_measures_the_peak(wav_file):
 
 
 def test_audio_info_can_skip_the_samples(wav_file):
-    """peak=False never touches the data, so it stays instant on a big file."""
+    """peak=False never touches the data, so it stays instant on a big file.
+    The peak it did not measure is None: a 0.0 there read as digital silence."""
     info = kudio.audio_info(wav_file, peak=False)
-    assert info.peak == 0.0
+    assert info.peak is None
+    assert "not measured" in str(info)
     assert info.duration == pytest.approx(1.0)
 
 
@@ -505,29 +507,184 @@ def test_save_wave_names_the_file_and_the_count(tmp_path, sine):
     assert "3 of" in message
 
 
-def test_file_load_says_so_when_a_file_holds_nan(tmp_path, caplog):
+def test_file_load_says_so_when_a_file_holds_nan(tmp_path):
     """Loading one is allowed -- you may be reading it to repair it -- but it
-    is the last place anything can be said about it."""
+    is the last place anything can be said about it, so it is a warning that
+    shows without any logging set up."""
     path = tmp_path / "take.wav"
     _write_non_finite(path)
 
-    with caplog.at_level(logging.WARNING, logger="kudio.core.io"):
+    with pytest.warns(UserWarning, match="not finite") as caught:
         y, _ = file_load(path)
 
     assert np.count_nonzero(~np.isfinite(y)) == 10, "the samples come back as they are"
-    assert "not finite" in caplog.text
-    assert "take.wav" in caplog.text
+    assert "take.wav" in str(caught[0].message)
 
 
-def test_audio_info_does_not_report_a_nan_file_as_silent(tmp_path, caplog):
+def test_audio_info_does_not_report_a_nan_file_as_silent(tmp_path):
     """``max(0.0, nan)`` keeps the 0.0, so the peak of a 0.3 tone with ten NaN
     samples in it was reported as digital silence."""
     path = tmp_path / "take.wav"
     _write_non_finite(path)
 
-    with caplog.at_level(logging.WARNING, logger="kudio.core.io"):
+    with pytest.warns(UserWarning, match="not finite"):
         info = kudio.audio_info(path)
 
     assert not np.isfinite(info.peak), "there is no largest sample here"
     assert info.frames == 16000, "the header is still readable"
-    assert "not finite" in caplog.text
+
+
+# -- channels last, integer types, every PCM width -----------------------------
+
+def _stereo(sr=16000, seconds=1.0):
+    t = np.arange(int(sr * seconds)) / sr
+    return np.stack([0.5 * np.sin(2 * np.pi * 220 * t),
+                     0.25 * np.sin(2 * np.pi * 330 * t)], axis=1).astype(np.float32)
+
+
+def test_resample_runs_along_the_frames_of_a_stereo_clip():
+    """librosa resamples its last axis, which on (frames, channels) is the
+    channel axis: a (16000, 2) clip used to come back (16000, 1)."""
+    out = kudio.resample(_stereo(), 16000, 8000)
+    assert out.shape == (8000, 2)
+    assert np.max(np.abs(out[:, 1])) == pytest.approx(0.25, abs=0.01), "channels kept apart"
+
+
+def test_resample_rounds_integer_audio_instead_of_truncating():
+    y = np.round(10000 * np.sin(2 * np.pi * 50 * np.arange(800) / 8000)).astype(np.int16)
+    out = kudio.resample(y, 8000, 16000)
+    assert out.dtype == np.int16
+    import librosa
+    exact = librosa.resample(y.astype(np.float32), orig_sr=8000, target_sr=16000,
+                             res_type='soxr_hq')
+    assert np.array_equal(out, np.round(exact).astype(np.int16))
+
+
+def test_save_wave_resamples_a_stereo_clip_along_its_frames(tmp_path):
+    path = tmp_path / "st.wav"
+    save_wave(path, _stereo(), 16000, d_sample=8000)
+    info = sf.info(str(path))
+    assert (info.channels, info.frames, info.samplerate) == (2, 8000, 8000)
+
+
+@pytest.mark.parametrize("dtype, value, expected", [
+    (np.int16, 16384, 0.5),
+    (np.int32, 2 ** 30, 0.5),
+    (np.uint8, 192, 0.5),
+    (np.uint8, 128, 0.0),
+])
+def test_save_wave_scales_each_integer_type_by_its_own_full_scale(tmp_path, dtype, value, expected):
+    """Every integer type used to be divided by 32768: half-scale int32 came
+    out clipped at full scale and uint8 200 as 0.006."""
+    path = tmp_path / "int.wav"
+    save_wave(path, np.full(100, value, dtype=dtype), 16000, subtype='FLOAT')
+    y, _ = sf.read(str(path))
+    assert y[0] == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize("subtype, bits", [("PCM_24", 24), ("PCM_U8", 8), ("PCM_32", 32)])
+def test_every_pcm_width_is_rounded_not_floored(tmp_path, subtype, bits):
+    """Only PCM_16 used to be rounded here; PCM_24 and PCM_U8 went through
+    libsndfile's flooring and averaged a third and a half of a step low."""
+    # float32, which is what save_wave works in below DOUBLE
+    y = np.random.default_rng(0).uniform(-0.9, 0.9, 20000).astype(np.float32)
+    path = tmp_path / f"{subtype}.wav"
+    save_wave(path, y, 16000, subtype=subtype)
+    back, _ = sf.read(str(path), dtype='float64')
+    step = 2.0 ** -(bits - 1)
+    error = back - y.astype(np.float64)
+    assert abs(np.mean(error)) < 0.05 * step
+    assert np.max(np.abs(error)) <= 0.5 * step + 1e-12
+
+
+def test_double_keeps_float64(tmp_path):
+    path = tmp_path / "d.wav"
+    save_wave(path, np.full(10, 0.1, dtype=np.float64), 16000, subtype='DOUBLE')
+    y, _ = sf.read(str(path), dtype='float64')
+    assert y[0] == 0.1
+
+
+def test_a_refused_write_leaves_no_folder_behind(tmp_path):
+    target = tmp_path / "new" / "sub" / "x.wav"
+    with pytest.raises(AudioIOError):
+        save_wave(target, np.array([0.0, np.nan]), 16000)
+    assert not (tmp_path / "new").exists()
+
+
+def test_a_bad_rate_is_a_bad_call_not_a_bad_file(wav_file):
+    with pytest.raises(ValueError, match="positive rate"):
+        file_load(wav_file, sr=0)
+
+
+def test_check_input_ignores_the_case_of_the_suffix(tmp_path, sine):
+    folder = tmp_path / "rec"
+    folder.mkdir()
+    sf.write(str(folder / "ZOOM0001.WAV"), sine, 16000)
+    sf.write(str(folder / "b.wav"), sine, 16000)
+    found, _ = check_input(folder)
+    assert sorted(p.name for p in found) == ["ZOOM0001.WAV", "b.wav"]
+    found, rejected = check_input(str(folder / "ZOOM0001.WAV"))
+    assert len(found) == 1 and not rejected
+    # and what check_input finds, load_waves loads
+    assert len(load_waves(folder)) == 2
+
+
+def test_a_list_is_read_as_utf8(tmp_path, sine):
+    folder = tmp_path / "錄音"
+    folder.mkdir()
+    sf.write(str(folder / "一.wav"), sine, 16000)
+    listing = tmp_path / "list.txt"
+    listing.write_bytes(("﻿" + str(folder / "一.wav") + "\n").encode("utf-8"))
+    found, rejected = check_input(listing)
+    assert [p.name for p in found] == ["一.wav"] and not rejected
+
+
+def test_check_file_takes_a_trailing_separator_as_a_folder(tmp_path):
+    out = check_file(str(tmp_path / "newdir") + "/")
+    assert Path(out) == tmp_path / "newdir" / "unknown.wav"
+
+
+def test_convert_folder_counts_what_it_could_not_use(tmp_path, sine):
+    good = tmp_path / "a.wav"
+    sf.write(str(good), sine, 16000)
+    result = kudio.convert_folder([good, tmp_path / "typo.wav"], tmp_path / "out")
+    assert (result.written, result.total, len(result.failed)) == (1, 2, 1)
+    assert "not an existing .wav file" in result.failed[0][1]
+
+
+def test_convert_folder_does_not_feed_on_its_own_output(tmp_path, sine):
+    src = tmp_path / "src"
+    src.mkdir()
+    sf.write(str(src / "a.wav"), sine, 16000)
+    for _ in range(2):
+        result = kudio.convert_folder(src, src / "out", overwrite=True)
+        assert result.total == 1
+    assert not (src / "out" / "out").exists()
+
+
+def test_an_empty_file_is_not_blamed_on_trimming(tmp_path):
+    empty = tmp_path / "empty.wav"
+    sf.write(str(empty), np.zeros(0), 16000)
+    result = kudio.convert_folder(empty, tmp_path / "out")
+    assert "no samples" in result.failed[0][1]
+
+
+def test_copy_waves_keeps_two_files_of_one_name(tmp_path, sine):
+    for talker in ("a", "b"):
+        (tmp_path / talker).mkdir()
+        sf.write(str(tmp_path / talker / "sx133.wav"), sine, 16000)
+    copied = copy_waves(tmp_path / "flat", [tmp_path / "a", tmp_path / "b"])
+    assert sorted(p.name for p in copied) == ["sx133.wav", "sx1332.wav"]
+
+
+def test_load_waves_says_when_there_was_nothing_to_load(tmp_path):
+    with pytest.raises(AudioIOError, match="no audio files"):
+        load_waves(tmp_path, std_len=True)
+
+
+def test_audio_info_treats_an_array_like_a_file():
+    y = 0.3 * np.ones(100)
+    assert kudio.audio_info(y, sr=16000, peak=False).peak is None
+    y[5] = np.inf
+    with pytest.warns(UserWarning, match="not finite"):
+        assert np.isnan(kudio.audio_info(y, sr=16000).peak)

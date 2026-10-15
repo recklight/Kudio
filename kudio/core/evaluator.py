@@ -9,10 +9,12 @@ The SNR family (:func:`snr`, :func:`si_sdr`, :func:`segmental_snr`,
 
 **Which PESQ.** ITU-T P.862 scores narrowband speech and P.862.2 wideband, and
 each can be reported raw or mapped to MOS-LQO. They are different numbers for
-one file: a raw narrowband 2.0 is a MOS-LQO of about 1.6. Speech-enhancement
-papers that just say "PESQ" usually mean the raw narrowband score, which is
-what the ITU reference binary prints. :func:`pesq` takes the bandwidth and the
-scale as arguments rather than picking one silently.
+one file: a raw narrowband 2.0 is a MOS-LQO of about 1.6. Papers that just
+say "PESQ" do not agree on which they mean -- some quote the raw narrowband
+score the ITU reference binary prints, and much VoiceBank-DEMAND work reports
+wideband MOS-LQO from the ``pesq`` package -- so read how a paper scored before
+comparing with it. :func:`pesq` takes the bandwidth and the scale as arguments
+rather than picking one silently.
 """
 from __future__ import annotations
 
@@ -71,6 +73,13 @@ def _align(ref: np.ndarray, deg: np.ndarray, *,
     :param names: what to call the two in the message -- file paths where the
         caller has them, otherwise the argument names.
     """
+    ref, deg = np.asarray(ref), np.asarray(deg)
+    if ref.ndim != 1 or deg.ndim != 1:
+        # a (frames, channels) pair used to give some metrics a number over
+        # both channels at once and others numpy's own shape error
+        raise ValueError(f"the metrics compare mono signals, got shapes "
+                         f"{ref.shape} and {deg.shape}: score one channel at a "
+                         f"time, or mix down first")
     n = min(len(ref), len(deg))
     longest = max(len(ref), len(deg))
     if longest != n:
@@ -135,8 +144,11 @@ def sdi(ref: np.ndarray, deg: np.ndarray) -> float:
     """Speech distortion index: ``sum((ref - deg)**2) / sum(ref**2)``.
 
     0 is a perfect copy and 1 is as much error as there is speech; lower is
-    better. It is :func:`snr` on a linear scale, ``10 ** (-snr / 10)``, under
-    the name the enhancement literature reports it by.
+    better. It is :func:`snr` on a linear scale, ``10 ** (-snr / 10)``: the
+    error energy of the whole output against the clean signal. The
+    speech-distortion index of the noise-reduction literature (Chen, Benesty,
+    Huang and Doclo, 2006) is taken differently, on the clean speech passed
+    through the filter alone, so the two are not the same number.
     """
     ref, deg = _align(ref, deg)
     return float(np.sum((ref - deg) ** 2) / (np.sum(ref ** 2) + 1e-12))
@@ -172,7 +184,7 @@ def pesq(ref: np.ndarray, deg: np.ndarray, sr: int, *, mode: str = 'auto',
     """PESQ of *deg* against *ref* (ITU-T P.862 / P.862.2).
 
     >>> kudio.pesq(clean, enhanced, 16000)                          # WB MOS-LQO
-    >>> kudio.pesq(clean, enhanced, 16000, mode='nb', scale='raw')  # papers
+    >>> kudio.pesq(clean, enhanced, 16000, mode='nb', scale='raw')  # raw P.862
 
     :param mode: ``'nb'`` -- P.862 narrowband, at 8 or 16 kHz. ``'wb'`` --
         P.862.2 wideband, 16 kHz only. ``'auto'`` (default) -- wideband at
@@ -181,10 +193,13 @@ def pesq(ref: np.ndarray, deg: np.ndarray, sr: int, *, mode: str = 'auto',
     :param scale: ``'lqo'`` (default) -- MOS-LQO, the mapped score both
         standards define. ``'raw'`` -- the narrowband P.862 score before the
         P.862.1 mapping, -0.5 to 4.5: the number the ITU reference binary
-        prints, and the one most enhancement papers mean by PESQ.
+        prints.
     :raises ValueError: off 8 / 16 kHz, or for a combination the standards
         do not define (wideband at 8 kHz, a raw wideband score).
     :raises DependencyError: without the ``pesq`` package (``kudio[pesq]``).
+
+    The pair is checked for length like every other metric here: a mismatch
+    warns, and past :data:`MAX_LENGTH_MISMATCH` it is refused.
 
     Runs on the ``pesq`` package from PyPI, which returns MOS-LQO; the raw
     score is that inverted through P.862.1,
@@ -195,8 +210,8 @@ def pesq(ref: np.ndarray, deg: np.ndarray, sr: int, *, mode: str = 'auto',
         from pesq import pesq as _pesq
     except ImportError as e:
         raise DependencyError('pesq', extra='pesq') from e
-    ref = np.asarray(ref, dtype=np.float64).squeeze()
-    deg = np.asarray(deg, dtype=np.float64).squeeze()
+    ref, deg = _align(np.asarray(ref, dtype=np.float64).squeeze(),
+                      np.asarray(deg, dtype=np.float64).squeeze())
     lqo = float(_pesq(int(sr), ref, deg, mode))
     if scale == 'lqo':
         return lqo
@@ -214,6 +229,10 @@ _BACKEND = {'pesq': ('pesq', 'pesq'), 'stoi': ('pystoi', 'eval'),
             'estoi': ('pystoi', 'eval'), 'sdr': ('mir_eval', 'eval')}
 
 
+#: what pystoi returns instead of a score when a clip is too short for it
+_STOI_TOO_SHORT = 1e-5 + 1e-12
+
+
 def _compute(name: str, ref: np.ndarray, deg: np.ndarray, sr: int,
              pesq_mode: str = 'auto', pesq_scale: str = 'lqo') -> float:
     """One metric on two already-aligned signals."""
@@ -229,11 +248,26 @@ def _compute(name: str, ref: np.ndarray, deg: np.ndarray, sr: int,
         return pesq(ref, deg, sr, mode=pesq_mode, scale=pesq_scale)
     if name in ('stoi', 'estoi'):
         from pystoi import stoi
-        return float(stoi(ref, deg, sr, extended=(name == 'estoi')))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            value = float(stoi(ref, deg, sr, extended=(name == 'estoi')))
+        if value <= _STOI_TOO_SHORT:
+            # pystoi's answer when under 30 frames survive its silence removal
+            # (about 0.4 s): a placeholder, not a score, and averaged into a
+            # mean it reads as the worst intelligibility there is
+            warnings.warn(f"{name.upper()} needs about 0.4 s of speech after "
+                          f"silence is removed and got less; scored nan",
+                          UserWarning, stacklevel=3)
+            return float('nan')
+        return value
     if name == 'sdr':
         import mir_eval
-        value, *_ = mir_eval.separation.bss_eval_sources(
-            ref.reshape(1, -1), deg.reshape(1, -1))
+        with warnings.catch_warnings():
+            # mir_eval 0.8 warns that bss_eval_sources is going; [eval] pins
+            # mir_eval below 0.9, so there is nothing for a caller to change
+            warnings.simplefilter("ignore", FutureWarning)
+            value, *_ = mir_eval.separation.bss_eval_sources(
+                ref.reshape(1, -1), deg.reshape(1, -1))
         return float(value[0])
     raise ValueError(f"unknown metric {name!r}; choose from {METRICS}")
 
@@ -313,11 +347,9 @@ _COLUMNS = {'PESQ': 'pesq', 'STOI': 'stoi', 'SDR': 'sdr'}
 class AudioEvaluate:
     """Evaluate enhanced audio against clean references.
 
-    Usage
-    -----
     >>> audio_eval = AudioEvaluate(clean_list, noisy_list)
     >>> audio_eval.eval('ddae', enhanced_list)
-    >>> df = audio_eval.get_df()       # pandas.DataFrame（含 Baseline 列）
+    >>> df = audio_eval.get_df()       # pandas.DataFrame, with a Baseline row
     >>> per = audio_eval.per_file()    # one row per method x file
 
     File lists must be aligned: ``clean_list[i]`` / ``noisy_list[i]`` /
@@ -327,8 +359,11 @@ class AudioEvaluate:
 
     :param pesq_mode, pesq_scale: as in :func:`kudio.pesq`. The defaults keep
         what this class has always reported, MOS-LQO and wideband at 16 kHz;
-        ``pesq_mode='nb', pesq_scale='raw'`` is the raw P.862 score most
-        enhancement papers quote.
+        ``pesq_mode='nb', pesq_scale='raw'`` is the raw P.862 score.
+
+    A file that cannot be scored -- unreadable, at another rate, too far from
+    its reference in length -- gets nan in every column and a warning naming
+    it, and the rest of the list is still scored.
 
     :meth:`get_df` has the means. :meth:`per_file` has every file, so a result
     can be broken down by noise, SNR or talker: join it to a
@@ -385,9 +420,13 @@ class AudioEvaluate:
             setattr(self, f"base_{column.lower()}", base)
 
     def get_df(self):
-        """Return the collected scores (plus a Baseline row) as a DataFrame."""
-        if self.base_pesq is None and self.base_stoi is None and self.base_sdr is None:
-            return []
+        """Return the collected scores (plus a Baseline row) as a DataFrame.
+
+        Before anything has been scored the DataFrame is empty, with the
+        columns it will have, rather than a list.
+        """
+        if not self.score_dict['Enh_method']:
+            return _pandas().DataFrame(columns=list(self.score_dict))
         table = {key: list(values) for key, values in self.score_dict.items()}
         table['Enh_method'].append('Baseline')
         if self.base_pesq is not None:
@@ -418,14 +457,22 @@ class AudioEvaluate:
         for cln, noy, deg in tqdm(zip(self.clean_list, self.noisy_list, files),
                                   total=len(self.clean_list),
                                   desc=f"[kudio] Scoring {method}"):
-            ref, sr = file_load(cln)
-            out, sr_deg = file_load(deg)
-            if sr_deg != sr:
-                raise ValueError(f"{deg} is at {sr_deg} Hz and its reference "
-                                 f"{cln} at {sr} Hz; resample one of them")
-            ref, out = _align(ref, out, names=(str(cln), str(deg)))
             row = {'method': method, 'clean': str(cln), 'noisy': str(noy),
                    'file': str(deg)}
+            try:
+                ref, sr = file_load(cln)
+                out, sr_deg = file_load(deg)
+                if sr_deg != sr:
+                    raise ValueError(f"{deg} is at {sr_deg} Hz and its "
+                                     f"reference {cln} at {sr} Hz; resample "
+                                     f"one of them")
+                ref, out = _align(ref, out, names=(str(cln), str(deg)))
+            except Exception as e:                          # noqa: BLE001
+                # one bad file used to abort a run after every file before it
+                # had been scored
+                warnings.warn(f"{deg} was not scored: {e}", UserWarning, stacklevel=3)
+                rows.append({**row, **{column: float('nan') for column in columns}})
+                continue
             for column in columns:
                 try:
                     row[column] = _compute(_COLUMNS[column], ref, out, sr,
@@ -500,15 +547,13 @@ def eval_metrics(rate: int, ref: np.ndarray, deg: np.ndarray, *,
 
     Returns ``(pesq, stoi, sdr)`` -- always three values, whatever is
     installed. A metric comes back as ``None`` when its back-end is not
-    installed, when it cannot run on this pair -- PESQ off 8 and 16 kHz -- or
-    when it fails on it, which is logged.
+    installed, when it cannot run on this pair -- PESQ off 8 and 16 kHz, STOI
+    on less than about 0.4 s of speech -- or when it fails on it, which is
+    logged.
 
     :param pesq_mode: ``'nb'``, ``'wb'`` or ``'auto'`` (by sample rate).
     :param pesq_scale: ``'lqo'`` for MOS-LQO, or ``'raw'`` for the narrowband
-        P.862 score most enhancement papers quote. The defaults are what kudio
-        has always reported, so an existing caller's numbers do not move --
-        but a caller that wants the scale the literature uses can now say so,
-        which before 3.7.1 only :func:`pesq` and :func:`score` could.
+        P.862 score. The defaults are what kudio has always reported.
     """
     pesq_status, stoi_status, sdr_status = check_metrics_install()
     ref, deg = _align(np.asarray(ref).squeeze(), np.asarray(deg).squeeze())
@@ -521,6 +566,8 @@ def eval_metrics(rate: int, ref: np.ndarray, deg: np.ndarray, *,
             try:
                 value = _compute(name, ref, deg, int(rate),
                                  pesq_mode=pesq_mode, pesq_scale=pesq_scale)
+                if value is not None and np.isnan(value):
+                    value = None            # STOI on a clip too short for it
             except Exception as e:                          # noqa: BLE001
                 log.warning("%s could not be computed: %s", name.upper(), e)
         values.append(value)

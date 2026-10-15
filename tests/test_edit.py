@@ -156,8 +156,16 @@ def test_causal_filtering_is_available(two_tones):
 
 
 def test_cutoff_above_nyquist_is_rejected(two_tones):
+    """A high-pass there would remove everything, so it is a mistake."""
     with pytest.raises(FeatureError, match="Nyquist"):
-        kudio.lowpass(two_tones, SR, cutoff=SR)
+        kudio.highpass(two_tones, SR, cutoff=SR)
+
+
+def test_a_lowpass_above_nyquist_has_nothing_to_remove(two_tones):
+    """It used to be refused, which made the 8 kHz default fail at 16 kHz."""
+    out = kudio.lowpass(two_tones, SR, cutoff=SR)
+    assert np.array_equal(out, two_tones) and out is not two_tones
+    assert np.array_equal(kudio.lowpass(two_tones, 16000), two_tones)
 
 
 def test_band_cutoffs_must_be_ordered(two_tones):

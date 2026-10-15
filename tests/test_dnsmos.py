@@ -151,3 +151,29 @@ def test_rejects_stereo_and_empty_audio():
                      session=StubSession())
     with pytest.raises(FeatureError, match="empty"):
         kudio.dnsmos(np.zeros(0, dtype=np.float32), SR, session=StubSession())
+
+
+class _Alternating(StubSession):
+    """Two windows that disagree, so the order of mean and mapping shows."""
+
+    def __init__(self):
+        super().__init__()
+        self._outputs = [(1.0, 1.0, 1.0), (4.0, 4.0, 4.0)]
+
+    def run(self, outputs, feed):
+        self.calls.append(feed["input_1"].shape)
+        return [np.array([self._outputs[(len(self.calls) - 1) % 2]], dtype=np.float32)]
+
+
+def test_each_window_is_mapped_before_the_mean():
+    """DNS-Challenge's dnsmos_local.py maps every window and then averages;
+    with a quadratic mapping the other order is a different number."""
+    score = kudio.dnsmos(_noise(10.01), SR, session=_Alternating())
+    expected = (np.polyval(POLYFIT["ovrl"], 1.0) + np.polyval(POLYFIT["ovrl"], 4.0)) / 2
+    assert score.ovrl == pytest.approx(expected)
+
+
+def test_the_p808_model_is_not_taken_for_the_p835_one(tmp_path):
+    (tmp_path / "model_v8.onnx").write_bytes(b"")
+    with pytest.raises(FeatureError, match="not found"):
+        kudio.find_dnsmos_model(tmp_path)

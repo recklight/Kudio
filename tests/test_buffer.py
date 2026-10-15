@@ -141,3 +141,29 @@ def test_fetch_buffer_says_why_a_second_capture_is_refused():
         fetch.get_data(5, timeout=0.1)
     with pytest.raises(RuntimeError, match="once per instance"):
         fetch.get_data(5, timeout=0.1)
+
+
+# -- frame counts and timeouts -------------------------------------------------
+
+@pytest.mark.parametrize("count", [2.5, "3", True])
+def test_a_frame_count_that_is_not_whole_is_refused(count):
+    """int() used to truncate 2.5 to 2 and accept the string '3'."""
+    with pytest.raises(TypeError, match="whole number"):
+        AudioBuffer(size=2).get_fixed_size_data(count, timeout=0.01)
+
+
+def test_a_timed_out_capture_leaves_nothing_behind():
+    """The timed-out thread used to stay waiting on the buffer and take the
+    frames of the next capture."""
+    buf = AudioBuffer(size=8)
+    with pytest.raises(TimeoutError):
+        FetchBuffer(buf).get_data(5, timeout=0.05)
+
+    def producer():
+        for i in range(3):
+            time.sleep(0.01)
+            buf.add(np.full(4, i))
+
+    threading.Thread(target=producer, daemon=True).start()
+    data = FetchBuffer(buf).get_data(3, timeout=2)
+    np.testing.assert_array_equal(data, np.repeat([0, 1, 2], 4))

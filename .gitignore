@@ -30,3 +30,6 @@ models/
 
 # Internal dev notes (not published)
 docs/V3_CHANGES.md
+
+# mkdocs build output
+site/

@@ -57,6 +57,9 @@ def band_filter(y: np.ndarray, sr: int, cutoff, btype: str = 'highpass',
     :param order: filter order. Zero-phase filtering applies it twice, so the
         effective roll-off is ``2 * order``.
     :param zero_phase: forwards-and-backwards (no delay) when True.
+
+    A ``(frames, channels)`` array is filtered along its frames, each channel
+    on its own.
     """
     if btype not in _BTYPES:
         raise FeatureError(f"btype must be one of {_BTYPES}, got {btype!r}")
@@ -65,12 +68,16 @@ def band_filter(y: np.ndarray, sr: int, cutoff, btype: str = 'highpass',
 
     wn = _check_cutoff(cutoff, sr, btype)
     y = np.asarray(y)
+    if y.ndim > 2:
+        raise FeatureError(f"expected (frames,) or (frames, channels), got shape {y.shape}")
     if y.size == 0:
         return y.copy()
 
+    # axis=0 throughout: scipy filters the last axis by default, which on a
+    # channels-last array is the channel axis
     sos = butter(order, wn, btype=btype, fs=sr, output='sos')
     if not zero_phase:
-        return np.asarray(sosfilt(sos, y), dtype=y.dtype)
+        return np.asarray(sosfilt(sos, y, axis=0), dtype=y.dtype)
 
     # sosfiltfilt reflects the signal at both ends by 3 * n_sections * 2
     # samples; a clip shorter than that cannot be padded and scipy raises.
@@ -79,7 +86,7 @@ def band_filter(y: np.ndarray, sr: int, cutoff, btype: str = 'highpass',
     if padlen < 1:
         raise FeatureError(
             f"clip is too short to filter ({y.shape[0]} samples)")
-    return np.asarray(sosfiltfilt(sos, y, padlen=padlen), dtype=y.dtype)
+    return np.asarray(sosfiltfilt(sos, y, axis=0, padlen=padlen), dtype=y.dtype)
 
 
 def highpass(y: np.ndarray, sr: int, cutoff: float = 80.0, order: int = 4,
@@ -94,7 +101,14 @@ def highpass(y: np.ndarray, sr: int, cutoff: float = 80.0, order: int = 4,
 def lowpass(y: np.ndarray, sr: int, cutoff: float = 8000.0, order: int = 4,
             zero_phase: bool = True) -> np.ndarray:
     """Remove everything above *cutoff* Hz — hiss, and anything past the band
-    a downstream model was trained on."""
+    a downstream model was trained on.
+
+    A *cutoff* at or above Nyquist leaves nothing to remove, so the clip comes
+    back unchanged (a copy). That is also what the 8 kHz default does to audio
+    at 16 kHz and below.
+    """
+    if not isinstance(cutoff, (tuple, list)) and cutoff >= sr / 2.0:
+        return np.array(y, copy=True)
     return band_filter(y, sr, cutoff, 'lowpass', order, zero_phase)
 
 

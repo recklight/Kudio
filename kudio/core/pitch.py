@@ -24,9 +24,10 @@ much of the clip had one at all.
 The estimator is **pYIN** (Mauch & Dixon 2014), librosa's implementation: YIN
 with a probabilistic voicing decision resolved by a hidden Markov model over
 the whole clip, rather than a per-frame threshold. That last part is why it
-costs what it costs -- roughly a second of compute per ten seconds of audio at
-16 kHz -- and why it does not flicker between voiced and unvoiced twice per
-syllable the way a thresholded estimator does.
+costs more than plain YIN -- about a quarter of a second per ten seconds of
+16 kHz audio on a laptop, once librosa has warmed up -- and why it does not
+flicker between voiced and unvoiced twice per syllable the way a thresholded
+estimator does.
 
 **Defaults are speech.** ``fmin=65`` to ``fmax=400`` Hz covers a low male
 voice through a high female one. Music, children and singing all want a wider
@@ -49,6 +50,7 @@ log = logging.getLogger(__name__)
 
 #: Default search range, in Hz: a low male voice to a high female one.
 SPEECH_FMIN = 65.0
+#: Top of the default search range, in Hz: a high female voice.
 SPEECH_FMAX = 400.0
 
 
@@ -175,7 +177,7 @@ class PitchTrack:
 
 
 def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
-       fmax: float = SPEECH_FMAX, frame_length: int = 2048,
+       fmax: float = SPEECH_FMAX, frame_length: Optional[int] = None,
        hop_length: Optional[int] = None,
        center: bool = True) -> PitchTrack:
     """Track the fundamental frequency of *y* with pYIN.
@@ -183,8 +185,10 @@ def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
     :param fmin: bottom of the search range, in Hz. Nothing below it is
         found; a voice below it is reported as something wrong above it.
     :param fmax: top of the search range.
-    :param frame_length: analysis window. Must hold at least two periods of
+    :param frame_length: analysis window. Must hold more than two periods of
         *fmin*, so a low *fmin* needs a long window -- checked, not assumed.
+        Omitted, it is 2048 samples, or the next power of two that is long
+        enough when 2048 is not: 4096 at 88.2 and 96 kHz.
     :param hop_length: samples between frames; 10 ms when omitted, which is
         the usual resolution for a pitch contour.
     :param center: frames centred on their time stamp, so :attr:`times` lines
@@ -195,7 +199,14 @@ def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
     >>> track.median_hz                                    # doctest: +SKIP
     124.7
     """
-    y = np.asarray(y, dtype=np.float32).reshape(-1)
+    y = np.asarray(y, dtype=np.float32)
+    if y.ndim > 1 and y.shape[1] == 1:
+        y = y[:, 0]
+    if y.ndim != 1:
+        # reshape(-1) used to read a stereo clip as one interleaved signal at
+        # half its pitch: fan.wav came back at 65 Hz instead of 126
+        raise FeatureError(f"f0 takes mono audio, got shape {y.shape}; pass "
+                           f"one channel or mix down first")
     sr = int(sr)
     if sr <= 0:
         raise FeatureError(f"f0 needs a positive rate, got {sr}")
@@ -208,10 +219,13 @@ def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
             f"survived sampling.")
     hop = int(hop_length) if hop_length else max(1, sr // 100)
     # pYIN correlates a frame against itself one period later, so the frame
-    # has to be at least two periods of the lowest pitch it is asked for.
-    # Getting this wrong silently returns "unvoiced everywhere", which reads
-    # as "this recording has no pitch" rather than as a settings mistake.
-    needed = int(np.ceil(2 * sr / fmin))
+    # has to hold more than two periods of the lowest pitch it is asked for
+    # (librosa wants sr / fmin < frame_length // 2). Short of that, the
+    # pitches whose periods do not fit are lost and the rest look fine, which
+    # reads as "nothing down there" rather than as a settings mistake.
+    needed = 2 * int(np.floor(sr / fmin)) + 2
+    if frame_length is None:
+        frame_length = max(2048, 1 << int(np.ceil(np.log2(needed))))
     if frame_length < needed:
         raise FeatureError(
             f"frame_length={frame_length} is too short for fmin={fmin:g} Hz at "

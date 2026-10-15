@@ -222,3 +222,19 @@ def test_a_raising_callback_does_not_kill_the_audio_thread(monkeypatch):
     data, flag = reader._callback(np.zeros(8, dtype=np.float32).tobytes(),
                                   8, None, None)
     assert flag == 0
+
+
+def test_no_playback_backend_is_a_dependency_error(monkeypatch):
+    """A plain ImportError used to escape `except kudio.KudioError`."""
+    import builtins
+    import kudio
+    real_import = builtins.__import__
+
+    def without_audio(name, *args, **kwargs):
+        if name in ("sounddevice", "pyaudio"):
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_audio)
+    with pytest.raises(kudio.DependencyError, match="audio"):
+        kudio.play_audio(np.zeros(160, dtype=np.float32), 16000)

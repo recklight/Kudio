@@ -28,6 +28,7 @@ Needs ``pip install kudio[dnsmos]`` for onnxruntime.
 from __future__ import annotations
 
 import logging
+import warnings
 import os
 from dataclasses import dataclass
 from pathlib import Path, PurePath
@@ -49,9 +50,12 @@ MODEL_SR = 16000
 SEGMENT_SECONDS = 9.01
 HOP_SECONDS = 1.0
 
-#: File names used by the DNS-Challenge distribution.
-MODEL_NAMES = ("sig_bak_ovr.onnx", "model_v8.onnx")
-#: Where people usually leave a checkout, tried in order.
+#: The P.835 model's file name in the DNS-Challenge distribution. The
+#: ``model_v8.onnx`` beside it is the P.808 model, which gives one score, not
+#: three, and is not looked for.
+MODEL_NAMES = ("sig_bak_ovr.onnx",)
+#: The environment variable :func:`find_dnsmos_model` reads when no
+#: *model_dir* is given: the folder holding the model, or the model itself.
 ENV_VAR = "KUDIO_DNSMOS_DIR"
 
 #: Published P.835 mapping from the network's raw outputs onto the MOS scale
@@ -124,7 +128,10 @@ def find_dnsmos_model(model_dir: Optional[PathLike] = None) -> Path:
                 found = path / name
                 if found.is_file():
                     return found
-            deeper = sorted(path.rglob("sig_bak_ovr.onnx"))
+            # the personalised model in pDNSMOS/ shares the file name but not
+            # the mapping, so the plain one comes first when both are there
+            deeper = sorted(path.rglob("sig_bak_ovr.onnx"),
+                            key=lambda p: ("pDNSMOS" in p.parts, str(p)))
             if deeper:
                 return deeper[0]
     raise FeatureError(
@@ -204,6 +211,11 @@ def dnsmos(y: np.ndarray, sr: int, model_dir: Optional[PathLike] = None, *,
     coefficients = dict(POLYFIT)
     if session is None:
         model_path = find_dnsmos_model(model_dir)
+        if "pDNSMOS" in model_path.parts:
+            warnings.warn(f"{model_path} is the personalised DNSMOS model, which "
+                          f"the published mapping kudio applies was not fitted "
+                          f"for; pass polyfit=False for its raw outputs, or a "
+                          f"polyfit.json beside it", UserWarning, stacklevel=2)
         session = _session(model_path)
         coefficients = _load_polyfit(model_path)
 
@@ -216,10 +228,13 @@ def dnsmos(y: np.ndarray, sr: int, model_dir: Optional[PathLike] = None, *,
     if not raw:                                  # unreachable: _segments tiles
         raise FeatureError("dnsmos() produced no windows")
 
-    sig, bak, ovrl = np.mean(np.vstack(raw), axis=0)
+    windows = np.vstack(raw)
     if polyfit:
-        sig = float(np.polyval(coefficients["sig"], sig))
-        bak = float(np.polyval(coefficients["bak"], bak))
-        ovrl = float(np.polyval(coefficients["ovrl"], ovrl))
+        # each window mapped, then the mean: the order DNS-Challenge's own
+        # dnsmos_local.py uses, and with a quadratic the two orders differ
+        windows = np.column_stack([
+            np.polyval(coefficients[key], windows[:, i])
+            for i, key in enumerate(("sig", "bak", "ovrl"))])
+    sig, bak, ovrl = np.mean(windows, axis=0)
     return DnsmosScore(sig=float(sig), bak=float(bak), ovrl=float(ovrl),
                        segments=len(raw))

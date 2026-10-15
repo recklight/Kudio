@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """Line two recordings up before measuring one against the other.
 
-Every reference metric in kudio -- :func:`kudio.si_sdr`, :func:`kudio.snr`,
-:func:`kudio.segmental_snr`, PESQ, STOI -- compares sample *i* of one signal
-with sample *i* of the other. They trim to the shorter of the two and assume
-the rest lines up, which is right for a process that returns what it was given
-and wrong for anything that introduces a delay. A trim large enough to matter
+The SNR family in kudio -- :func:`kudio.si_sdr`, :func:`kudio.snr`,
+:func:`kudio.segmental_snr`, :func:`kudio.sdi` -- compares sample *i* of one
+signal with sample *i* of the other. Every reference metric trims to the
+shorter of the two; the SNR family also assumes the rest lines up, which is
+right for a process that returns what it was given and wrong for anything that
+introduces a delay. PESQ runs its own time alignment and STOI shrugs off a few
+milliseconds, so the damage below is the SNR family's. A trim large enough to matter
 is warned about, and past :data:`kudio.core.evaluator.MAX_LENGTH_MISMATCH`
 refused -- but a delay that leaves the lengths equal is invisible to that
 check, and this is the module for it.
@@ -28,7 +30,7 @@ somebody about work that may be fine.
 
 >>> shift = kudio.find_delay(clean, processed, sr)
 >>> print(shift)                                          # doctest: +SKIP
-processed lags by 128 samples (8.0 ms), correlation 0.998
+lags by 128 samples (8.0 ms), correlation 0.998
 >>> a, b = kudio.align(clean, processed, sr)
 >>> kudio.si_sdr(a, b)                                    # doctest: +SKIP
 18.4
@@ -100,9 +102,11 @@ class Alignment:
         """How alike they are, ignoring polarity: ``abs(correlation)``."""
         return abs(self.correlation)
 
-    def confident(self, minimum: float = MIN_CORRELATION) -> bool:
-        """Are these plausibly the same recording?"""
-        return self.strength >= minimum
+    def confident(self, minimum: Optional[float] = None) -> bool:
+        """Are these plausibly the same recording? *minimum* defaults to
+        :data:`MIN_CORRELATION` as it is when called, so raising that raises
+        it everywhere."""
+        return self.strength >= (MIN_CORRELATION if minimum is None else minimum)
 
     def apply(self, ref: np.ndarray,
               deg: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -200,16 +204,16 @@ def find_delay(ref: np.ndarray, deg: np.ndarray, sr: int, *,
 
 def align(ref: np.ndarray, deg: np.ndarray, sr: int, *,
           max_seconds: Optional[float] = None,
-          min_correlation: float = MIN_CORRELATION
+          min_correlation: Optional[float] = None
           ) -> Tuple[np.ndarray, np.ndarray]:
     """Return *ref* and *deg* trimmed to the region they share, lined up.
 
     The pair comes back ready for :func:`kudio.si_sdr` and friends.
 
-    :param min_correlation: refuse below this, because two unrelated
-        recordings still have a best lag and lining them up at it produces a
-        confident-looking number about nothing. Pass ``0`` to align whatever
-        you have anyway.
+    :param min_correlation: refuse below this (:data:`MIN_CORRELATION` when
+        not given), because two unrelated recordings still have a best lag
+        and lining them up at it produces a confident-looking number about
+        nothing. Pass ``0`` to align whatever you have anyway.
     :raises FeatureError: when the two do not look like the same recording.
 
     >>> a, b = kudio.align(clean, processed, sr)           # doctest: +SKIP
@@ -217,6 +221,8 @@ def align(ref: np.ndarray, deg: np.ndarray, sr: int, *,
     18.4
     """
     found = find_delay(ref, deg, sr, max_seconds=max_seconds)
+    if min_correlation is None:
+        min_correlation = MIN_CORRELATION
     if not found.confident(min_correlation):
         raise FeatureError(
             f"these do not look like the same recording: best correlation "

@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """What the transmission did to it: companding, quantisation, packet loss.
 
-Speech arrives degraded in three ways and kudio could describe two of them.
-Noise is **additive** -- :class:`kudio.Synthesizer` mixes it at a chosen SNR.
-A room is **convolutive** -- :func:`kudio.apply_rir` smears the signal across
-time. The third is the channel, and it is neither: a codec quantises, a link
-drops packets, a converter throws bits away. None of that can be written as
-``y + n`` or ``y * h``, which is why none of it was here.
+Speech arrives degraded in three ways. Noise is **additive** --
+:class:`kudio.Synthesizer` mixes it at a chosen SNR. A room is
+**convolutive** -- :func:`kudio.apply_rir` smears the signal across time. The
+third is the channel: a codec quantises, a link drops packets, a converter
+throws bits away. The telephone band is a filter, but the codec and the lost
+packets cannot be written as ``y + n`` or ``y * h``, and they are what this
+module adds.
 
 >>> phone = kudio.telephone(speech, sr)          # 300-3400 Hz, 8 kHz, G.711
 >>> lossy = kudio.dropouts(speech, sr, loss=0.05, seed=0)
@@ -28,9 +29,10 @@ That is the whole reason telephony uses it, and it is what the tests check.
 implement the G.711 companding *curves* quantised to 8 bits, not the
 standard's piecewise-linear segment layout. Measured against Python's own
 ``audioop`` -- the reference, and removed in 3.13, which is why it cannot be a
-dependency -- the round-trip SNR agrees to half a decibel and the waveforms to
-0.013 full scale. For augmentation that is the same thing; for a bit-exact
-decoder it is not, and this does not claim to be one.
+dependency -- the round-trip SNR comes out within about 0.9 dB of it over a
+24 dB range of levels, and single samples within a few hundredths of full
+scale. For augmentation that is the same thing; for a bit-exact decoder it is
+not, and this does not claim to be one.
 """
 from __future__ import annotations
 
@@ -48,9 +50,9 @@ __all__ = ['mu_law', 'a_law', 'bit_depth', 'dropouts', 'telephone',
 
 log = logging.getLogger(__name__)
 
-#: G.711 companding constants: mu for the North American / Japanese law, A for
-#: the European one.
+#: G.711's mu for the North American / Japanese law.
 MU_LAW_MU = 255.0
+#: G.711's A for the European law.
 A_LAW_A = 87.6
 
 #: Default packet length, in milliseconds. 20 ms is what G.711 over RTP uses,
@@ -59,6 +61,7 @@ PACKET_MS = 20.0
 
 #: The passband a telephone line gives you, in Hz, and the rate it runs at.
 TELEPHONE_BAND = (300.0, 3400.0)
+#: The rate a telephone line runs at, in Hz.
 TELEPHONE_SR = 8000
 
 #: How a lost packet is filled in.
@@ -219,10 +222,11 @@ def bit_depth(y: np.ndarray, bits: int = 8, *,
               dither: bool = False, seed: Optional[int] = None) -> np.ndarray:
     """Requantise *y* to *bits*, linearly.
 
-    :param dither: add a triangular dither of one step before rounding. It
-        raises the noise floor and removes the correlation between the error
-        and the signal, which is what stops quiet passages sounding granular
-        rather than merely noisy.
+    :param dither: add triangular (TPDF) dither two steps wide, peak to
+        peak, before rounding. It raises the noise floor and makes the error's
+        mean and power independent of the signal, which is what stops quiet
+        passages sounding granular rather than merely noisy. Pass *seed* with
+        it, or every call dithers differently.
 
     A full-scale sine comes back at about ``6.02 * bits + 1.76`` dB of SNR,
     which is the textbook figure and what the tests assert.
@@ -235,8 +239,10 @@ def bit_depth(y: np.ndarray, bits: int = 8, *,
     if dither:
         step = 2.0 / (2 ** bits)
         rng = np.random.default_rng(seed)
-        # triangular: the sum of two uniforms, one step peak to peak
-        y = y + (rng.random(len(y)) - rng.random(len(y))) * step / 2.0
+        # triangular: the difference of two uniforms of one step each, two
+        # steps peak to peak -- the width that takes the signal out of the
+        # error's mean and power; one step only loosened the tie
+        y = y + (rng.random(len(y)) - rng.random(len(y))) * step
         y = np.clip(y, -1.0, 1.0)
     return _quantise(y, bits).astype(np.float32)
 
@@ -337,8 +343,9 @@ def telephone(y: np.ndarray, sr: int, *, codec: str = 'mu_law',
         rate without the companding.
 
     The bandwidth is the part that survives being measured:
-    ``kudio.audio_report`` reports about 3.4 kHz afterwards and flags the file
-    as band-limited, which is exactly what it is.
+    ``kudio.audio_report`` reports content up to about 3.8 kHz afterwards --
+    the 3.4 kHz band edge plus the filter's roll-off -- and flags the file as
+    band-limited, which is exactly what it is.
 
     >>> kudio.telephone(speech, 16000)                       # doctest: +SKIP
     """
@@ -460,6 +467,13 @@ def channel_spec(spec) -> dict:
             f"loss must be a fraction in [0, 1], got {out['loss']}")
     if out['bits'] is not None and int(out['bits']) < 2:
         raise FeatureError(f"bits must be >= 2, got {out['bits']}")
+    # checked here rather than on the first file, so Synthesizer(channel=...)
+    # refuses a bad link when it is built
+    if out['burst'] is not None and float(out['burst']) < 1:
+        raise FeatureError(f"burst is a mean run length in packets, at least 1, "
+                           f"got {out['burst']}")
+    if not float(out['packet_ms']) > 0:
+        raise FeatureError(f"packet_ms must be > 0, got {out['packet_ms']}")
 
     # Nothing asked for is not a channel. Saying so here means one falsy
     # check downstream instead of five truthy ones.
@@ -485,9 +499,9 @@ def channel_tag(spec) -> str:
         return ''
     parts = []
     if spec['band']:
-        parts.append('telephone' if spec['codec'] == 'mu_law'
-                     else f"band{spec['codec']}" if spec['codec'] != 'none'
-                     else 'band')
+        # named as the presets are: 'banda_law' read as one made-up word
+        parts.append({'mu_law': 'telephone', 'a_law': 'telephone_a'}.get(
+            spec['codec'], 'band'))
     elif spec['codec'] != 'none':
         parts.append(spec['codec'])
     if spec['bits'] is not None:
@@ -516,10 +530,9 @@ def apply_channel(y: np.ndarray, sr: int, spec,
     ...                                                    # doctest: +SKIP
     """
     spec = channel_spec(spec)
-    if not spec:
-        return np.asarray(y, dtype=np.float32)
-
     out = _mono("apply_channel()", y).astype(np.float32)
+    if not spec:
+        return out
     if spec['band']:
         out = telephone(out, sr, codec=spec['codec'])
     elif spec['codec'] == 'mu_law':

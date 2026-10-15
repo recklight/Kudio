@@ -1,25 +1,25 @@
 # -*- coding: utf-8 -*-
 """Rooms: describe one, apply it, measure what it did.
 
-kudio has always been able to degrade a recording with *additive* noise --
-:class:`kudio.Synthesizer` mixes it at a chosen SNR, and
+Noise is *additive*: :class:`kudio.Synthesizer` mixes it at a chosen SNR, and
 :func:`kudio.spectral_enhance` takes it back out. Reverberation is the other
 kind, and it is **convolutive**: the room does not add anything, it smears what
-was already there across time. Nothing here could describe that or measure it,
-which also meant nothing could say how reverberant a recording was before
-deciding what to do about it.
+was already there across time. This module describes a room, puts a clip in
+it, and measures one from its impulse response.
 
 >>> ir = kudio.rir(16000, rt60=0.6, drr_db=6.0, seed=0)
 >>> wet = kudio.apply_rir(speech, ir)
 >>> print(kudio.rt60(ir, 16000))                 # doctest: +SKIP
-T30 0.60 s (EDT 0.61 s) · C50 +12.7 dB · DRR +6.0 dB · fit 1.000
+T30 0.60 s (EDT 0.55 s)  ·  C50 +11.7 dB  ·  DRR +6.0 dB  ·  fit 1.000
 
 **Removing it is a different problem and is not here.** Spectral subtraction
-has nothing to subtract, and the single-channel predictive methods were tried
-and did not survive measurement -- see `KudioStudio/docs/DEVELOPMENT.md` for
-what was measured. What this module is for is *making* controlled
+has nothing to subtract, and the single-channel predictive methods did not
+survive measurement. What this module is for is *making* controlled
 reverberation, for augmentation, and *measuring* it when you have an impulse
 response.
+
+Everything here is mono: a ``(frames, channels)`` array is refused rather than
+read as one interleaved signal twice as long.
 
 **The room here is a statistical one, not a real one.** Exponentially decaying
 noise is the textbook model of a diffuse tail and it is what an augmentation
@@ -120,13 +120,21 @@ class Reverberation:
         the same tail and land within a few per cent of each other, so a large
         disagreement means the two spans were measuring different things and
         neither of them was a room. *edt_ratio* is a sanity bound and not a
-        figure from the standard: genuine rooms here sit at 0.93 to 1.03, and
+        figure from the standard: over 40 seeds of ``rir(16000, 0.6)`` the
+        ratio runs 0.87 to 1.16 at ``drr_db=6`` and 0.95 to 1.09 at 0, and
         published halls stay well inside 0.8 to 1.3.
+
+        A close microphone has no EDT to compare: the direct sound alone
+        carries the first 10 dB of the decay, so the EDT is ``nan``. That says
+        nothing against the tail, and the decay is then judged on its fit
+        alone.
         """
         if not (np.isfinite(self.fit) and self.fit >= minimum):
             return False
-        if not (np.isfinite(self.t30) and np.isfinite(self.edt)) or self.t30 <= 0:
+        if not np.isfinite(self.t30) or self.t30 <= 0:
             return False
+        if not np.isfinite(self.edt):
+            return True
         ratio = self.edt / self.t30
         return 1.0 / edt_ratio <= ratio <= edt_ratio
 
@@ -149,7 +157,9 @@ class Reverberation:
                     "impulse response" if straight
                     else "  — but the decay is not straight, so read it with "
                          "care")
-        return (f"T30 {self.t30:.2f} s (EDT {self.edt:.2f} s)  ·  "
+        edt = (f"EDT {self.edt:.2f} s" if np.isfinite(self.edt)
+               else "no EDT: the direct sound alone falls 10 dB")
+        return (f"T30 {self.t30:.2f} s ({edt})  ·  "
                 f"C50 {self.c50:+.1f} dB  ·  DRR {self.drr:+.1f} dB  ·  "
                 f"fit {self.fit:.3f}{note}")
 
@@ -209,7 +219,8 @@ def rir(sr: int, rt60: float = 0.5, *, drr_db: float = 0.0,
             f"drr_db={drr_db:g} is below what this tail already carries in its "
             f"first {_DIRECT_MS:g} ms "
             f"({10 * np.log10(max(inside, _EPS) / max(outside, _EPS)):.1f} dB). "
-            f"Shorten rt60 or ask for a higher drr_db.")
+            f"Ask for a higher drr_db, or a longer rt60, whose tail puts less "
+            f"of its energy inside that window.")
     tail[0] = float(np.sqrt(wanted - inside))
     return (tail / (np.max(np.abs(tail)) + _EPS)).astype(np.float32)
 
@@ -226,8 +237,8 @@ def apply_rir(y: np.ndarray, ir: np.ndarray, *,
         with a loud direct path has a gain, and an augmentation pipeline that
         also changes the level is measuring two things at once.
     """
-    y = np.asarray(y, dtype=np.float64).reshape(-1)
-    ir = np.asarray(ir, dtype=np.float64).reshape(-1)
+    y = _mono("apply_rir()", y, "audio")
+    ir = _mono("apply_rir()", ir, "impulse response")
     if y.size == 0 or ir.size == 0:
         raise FeatureError("apply_rir() needs audio and an impulse response, "
                            f"got {y.size} and {ir.size} samples")
@@ -251,7 +262,7 @@ def schroeder_curve(ir: np.ndarray) -> np.ndarray:
     many noise bursts, obtained from one impulse by integrating its energy from
     the end backwards. It is what makes a single measurement readable.
     """
-    ir = np.asarray(ir, dtype=np.float64).reshape(-1)
+    ir = _mono("schroeder_curve()", ir, "impulse response")
     if ir.size == 0:
         raise FeatureError("schroeder_curve() needs an impulse response")
     energy = np.cumsum((ir ** 2)[::-1])[::-1]
@@ -260,6 +271,29 @@ def schroeder_curve(ir: np.ndarray) -> np.ndarray:
         return np.full(len(ir), -np.inf)
     with np.errstate(divide='ignore'):
         return 10.0 * np.log10(np.maximum(energy / total, _EPS))
+
+
+def _mono(where: str, x, what: str) -> np.ndarray:
+    """*x* as a 1-D float64 array, refusing a ``(frames, channels)`` one.
+
+    Flattened, it would be one interleaved signal: a stereo clip would come
+    out of apply_rir twice as long, and a two-column copy of a 0.6 s response
+    would measure 1.2 s with a perfect fit.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    if x.ndim > 1 and x.shape[1] == 1:
+        x = x[:, 0]
+    if x.ndim != 1:
+        raise FeatureError(f"{where} takes mono {what}, got shape {x.shape}; "
+                           f"pass one channel at a time")
+    return x
+
+
+def _onset(ir: np.ndarray) -> int:
+    """Where the response starts: the first sample within 20 dB of its peak,
+    ISO 3382-1's rule for the arrival of the direct sound."""
+    level = np.abs(ir)
+    return int(np.argmax(level >= 0.1 * level.max())) if level.max() > 0 else 0
 
 
 def _decay_time(curve: np.ndarray, sr: int,
@@ -305,9 +339,15 @@ def _clarity(ir: np.ndarray, sr: int, split_ms: float) -> float:
 def rt60(ir: np.ndarray, sr: int) -> Reverberation:
     """Measure a room from its impulse response, to ISO 3382-1.
 
-    Everything comes off one backward-integrated decay curve
-    (:func:`schroeder_curve`), so the figures cannot disagree about what the
-    tail did.
+    T20, T30 and EDT are read off one backward-integrated decay curve
+    (:func:`schroeder_curve`); C50, C80 and DRR are energy ratios taken from
+    the response around its peak. The response is measured from its onset,
+    the first sample within 20 dB of the peak, so leading silence -- time of
+    flight, converter latency -- is not counted as decay.
+
+    It does not find or remove a noise floor. A recorded response whose tail
+    reaches the floor less than 35 dB down has no honest T30, and
+    :meth:`Reverberation.reliable` cannot tell: check the raw response first.
 
     >>> room = kudio.rt60(ir, 16000)
     >>> room.seconds, room.reliable()                        # doctest: +SKIP
@@ -315,10 +355,11 @@ def rt60(ir: np.ndarray, sr: int) -> Reverberation:
     """
     if sr <= 0:
         raise FeatureError(f"rt60() needs a positive rate, got {sr}")
-    ir = np.asarray(ir, dtype=np.float64).reshape(-1)
+    ir = _mono("rt60()", ir, "impulse response")
     if ir.size < 2:
         raise FeatureError(f"rt60() needs an impulse response, got {ir.size} "
                            f"sample(s)")
+    ir = ir[_onset(ir):]
 
     curve = schroeder_curve(ir)
     t20, _ = _decay_time(curve, sr, _T20_RANGE)

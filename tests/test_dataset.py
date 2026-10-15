@@ -37,14 +37,15 @@ def test_pairs_are_hashable():
     assert len(set(_pairs())) == 10
 
 
-def test_unknown_keys_are_dropped_not_fatal(tmp_path, caplog):
+def test_unknown_keys_are_dropped_not_fatal(tmp_path):
+    """And said out loud: a log line behind the kudio NullHandler reached nobody."""
     path = tmp_path / "m.json"
     path.write_text(json.dumps([
         {"noisy": "a.wav", "clean": "b.wav", "future_field": 1}]),
         encoding="utf-8")
-    loaded = kudio.load_manifest(path)
+    with pytest.warns(UserWarning, match="future_field"):
+        loaded = kudio.load_manifest(path)
     assert loaded == [kudio.Pair(noisy="a.wav", clean="b.wav")]
-    assert "future_field" in caplog.text
 
 
 def test_missing_required_key_is_an_error(tmp_path):
@@ -311,3 +312,26 @@ def test_a_fractional_snr_survives_the_manifest(tmp_path):
     back = kudio.load_manifest(path)
     assert [p.snr_db for p in back] == [2.5, -5]
     assert isinstance(back[1].snr_db, int)
+
+
+# -- portable manifests and editor labels --------------------------------------
+
+def test_a_manifest_names_its_files_with_forward_slashes(tmp_path):
+    """Written on Windows with backslashes, it named no file on Linux."""
+    windows = kudio.Pair(noisy=r"a\b\n.wav", clean=r"a\c.wav")
+    path = kudio.save_manifest(tmp_path / "m.json", [windows])
+    assert kudio.load_manifest(path) == [kudio.Pair(noisy="a/b/n.wav", clean="a/c.wav")]
+
+
+def test_audacity_frequency_rows_are_skipped(tmp_path):
+    """A label with a frequency range gets a second row starting with a
+    backslash; it is not a time."""
+    path = tmp_path / "labels.txt"
+    tab, backslash = "\t", "\\"
+    rows = [tab.join(["0.5", "1.5", "speech"]),
+            tab.join([backslash, "100.000000", "3400.000000"]),
+            tab.join(["2.0", "2.5", "click"])]
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    labels = kudio.load_labels(path)
+    assert [(lab.start, lab.end, lab.text) for lab in labels] == [
+        (0.5, 1.5, "speech"), (2.0, 2.5, "click")]

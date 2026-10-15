@@ -158,3 +158,37 @@ def test_a_non_finite_clip_is_not_called_digital_silence(bad):
 def test_a_healthy_clip_counts_no_non_finite_samples():
     assert audio_report(_speech(), SR).non_finite_samples == 0
     assert audio_report(np.zeros(SR, dtype=np.float32), SR).non_finite_samples == 0
+
+
+# -- offsets, zeroed pauses and the claimed rate -------------------------------
+
+def test_a_dc_offset_is_not_read_as_noise():
+    import kudio
+    sr = 16000
+    rng = np.random.default_rng(0)
+    t = np.arange(4 * sr) / sr
+    voice = 0.3 * np.sin(2 * np.pi * 200 * t) * (np.sin(2 * np.pi * 0.5 * t) > 0)
+    y = voice + 0.001 * rng.standard_normal(len(t))
+    plain = kudio.audio_report(y, sr).noise_floor_dbfs
+    offset = kudio.audio_report(y + 0.03, sr).noise_floor_dbfs
+    assert abs(offset - plain) < 1.0
+
+
+def test_zeroed_pauses_are_a_floor_of_silence():
+    import kudio
+    sr = 16000
+    t = np.arange(4 * sr) / sr
+    y = 0.3 * np.sin(2 * np.pi * 200 * t) * (np.sin(2 * np.pi * 0.5 * t) > 0)
+    report = kudio.audio_report(y, sr)
+    assert report.noise_floor_dbfs == float('-inf')
+    assert report.estimated_snr_db == float('inf')
+
+
+def test_a_file_is_not_said_to_be_upsampled_from_its_own_rate():
+    import kudio
+    from kudio.core.report import _nearest_common_rate
+    assert _nearest_common_rate(14000, below=16000) != 16000
+    rng = np.random.default_rng(0)
+    y = kudio.lowpass(rng.standard_normal(16000 * 3) * 0.1, 16000, cutoff=7000)
+    for line in kudio.audio_report(y, 16000).problems():
+        assert "upsampled from 16000" not in line

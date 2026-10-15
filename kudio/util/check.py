@@ -34,11 +34,7 @@ def list_devices(kind: Optional[str] = None) -> List[dict]:
     """
     if kind not in (None, 'input', 'output'):
         raise ValueError(f"kind must be 'input', 'output' or None, got {kind!r}")
-    try:
-        import sounddevice as sd
-    except ImportError as e:
-        from kudio.exceptions import DependencyError
-        raise DependencyError('sounddevice', extra='audio') from e
+    sd = _sounddevice()
 
     devices = []
     for index, info_ in enumerate(sd.query_devices()):
@@ -58,14 +54,34 @@ def list_devices(kind: Optional[str] = None) -> List[dict]:
     return devices
 
 
+def _sounddevice():
+    """sounddevice, or the error that says what is missing.
+
+    Installed but unable to find the PortAudio library -- Linux without
+    libportaudio2 -- it raises OSError on import, which is not a missing
+    extra: pip cannot fix it, the system package can.
+    """
+    try:
+        import sounddevice as sd
+        return sd
+    except ImportError as e:
+        from kudio.exceptions import DependencyError
+        raise DependencyError('sounddevice', extra='audio') from e
+    except OSError as e:
+        from kudio.exceptions import DeviceError
+        raise DeviceError(
+            f"sounddevice is installed but could not load PortAudio ({e}). "
+            f"Install the PortAudio library: libportaudio2 on Debian and "
+            f"Ubuntu, portaudio on Homebrew.") from e
+
+
 def _pyaudio():
     try:
         import pyaudio
         return pyaudio
     except ImportError as e:
-        raise ImportError(
-            "PyAudio is required for device checks: pip install kudio[audio]"
-        ) from e
+        from kudio.exceptions import DependencyError
+        raise DependencyError('PyAudio', extra='audio') from e
 
 
 def is_available() -> bool:
@@ -76,7 +92,12 @@ def is_available() -> bool:
 
 @timer
 def check_device() -> bool:
-    """List system devices and probe the default input; True on success."""
+    """List system devices and probe an input; True on success.
+
+    The input probed is the one :meth:`CheckDevice.input_device` picks with no
+    arguments: the last input-capable device PyAudio lists, at the first of
+    16000, 22050 and 44100 Hz it opens at.
+    """
     try:
         with CheckDevice() as cd:
             cd.system_devices()
@@ -138,6 +159,15 @@ class CheckDevice:
                      dev.get('maxOutputChannels'), dev.get('name'))
         return device_list
 
+    def _describe(self, device) -> str:
+        """The device's info for a message, or just its index when PyAudio
+        cannot describe it -- an index out of range used to raise from inside
+        the message meant to explain it."""
+        try:
+            return str(self.get_device_info(device))
+        except Exception:                                   # noqa: BLE001
+            return f"device {device!r}"
+
     def get_device_info(self, device_index: int) -> dict:
         return self.p.get_device_info_by_index(device_index)
 
@@ -165,7 +195,7 @@ class CheckDevice:
     def check_available_rate(self, device: int) -> Union[List[int], bool]:
         """Return the standard sample rates the device accepts, or False."""
         if not self._is_input_device(device):
-            log.warning("Device unusable: %s", self.get_device_info(device))
+            log.warning("Device unusable: %s", self._describe(device))
             return False
         return [rt for rt in self.standard_rate if self._is_input_device(device, rt)]
 
@@ -186,7 +216,7 @@ class CheckDevice:
             log.info("Found %d microphone(s)", len(mics))
             device = mics[-1]
         if not self._is_input_device(device):
-            raise RuntimeError(f"Device unusable: {self.get_device_info(device)}")
+            raise RuntimeError(f"Device unusable: {self._describe(device)}")
 
         # sample rate
         if not (rate is not None and self._is_input_device(device, rate)):
@@ -196,20 +226,20 @@ class CheckDevice:
                 rate = int(self.get_device_info(device)["defaultSampleRate"])
         if not self._is_input_device(device, rate):
             raise RuntimeError(
-                f"Bad sample rate for device: {self.get_device_info(device)}")
+                f"Bad sample rate for device: {self._describe(device)}")
         log.info("Device %s, sample rate %s", device, rate)
 
         # channels
         if channels is not None:
             if self.get_device_info(device)["maxInputChannels"] < channels:
                 log.warning("Requested channels exceed device maximum: %s",
-                            self.get_device_info(device))
+                            self._describe(device))
                 channels = 1
         else:
             channels = 1
         if not self._is_input_device(device, rate, channels):
             raise RuntimeError(
-                f"Bad channel setting ({channels}): {self.get_device_info(device)}")
+                f"Bad channel setting ({channels}): {self._describe(device)}")
 
         self.device, self.rate, self.channels = device, rate, channels
         self.show_current_device_info()

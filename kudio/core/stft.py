@@ -13,9 +13,8 @@ producer and a consumer end up quietly disagreeing — the geometry belongs
 >>> stft.to_dict()                         # store next to a model checkpoint
 {'sr': 16000, 'n_fft': 512, 'hop_length': 256, 'win_length': 512, 'window': 'hamming'}
 
-This is a thin wrapper: :func:`waveform_to_spectrogram` and
-:func:`spectrogram_to_waveform` remain the underlying implementation and are
-unchanged.
+A thin wrapper: :func:`waveform_to_spectrogram` and
+:func:`spectrogram_to_waveform` do the work.
 """
 from __future__ import annotations
 
@@ -61,8 +60,13 @@ class STFT:
         return self.n_fft // 2 + 1
 
     def n_frames(self, n_samples: int) -> int:
-        """Frames a waveform of *n_samples* will produce (centred STFT)."""
-        return int(n_samples // self.hop_length) + 1
+        """Frames a waveform of *n_samples* will produce (centred STFT).
+
+        librosa pads ``n_fft // 2`` on each side, so an odd *n_fft* gives one
+        frame fewer than ``n // hop + 1`` whenever *n* is a multiple of the hop.
+        """
+        padded = int(n_samples) + 2 * (self.n_fft // 2)
+        return 1 + (padded - self.n_fft) // self.hop_length
 
     def frame_times(self, n_frames: int) -> np.ndarray:
         """Centre time, in seconds, of each frame."""
@@ -125,12 +129,23 @@ class STFT:
 
     @classmethod
     def from_dict(cls, values: Dict[str, Any]) -> "STFT":
+        """Rebuild the geometry :meth:`to_dict` stored.
+
+        Every key has to be there. A missing one taking its default is how a
+        stored geometry and the code reading it end up disagreeing -- a config
+        without ``hop_length`` would quietly analyse at 256.
+        """
         known = {f.name for f in dataclasses.fields(cls)}
         unknown = set(values) - known
         if unknown:
             raise ValueError(
                 f"unknown STFT key(s): {', '.join(sorted(unknown))}. "
                 f"Valid keys: {', '.join(sorted(known))}")
+        missing = known - set(values)
+        if missing:
+            raise ValueError(
+                f"STFT key(s) missing: {', '.join(sorted(missing))}. A stored "
+                f"geometry has to name all of {', '.join(sorted(known))}")
         return cls(**values)
 
     def matches(self, sr: int) -> bool:

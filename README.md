@@ -3,6 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/kudio.svg)](https://pypi.org/project/kudio/)
 [![Python](https://img.shields.io/pypi/pyversions/kudio.svg)](https://pypi.org/project/kudio/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.txt)
+[![Docs](https://img.shields.io/badge/docs-recklight.github.io%2FKudio-blue.svg)](https://recklight.github.io/Kudio/)
 
 **Lightweight, composable audio toolkit for acoustic inspection.**
 
@@ -12,6 +13,9 @@ composable functions with a clean, typed API.
 
 The core stays light (numpy + soundfile + librosa); heavy or niche features
 (plotting, dataframes, PESQ/STOI, live audio) are opt-in extras.
+
+The [documentation](https://recklight.github.io/Kudio/) has a guide to each
+part of the library and the full API reference; this README is the short tour.
 
 ## Install
 
@@ -30,7 +34,7 @@ pip install kudio[all]       # everything but [pesq]
 > it needs a C compiler -- on Windows, the MSVC Build Tools. That is why it
 > is an extra of its own rather than part of `[eval]` or `[all]`.
 
-Requires **Python 3.9+** (tested on CPython 3.9–3.13).
+Requires **Python 3.9+**; CI runs the tests on CPython 3.9, 3.11 and 3.13.
 
 ## Quick start
 
@@ -75,7 +79,8 @@ print(kudio.true_peak(y, sr))                         # dBTP, between the sample
 info = kudio.audio_info("clip.wav")                   # header, without loading
 for problem in kudio.audio_report(y, sr).problems():
     print(problem)     # "content stops at 3812 Hz although the file claims
-                       #  16000 Hz — very likely upsampled from 8000 Hz"
+                       #  16000 Hz — it was very likely upsampled from
+                       #  8000 Hz, and the extra rate is empty"
 
 # ...and what a listener would say about it (needs kudio[dnsmos] + weights)
 score = kudio.dnsmos(y, sr, model_dir="DNS-Challenge/DNSMOS")
@@ -86,7 +91,7 @@ clean = kudio.spectral_enhance(y, sr)                 # log-MMSE + MCRA
 clean = kudio.spectral_enhance(y, sr, 'omlsa', noise='quantile', q=0.4)
 kudio.enhance_folder("noisy/", "clean/", 'logmmse')   # a whole tree
 
-# sweep both axes, and rank a trained model in the same table
+# sweep both axes, and put a trained model in the same table
 for r in kudio.compare_enhancers(y, sr, reference=truth,
                                  noises=list(kudio.NOISE_ESTIMATORS)):
     print(r)   # wiener + initial  15 ms  floor -45.3 dB  SI-SDR +12.42 dB
@@ -103,7 +108,7 @@ while recording:                                      # doctest: +SKIP
     view.push(rec.drain())                            # drain, never tail
     draw(view.columns())                              # (columns, bins), dBFS
 
-# --- editing --------------------------------------------------------------
+# --- joining, and labels an editor can open -------------------------------
 joined = kudio.splice([before, replacement, after], sr)   # no click at the seam
 labels = [kudio.Label(a, b, "speech") for a, b in kudio.vad(y, sr)]
 kudio.save_labels("clip.txt", labels)                 # Audacity label track
@@ -115,7 +120,7 @@ clip, (a, b) = kudio.vad_trim(y, sr)                  # first speech to last
 
 # --- ...and what note they are on -----------------------------------------
 track = kudio.f0(y, sr)                               # pYIN, NaN where unvoiced
-print(track)          # "median 118.3 Hz · 94-162 Hz (9.4 semitones) · 61% voiced"
+print(track)   # "median 118.3 Hz  ·  94.2-161.8 Hz (9.4 semitones)  ·  61% voiced"
 kudio.save_labels("voiced.txt", track.to_labels())    # openable in an editor
 
 # --- editing --------------------------------------------------------------
@@ -149,7 +154,7 @@ link  = kudio.apply_channel(y, sr, "voip", seed=0)    # or the whole lot at once
 # --- rooms: the other kind of degradation ---------------------------------
 ir  = kudio.rir(sr, rt60=0.6, drr_db=6.0, seed=0)     # a room you can rebuild
 wet = kudio.apply_rir(y, ir)                          # put the clip in it
-print(kudio.rt60(ir, sr))    # "T30 0.60 s (EDT 0.61 s) · C50 +12.7 dB · ..."
+print(kudio.rt60(ir, sr))    # "T30 0.60 s (EDT 0.55 s)  ·  C50 +11.7 dB  ·  ..."
 
 # --- noisy-data synthesis: the whole chain, in the order it happens -------
 #     talker -> room (rt60) -> + noise (snr_ratio) -> link (channel) -> file
@@ -173,7 +178,7 @@ print(kudio.si_sdr(ref, est), kudio.snr(ref, est), kudio.segmental_snr(ref, est)
 print(kudio.sdi(ref, est))                     # speech distortion index
 
 # ...or any of them by name, PESQ / STOI / SDR included where installed.
-# "PESQ" in most enhancement papers is the raw narrowband P.862 score:
+# Papers differ on which PESQ they quote; say which. Raw narrowband P.862:
 print(kudio.score(ref, est, sr, ["pesq", "stoi", "sdi"],
                   pesq_mode="nb", pesq_scale="raw"))
 ev = kudio.AudioEvaluate(clean_files, noisy_files, pesq_mode="nb", pesq_scale="raw")
@@ -281,7 +286,7 @@ Seven gain rules over four noise estimators, all sharing one STFT loop:
 | `wiener` | Gain `ξ/(1+ξ)` | Smooth, so little musical noise; muffles at low SNR |
 | `mmse_stsa` | MMSE on the amplitude (Ephraim & Malah 1984) | Keeps more speech than Wiener |
 | `logmmse` | MMSE in the log domain (1985) | The default, and hard to beat without a model |
-| `omlsa` | log-MMSE × speech-presence probability (Cohen 2001) | Hardest suppression where there is no speech at all |
+| `omlsa` | log-MMSE × speech-presence probability (Cohen 2001) | Suppresses hard where speech is unlikely, gently where it might be |
 | `spectral_gate` | Threshold mask, smoothed | Unprincipled, very predictable, good on steady hiss |
 
 ```python
@@ -292,10 +297,11 @@ Every method is the same three decisions — estimate the noise, estimate the a
 priori SNR, turn it into a gain — so holding one still isolates the other.
 
 **The noise estimator is as large a lever as the gain rule.** Measured across
-the full 7 x 4 grid on this repo's fixture: a mean spread of 5.8 dB SI-SDR when
-the gain rule varies, 6.4 dB when the estimator does. Neither dominates, which
-is exactly why both are choices rather than one being hidden inside the other —
-and why `compare_enhancers` can sweep both. `kudio.NOISE_ESTIMATORS` documents
+the full 7 x 4 grid on the test suite's 5 s clip (two harmonic bursts over
+white noise, 2 dB SNR): a mean spread of 5.5 dB SI-SDR when the gain rule
+varies, 5.7 dB when the estimator does. Neither dominates, which is exactly
+why both are choices rather than one being hidden inside the other — and why
+`compare_enhancers` can sweep both. `kudio.NOISE_ESTIMATORS` documents
 what each one assumes; `initial` is exact when the file opens with room tone and
 badly wrong when it does not.
 
@@ -303,15 +309,18 @@ badly wrong when it does not.
 sentence about what turning it costs you — so a GUI or a CLI can build its own
 controls instead of restating them.
 
-**Two caveats measured on this repo's own fixtures, not assumed:**
+**Two caveats measured on that clip, not assumed** (the seven gain rules over
+`mcra`, scored by how much they raise the SNR):
 
-- These methods are for *noisy* audio. Below about 5 dB SNR the trade is good
-  (+8.6 dB); above about 10 dB it is not, and all seven come out **worse than
-  doing nothing** (−1.8 dB). `compare_enhancers` reports `delta_snr_db` so that
-  shows up instead of being hoped away.
-- They need to hear the noise on its own. Same clip, same SNR: with pauses
-  +5.9 dB, wall-to-wall speech −1.8 dB. With no pauses, `noise='initial'` over a
-  leading second of room tone beats anything adaptive.
+- These methods are for *noisy* audio. At 0 dB SNR in they gain +7.8 dB on
+  average, and at 5 dB +6.1. At 10 dB the average is down to +3.8 and one of the
+  seven already does harm; at 20 dB all seven come out **worse than doing
+  nothing** (−4.1 dB on average). `compare_enhancers` reports `delta_snr_db` so
+  that shows up instead of being hoped away.
+- They need to hear the noise on its own. At 5 dB SNR, `logmmse` gains +7.1 dB
+  on the clip with pauses and +0.1 dB on wall-to-wall speech. With no pauses,
+  give it a leading second of room tone and `noise='initial'` (+9.5 dB there)
+  beats anything adaptive (`mcra` +2.2, `minimum` +1.0).
 
 ### Live, on audio still arriving
 
@@ -328,15 +337,21 @@ meaning something else.
 
 ## Errors
 
-All library errors derive from `kudio.KudioError` (`AudioIOError`,
-`FeatureError`, `DeviceError`, `SynthesisError`, `DependencyError`), so you can
-catch them in one place. Missing an optional extra raises a `DependencyError`
-that tells you exactly what to install.
+What goes wrong with a file, a device, a feature, a synthesis run or a
+missing extra raises a `kudio.KudioError` (`AudioIOError`, `FeatureError`,
+`DeviceError`, `SynthesisError`, `DependencyError`), so those can be caught in
+one place. A missing optional extra raises a `DependencyError` that names what
+to install; it is an `ImportError` too. A wrong argument -- a negative rate, an
+unknown metric, two signals too different in length to compare -- raises
+`ValueError` or `TypeError`, the way the standard library does, and a buffer
+that waited too long raises `TimeoutError`.
 
 ## Logging
 
-kudio uses the standard `logging` module (loggers named `kudio.*`) and prints
-nothing by default:
+kudio uses the standard `logging` module (loggers named `kudio.*`) and logs
+nothing you see by default. Problems with the audio itself -- samples that are
+not numbers, a normalisation that will clip, a pair scored on only part of
+its length -- come as Python warnings, which do show. To see the log:
 
 ```python
 import logging; logging.basicConfig(level=logging.INFO)
@@ -354,13 +369,15 @@ v3 is a cleanup release. The short cryptic names still work but now emit a
 | `f2s`, `wav2spec` | `file_to_spectrogram` |
 | `s2w`, `spec2wav` | `save_spectrogram_as_wave` |
 | `w2mfcc`, `wav2mfcc` | `mfcc` |
-| `concat_mfcc_` | `mfcc_from_files` |
-| `concat_logspec_`, `contextual_LogSpectrogram` | `logspec_from_files` |
+| `concat_mfcc`, `concat_mfcc_` | `mfcc_from_files` |
+| `concat_logspec`, `concat_logspec_`, `contextual_LogSpectrogram` | `logspec_from_files` |
 | `wav2mel` | `melspectrogram` |
 
 Also: `matplotlib` / `pandas` / `openpyxl` are no longer installed by default
 (use the `[viz]` / `[data]` extras), and the deprecated `_config` / `_enh` /
-`version` compatibility shims were removed.
+`version` compatibility shims were removed. The plotting and spreadsheet helpers
+left the top level too: import `WaveVisualizer`, `history_plot` and `Common`
+from `kudio.util.visual`, and `data2xlsx` from `kudio.util.conv`.
 
 ## License
 

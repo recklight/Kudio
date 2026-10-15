@@ -79,9 +79,9 @@ class StreamEnhancer:
             offline = "" if method not in METHODS else \
                 f" It works offline: kudio.spectral_enhance(y, sr, {method!r})."
             raise FeatureError(
-                f"{method!r} cannot run on a stream — its gain depends on the "
-                f"whole spectrogram. Choose from "
-                f"{', '.join(STREAMABLE_METHODS)}.{offline}")
+                f"{method!r} does not run on a stream: StreamEnhancer runs the "
+                f"decision-directed rules, {', '.join(STREAMABLE_METHODS)}, "
+                f"whose state carries from one frame to the next.{offline}")
 
         settings = METHODS[method].defaults()
         unknown = set(params) - set(settings)
@@ -90,6 +90,8 @@ class StreamEnhancer:
                 f"{method!r} does not take {', '.join(sorted(unknown))}. "
                 f"It takes: {', '.join(sorted(settings))}")
         settings.update(params)
+        from kudio.enhance.spectral import _check_ranges
+        _check_ranges(method, settings)
 
         self.sr = int(sr)
         self.method = method
@@ -161,7 +163,14 @@ class StreamEnhancer:
         at the end; sample *i* of that concatenation lines up with sample *i*
         of the input.
         """
-        block = np.asarray(block, dtype=np.float64).reshape(-1)
+        block = np.asarray(block, dtype=np.float64)
+        if block.ndim > 1 and block.shape[1] == 1:
+            block = block[:, 0]
+        if block.ndim != 1:
+            # reshape(-1) used to read a stereo block as one interleaved
+            # signal twice as long
+            raise FeatureError(f"StreamEnhancer takes mono blocks, got shape "
+                               f"{block.shape}")
         self._input = np.concatenate([self._input, block])
 
         while len(self._input) >= self.n_fft:

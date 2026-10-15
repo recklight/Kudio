@@ -1,27 +1,173 @@
 site_name: Kudio
+site_url: https://recklight.github.io/Kudio/
 site_description: Lightweight, composable audio toolkit for acoustic inspection
+site_author: RL
+repo_url: https://github.com/recklight/Kudio
+repo_name: recklight/Kudio
+edit_uri: edit/master/docs/
+copyright: Copyright &copy; 2026 RL &middot; MIT licence
+
 theme:
   name: material
+  language: en
+  favicon: assets/favicon.svg
+  icon:
+    logo: material/waveform
+    repo: fontawesome/brands/github
+  palette:
+    # follow the reader's system setting until they pick one
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to system preference
   features:
+    - navigation.tabs
     - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.instant
+    - toc.follow
+    - search.suggest
+    - search.highlight
     - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/recklight/Kudio
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/kudio/
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      # the changelog page includes CHANGELOG.md from the repository root, so
+      # there is one changelog and not a copy of it that drifts
+      base_path: [!relative $config_dir]
+      check_paths: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
 
 plugins:
   - search
   - mkdocstrings:
       handlers:
         python:
+          paths: [.]
           options:
             # Sphinx, not Google: every docstring in this library uses
             # `:param x:`. Declared as google, mkdocstrings rendered
             # each parameter block as raw prose instead of a table.
             docstring_style: sphinx
-            show_source: false
+            # The docstrings are written for help(): Sphinx roles, >>>
+            # examples, :: blocks and #: comments on constants. This turns
+            # them into Markdown for the site without touching the source.
+            extensions:
+              - tools/docs/griffe_markdown.py:DocstringMarkdown:
+                  skip: [kudio.cli]
+            heading_level: 2
+            show_root_heading: true
+            show_root_full_path: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
             members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            summary: true
+            show_source: true
+            show_if_no_docstring: false
+            filters: ["!^_"]
+
+hooks:
+  - tools/docs/hooks.py
+
+watch:
+  - kudio
+  - tools/docs
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
 
 nav:
   - Home: index.md
-  - API Reference: api.md
+  - Getting started: getting-started.md
+  - User guide:
+      - guide/index.md
+      - Audio files: guide/audio-files.md
+      - STFT and features: guide/features.md
+      - Inspecting a recording: guide/inspection.md
+      - Speech activity and pitch: guide/speech.md
+      - Editing and effects: guide/editing.md
+      - Rooms and channels: guide/degradation.md
+      - Building a noisy dataset: guide/synthesis.md
+      - Denoising: guide/enhancement.md
+      - Measuring quality: guide/metrics.md
+      - Recording and live views: guide/live-audio.md
+  - Command line: cli.md
+  - API reference:
+      - reference/index.md
+      - Audio files: reference/audio-files.md
+      - STFT and features: reference/features.md
+      - Inspection: reference/inspection.md
+      - Speech activity and pitch: reference/speech.md
+      - Editing and effects: reference/effects.md
+      - Rooms and channels: reference/degradation.md
+      - Datasets: reference/datasets.md
+      - Enhancement: reference/enhancement.md
+      - Metrics and alignment: reference/metrics.md
+      - Live audio: reference/live-audio.md
+      - Configuration and errors: reference/config.md
+      - Utilities: reference/utilities.md
+  - Changelog:
+      - changelog.md
+      - Migrating from v2: migrating.md
 
 # The toolchain this file needs is declared in the [docs] extra, so a clean
 # checkout can install it instead of copying package names out of a comment:

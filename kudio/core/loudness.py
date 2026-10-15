@@ -15,11 +15,13 @@ whatever its quality. :func:`match_loudness` is the primitive for that.
 The standard publishes its K-weighting coefficients at 48 kHz only. Speech work
 mostly happens at 8 or 16 kHz, so the filters here are re-discretised to the
 requested rate through a prewarped bilinear transform: exact at 48 kHz by
-construction, and within 0.06 dB of the reference curve at 16 kHz.
+construction, and within 0.07 dB of it at 16 kHz and 0.29 dB at 8 kHz, from
+20 Hz to Nyquist.
 """
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import List, Optional, Tuple
@@ -59,12 +61,14 @@ _OVERLAP = 0.75
 _ABSOLUTE_GATE = -70.0
 _RELATIVE_GATE = -10.0
 
-#: The offset that puts a 0 dBFS sine at 0 LUFS.
+#: BS.1770's -0.691 dB, which sets the scale: a 0 dBFS 1 kHz sine in one
+#: channel reads -3.01 LUFS.
 _OFFSET = -0.691
 
 #: The two EBU Tech 3341 meter windows, in seconds. Momentary follows
 #: syllables; short-term follows how loud a passage is.
 MOMENTARY = 0.400
+#: The short-term window, in seconds (EBU Tech 3341).
 SHORT_TERM = 3.0
 
 #: Seconds between measurements on a curve -- what both meters step by.
@@ -157,11 +161,32 @@ def _block_power(data: np.ndarray, sr: int, block: int, step: int) -> np.ndarray
     return np.stack(columns, axis=1)
 
 
+def _corrupt(data: np.ndarray, where: str, what: str = "loudness") -> bool:
+    """Warn about, and report, samples that are not finite. The K-weighting
+    filter carries one NaN into every block after it, and the gate drops NaN
+    blocks, so without this check a corrupt file would measure -inf, exactly
+    like silence."""
+    bad = int(np.count_nonzero(~np.isfinite(data)))
+    if bad:
+        warnings.warn(f"{where}: {bad} sample(s) are not finite (NaN or inf); "
+                      f"the clip is corrupt, so its {what} is undefined",
+                      UserWarning, stacklevel=3)
+    return bool(bad)
+
+
+def _unmeasured(lufs: np.ndarray) -> int:
+    """Windows that are neither a level nor silence: NaN or +inf, which only
+    samples that are not finite produce."""
+    return int(np.count_nonzero(~np.isfinite(lufs) & (lufs != -np.inf)))
+
+
 def loudness(y: np.ndarray, sr: int, block_size: float = BLOCK_SIZE) -> float:
     """Gated integrated loudness of *y*, in LUFS.
 
     Mono, or ``(samples, channels)`` -- **channels last**, the layout
-    ``soundfile`` returns. Digital silence measures ``-inf``.
+    ``soundfile`` returns. Digital silence measures ``-inf``; a clip with NaN
+    or inf in it measures ``nan``, with a warning, rather than reading as
+    silence.
 
     *block_size* is the gating block in seconds. The standard says 400 ms and
     that is what you want; lowering it is the only way to measure something
@@ -173,6 +198,8 @@ def loudness(y: np.ndarray, sr: int, block_size: float = BLOCK_SIZE) -> float:
     if sr <= 0:
         raise FeatureError(f"loudness() needs a positive sample rate, got {sr}")
     data = _as_channels(y)
+    if _corrupt(data, "loudness()"):
+        return float('nan')
     n_channels = data.shape[1]
     if n_channels > len(_CHANNEL_WEIGHTS):
         raise FeatureError(f"loudness() handles up to {len(_CHANNEL_WEIGHTS)} "
@@ -209,7 +236,8 @@ def loudness(y: np.ndarray, sr: int, block_size: float = BLOCK_SIZE) -> float:
 class LoudnessCurve:
     """Loudness measured over a sliding window, in LUFS.
 
-    :param lufs: one value per hop; ``-inf`` for a silent window.
+    :param lufs: one value per hop; ``-inf`` for a silent window, ``nan``
+        for one the K-weighting filter carried a NaN or inf sample into.
     :param times: **centre** time of each window, in seconds. A meter reports
         at the end of its window; a picture drawn beside a waveform has to line
         up with the audio that produced it, and the centre is where that is.
@@ -335,6 +363,10 @@ class LoudnessCurve:
         }
 
     def __str__(self) -> str:
+        bad = _unmeasured(self.lufs)
+        if bad:
+            return (f"{bad} of {len(self)} window(s) unmeasurable: the clip has "
+                    f"samples that are not finite")
         if not self.finite.size:
             return f"silent over {len(self)} window(s)"
         loud_at, loud = self.loudest()
@@ -390,6 +422,7 @@ def loudness_over_time(y: np.ndarray, sr: int, *,
     weights = np.array(_CHANNEL_WEIGHTS[:n_channels])
     with np.errstate(divide='ignore'):
         values = _OFFSET + 10.0 * np.log10(power @ weights)
+    _corrupt(data, "loudness_over_time()")
     starts = np.arange(len(values)) * step
     times = (starts + block / 2.0) / sr
     return LoudnessCurve(values, times, int(sr), float(window), float(hop))
@@ -410,7 +443,8 @@ def loudness_range(y: np.ndarray, sr: int) -> float:
     integrated measurement's -10 -- is the one Tech 3342 specifies.
 
     Returns ``0.0`` when nothing survives the gates; a silent or very short
-    clip has no range rather than an undefined one.
+    clip has no range rather than an undefined one. A clip with NaN or inf in
+    it returns ``nan``, with a warning.
 
     If you already have the short-term curve, read
     :attr:`LoudnessCurve.range_lu` instead -- this builds one and asks it, and
@@ -419,7 +453,8 @@ def loudness_range(y: np.ndarray, sr: int) -> float:
     >>> kudio.loudness_range(y, sr)                          # doctest: +SKIP
     5.7
     """
-    return loudness_over_time(y, sr, window=SHORT_TERM, hop=CURVE_HOP).range_lu
+    curve = loudness_over_time(y, sr, window=SHORT_TERM, hop=CURVE_HOP)
+    return float('nan') if _unmeasured(curve.lufs) else curve.range_lu
 
 
 def true_peak(y: np.ndarray, sr: int, *,
@@ -446,7 +481,9 @@ def true_peak(y: np.ndarray, sr: int, *,
     data = _as_channels(y)
     if data.shape[0] == 0:
         return float('-inf')
-    factor = int(oversample) if oversample else max(
+    if _corrupt(data, "true_peak()", "true peak"):
+        return float('nan')
+    factor = int(oversample) if oversample is not None else max(
         1, int(np.ceil(_TRUE_PEAK_SR / sr)))
     if factor < 1:
         raise FeatureError(f"oversample must be >= 1, got {oversample}")
@@ -484,21 +521,28 @@ def normalize_lufs(y: np.ndarray, sr: int, lufs: float = -23.0,
     """Scale *y* to *lufs* integrated loudness. Silence is returned unchanged.
 
     -23 LUFS is the EBU R 128 broadcast target. This applies a gain and nothing
-    else, so the result can exceed full scale; that is logged rather than
+    else, so the result can exceed full scale; that is warned about rather than
     silently limited, because clamping here would change the loudness you just
     asked for.
+
+    :raises FeatureError: for a clip with NaN or inf in it, which has no
+        loudness to scale from.
 
     >>> quiet = kudio.normalize_lufs(y, sr, lufs=-23.0)      # doctest: +SKIP
     """
     current = loudness(y, sr, block_size=block_size)
+    if np.isnan(current):
+        raise FeatureError("normalize_lufs() got a clip with samples that are "
+                           "not finite; repair it first")
     if not np.isfinite(current):
         return np.asarray(y)
     out = np.asarray(y) * float(10 ** ((lufs - current) / 20.0))
     peak = float(np.max(np.abs(out))) if out.size else 0.0
     if peak > 1.0:
-        log.warning("normalize_lufs: %.1f LUFS puts the peak at %.2f "
-                    "(%.1f dBFS over); the signal will clip on output",
-                    lufs, peak, 20 * np.log10(peak))
+        warnings.warn(f"normalize_lufs: {lufs:.1f} LUFS puts the peak at "
+                      f"{peak:.2f} ({20 * np.log10(peak):.1f} dBFS over); the "
+                      f"signal will clip when written to an integer format",
+                      UserWarning, stacklevel=2)
     return out
 
 
@@ -512,6 +556,9 @@ def match_loudness(y: np.ndarray, reference: np.ndarray, sr: int,
     out of the way, since the louder of two clips is reliably preferred
     regardless of quality. Returns *y* unchanged when either side is silent.
 
+    :raises FeatureError: when either clip has NaN or inf in it, and so no
+        loudness to match.
+
     *reference_sr* defaults to *sr*. Pass it when the two were captured at
     different rates -- loudness is a property of the sound, not of the
     sampling, so the two are still comparable.
@@ -520,6 +567,10 @@ def match_loudness(y: np.ndarray, reference: np.ndarray, sr: int,
     """
     target = loudness(reference, reference_sr or sr, block_size=block_size)
     current = loudness(y, sr, block_size=block_size)
+    if np.isnan(target) or np.isnan(current):
+        side = "reference" if np.isnan(target) else "clip"
+        raise FeatureError(f"match_loudness() got a {side} with samples that "
+                           f"are not finite; repair it first")
     if not (np.isfinite(target) and np.isfinite(current)):
         return np.asarray(y)
     return np.asarray(y) * float(10 ** ((target - current) / 20.0))
