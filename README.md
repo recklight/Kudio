@@ -1,5 +1,7 @@
 # Kudio
 
+![Kudio, audio processing](https://raw.githubusercontent.com/recklight/Kudio/master/docs/assets/banner.webp)
+
 [![PyPI](https://img.shields.io/pypi/v/kudio.svg)](https://pypi.org/project/kudio/)
 [![Python](https://img.shields.io/pypi/pyversions/kudio.svg)](https://pypi.org/project/kudio/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.txt)

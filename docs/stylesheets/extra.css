@@ -8,3 +8,23 @@
   max-width: none;
   margin-top: 0.4em;
 }
+
+/* The logo's colours: deep navy for the header, its teal for accents. The
+   teal is darkened on the light scheme, where the bright one is unreadable
+   as link text on white. */
+:root {
+  --md-primary-fg-color: #0b1530;
+  --md-primary-fg-color--light: #1a2a55;
+  --md-primary-fg-color--dark: #060c1d;
+  --md-accent-fg-color: #0f9c87;
+  --md-accent-fg-color--transparent: rgba(15, 156, 135, 0.1);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-accent-fg-color: #2ef2d0;
+  --md-accent-fg-color--transparent: rgba(46, 242, 208, 0.1);
+}
+
+.md-header__button.md-logo img {
+  height: 1.8rem;
+}

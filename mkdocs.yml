@@ -11,8 +11,8 @@ theme:
   name: material
   language: en
   favicon: assets/favicon.svg
+  logo: assets/logo.png
   icon:
-    logo: material/waveform
     repo: fontawesome/brands/github
   palette:
     # follow the reader's system setting until they pick one
@@ -22,15 +22,15 @@ theme:
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: Switch to system preference

@@ -9,6 +9,8 @@ hide:
 
 # Kudio
 
+![Kudio, audio processing](assets/banner.webp)
+
 Kudio is a Python toolkit for audio, speech most of all. It
 [reads and writes files](guide/audio-files.md),
 [inspects a recording](guide/inspection.md) when there is no clean copy to
