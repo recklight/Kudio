@@ -70,7 +70,7 @@ check = ["pyloudnorm>=0.1"]
 # plugin system Material and mkdocstrings are built on. mkdocstrings-python 2.0
 # is a real floor: it brings the griffe that tools/docs/griffe_markdown.py hooks
 # into. ruff is only there so mkdocstrings can wrap long signatures.
-docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings>=1.0", "mkdocstrings-python>=2.0", "ruff"]
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings>=1.0", "mkdocstrings-python>=2.0", "mkdocs-static-i18n>=1.2", "jieba", "ruff"]
 
 [project.scripts]
 kudio = "kudio.cli:main"

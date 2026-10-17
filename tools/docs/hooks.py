@@ -143,7 +143,40 @@ def _overview(config) -> str:
     return "\n".join(out)
 
 
+#: A Chinese character or full-width punctuation mark.
+_CJK = re.compile("[　-〿一-鿿＀-￯]")
+#: A line that opens a block of its own, so nothing is joined onto it.
+_OPENS = re.compile(r"[ \t]*(?:[-*+]\s|\d+\.\s|[|#>:<]|!!!|\?\?\?|===|```|~~~)")
+#: A line that ends a block, so the next line is never joined onto it.
+_CLOSED = re.compile(r"[ \t]*(?:[|#<]|!!!|\?\?\?|===|```|~~~)")
+
+
+def _join_cjk_lines(markdown: str) -> str:
+    """Join the lines of a Chinese paragraph. A browser renders a line break
+    as a space, and next to a Chinese character that space shows; the sources
+    stay wrapped at 80 columns for the diffs. Fenced code is left alone."""
+    lines = markdown.split("\n")
+    out: List[str] = []
+    fenced = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(("```", "~~~")):
+            fenced = not fenced
+            out.append(line)
+            continue
+        prev = out[-1] if out else ""
+        if (not fenced and stripped and prev.strip() and not _OPENS.match(line)
+                and not _CLOSED.match(prev)
+                and (_CJK.match(prev.rstrip()[-1]) or _CJK.match(stripped[0]))):
+            out[-1] = prev.rstrip() + stripped
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def on_page_markdown(markdown: str, page, config, files, **kwargs) -> str:
+    if page.file.src_uri.endswith(".zh-TW.md"):
+        markdown = _join_cjk_lines(markdown)
     if MARKER not in markdown:
         return markdown
     return markdown.replace(MARKER, _overview(config))

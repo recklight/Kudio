@@ -40,7 +40,6 @@ theme:
     - navigation.indexes
     - navigation.top
     - navigation.footer
-    - navigation.instant
     - toc.follow
     - search.suggest
     - search.highlight
@@ -91,7 +90,53 @@ markdown_extensions:
       alternate_style: true
 
 plugins:
-  - search
+  - search:
+      # jieba splits the Chinese pages into words for the index
+      lang: [en, zh]
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: false
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: zh-TW
+          name: 繁體中文
+          build: true
+          site_description: 輕量、可組合的語音音訊工具組
+          # pages not yet translated show the English text under these names
+          nav_translations:
+            Home: 首頁
+            Getting started: 入門
+            User guide: 使用指南
+            Audio files: 音訊檔案
+            STFT and features: STFT 與特徵
+            Inspecting a recording: 檢查錄音
+            Speech activity and pitch: 語音活動與音高
+            Editing and effects: 編輯與效果
+            Rooms and channels: 房間與通道
+            Building a noisy dataset: 建立含雜訊資料集
+            Denoising: 降噪
+            Measuring quality: 品質評估
+            Recording and live views: 錄音與即時檢視
+            Command line: 命令列
+            API reference: API 參考
+            Inspection: 檢查
+            Datasets: 資料集
+            Enhancement: 增強
+            Metrics and alignment: 指標與對齊
+            Live audio: 即時音訊
+            Configuration and errors: 設定與錯誤
+            Utilities: 工具
+            Changelog: 更新紀錄
+            Migrating from v2: 從 v2 遷移
+  # each API page exists once per language, so a name has two anchors; a
+  # link goes to the one in its own language
+  - autorefs:
+      resolve_closest: true
   - mkdocstrings:
       handlers:
         python:
