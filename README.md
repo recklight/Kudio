@@ -1,6 +1,6 @@
 # Kudio
 
-![Kudio, audio processing](https://raw.githubusercontent.com/recklight/Kudio/master/docs/assets/banner.webp)
+[![Kudio, audio processing](https://raw.githubusercontent.com/recklight/Kudio/master/docs/assets/banner.webp)](https://recklight.github.io/Kudio/)
 
 [![PyPI](https://img.shields.io/pypi/v/kudio.svg)](https://pypi.org/project/kudio/)
 [![Python](https://img.shields.io/pypi/pyversions/kudio.svg)](https://pypi.org/project/kudio/)
