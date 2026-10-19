@@ -4,7 +4,151 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.9.0] - 2026-10-19
+
+A minor version rather than a patch, because two results move: DNSMOS lays
+out its windows as DNS-Challenge's script does, and an integer array is read
+on its type's full scale wherever it goes in, which changes every number
+measured on one.
+
+### Changed — results that move
+
+- **DNSMOS cuts its windows as DNS-Challenge's `dnsmos_local.py` does.** A
+  clip shorter than one 9.01 s window is doubled until it holds one, and
+  every window of the result is scored: seven for a 2 s clip, where kudio
+  filled a single window. Windows end inside the clip's last whole second, so
+  12.01 s gets three where it got four. The script works out each window's
+  end in floating point, which leaves the windows starting at 7 to 23 s a
+  sample short, and skips them; kudio keeps them, so the two agree on any
+  clip that stays under 17 s once doubled.
+
+### Changed — interfaces
+
+- **`StreamEnhancer.flush()` stops where the input stopped**, so everything
+  concatenated is as long as the input. 16000 samples in came back as 16383,
+  the tail of the zero padding, and the guide said to trim it.
+- **`CheckDevice.input_device` raises `DeviceError`** rather than a plain
+  `RuntimeError` that `except kudio.KudioError` let through. `DeviceError` is a
+  `RuntimeError` as well, so code catching that still does.
+- **`KudioConfig.load_config` warns when it falls back to the defaults**: on a
+  path that is not there, a folder it was given with no `cfg.yaml` in it, or a
+  search that finds more than one. It said so at `INFO`, which nobody hears,
+  so a misspelt file name ran on the defaults.
+
+### Deprecated
+
+- The console colour helpers at the top level, `kudio.red`, `kudio.warn`,
+  `kudio.error`, `kudio.info`, `kudio.h1` and the rest of `kudio.util.colors`,
+  and the misspelt `upercase`. `error`, `info` and `warn` read as part of
+  kudio's error handling, and a star import put them over a caller's own
+  names. They still work, with a `DeprecationWarning`; use `kudio.util.red`
+  and so on, and `uppercase`.
+
+### Fixed — integer audio
+
+- **Everything that measures or processes audio read an integer array as
+  plain numbers.** An int16 clip measured 90.3 dB louder than the file it came
+  from in `loudness` and `true_peak`, `audio_report` called it past full
+  scale, `snr`, `segmental_snr` and `sdi` scored an int16 reference against a
+  float clip 32768 times apart, and the channel effects, `spectral_enhance`,
+  `trad_enhance`, `apply_rir`, `StreamEnhancer`, `SpectrogramStream`,
+  `melspectrogram`, `STFT.analyse` and `dnsmos` worked on a signal 32768 times
+  too loud; `waveform_to_spectrogram` and `mfcc` refused it. Every one reads
+  integers on their type's full scale now, the way soundfile reads an integer
+  file and `gain` already did: int16 over 32768, int32 over 2**31, uint8
+  around 128, where an 8-bit file's silence sits, so `trim_silence` used to
+  find none in one. What returns float32 still does; `normalize_lufs` and
+  `match_loudness` return the input's type, rounded and clipped, as
+  `normalize` does.
+- **Filters, fades, crossfades and `remove_dc` cast integer audio straight
+  back.** A filter overshoots at an edge and an equal-power seam adds 3 dB, so
+  a near-full-scale int16 square wave through a 2 kHz low-pass had 1194
+  samples wrap round to the other sign, and two int16 clips at 30000
+  crossfaded into a seam that was negative for 280 of its 320 samples, down
+  to -32732. They round and clip within the type now, as `gain` and
+  `normalize` already did. `time_stretch` and `pitch_shift` refused integer
+  audio outright and take it the same way.
+- **`add_noise_snr` squared int16 audio in int16**, which wraps round, so a
+  quarter-scale tone mixed at 10 dB came out at 55.9 dB, and cast the mixture
+  back by truncating. It measures and mixes in float and returns the input's
+  type, rounded and clipped. `reverb` took the peak of int16 audio with
+  `abs`, which leaves -32768 negative, so a clip with one sample pinned there
+  came back at a peak of 20000 rather than 32768, and
+  `AudioDataManager.play_audio(volume=2)` played an int16 20000 as -25536.
+
+### Fixed — corrupt, silent and short input
+
+- **A clip with NaN in it was still misread in places.** `trim_silence` cut
+  it to nothing under librosa 0.11, `vad` left the frames holding the bad
+  samples out and judged the rest, `compare_enhancers` returned a table in
+  which every run had failed, and `f0` and `spectral_enhance` stopped on
+  librosa's own error, which names neither the function nor the fix. Each
+  refuses it with `FeatureError` now, and the command line reports it on one
+  line with exit 2, where `kudio pitch` printed a traceback and `loudness`,
+  `vad` and `compare` exited 0. `audio_report` stops warning about the
+  samples it already names as its first finding.
+- **`trad_enhance` returned NaN** for a clip that opens with digital silence
+  (768 samples of it here) or is silent throughout, and silence for a clip
+  shorter than one 512-sample frame. The power has a floor under it, a short
+  clip is refused, and stereo is refused by name rather than by numpy.
+  `wavelet_low_pass_filter` returned NaN for silence and one sample too many
+  for an odd length.
+- **`Synthesizer` failed without saying which file.** An empty noise file
+  divided by zero, and a file with NaN in it stopped on librosa's error; both
+  are a `SynthesisError` naming the file. `target_sr=0` is refused before the
+  output folder is emptied, not after.
+- `mfcc` and `STFT.analyse` read a stereo array as thousands of two-sample
+  signals and came back the wrong shape, and `melspectrogram` on one failed
+  with a numpy broadcast error; all three refuse it by name. `denoise_wav2spec`
+  divided by the peak of a silent clip and stopped on librosa's error.
+
+### Fixed — elsewhere
+
+- `check_path` globbed for numbered siblings, so `runs/exp[1]` missed its own
+  `runs/exp[1]2` and handed that folder back as free.
+- `vad_frames(center=True)` counted `1 + n // hop` frames, one more than the
+  spectrogram has for an odd `n_fft`.
+- TPDF dither in `bit_depth` used `2 / 2**bits` as its step, half the grid's
+  step at 2 bits; it is two of the grid's own steps wide at every depth.
+- `AudioDataManager.save_all` split a mono clip into `<name>_ch0.wav` beside
+  its source when the manager was set to two channels; the clip's own channel
+  count decides now.
+- `AudioBuffer.get_fixed_size_data` let a second capture take over the first
+  one's state, and the second then failed with a `TypeError`; it raises
+  `RuntimeError` saying a capture is running.
+  `LocalStreamReader.stream_start()` and `play_audio()` without a device raise
+  `DeviceError` rather than an `AttributeError`, and `StreamRecorder.start()`
+  refuses to continue a take when the device reopens at another rate or
+  channel count.
+- `load_manifest` names the row that lacks `noisy` or `clean` (a
+  `ValueError`, where the dataclass raised a `TypeError`).
+- `LoadAudio` collects files the way `check_input` does, `.WAV` included;
+  `data2xlsx(fit_column=True)` sized the columns only when the workbook
+  already existed; `pesq_score_exe` runs the binary with an argument list
+  rather than a shell line, so a path with a space in it runs, and a binary
+  that is not there is named in a `FileNotFoundError` rather than surfacing
+  as an `IndexError`; the `*_score` methods say to call `eval()` first;
+  `compare_enhancers` scores STOI even when PESQ finds no utterance.
+
+### Added
+
+- `kudio.PA_FLOAT32` and `kudio.PA_INT16`, the `wav_format` codes
+  `LocalStreamReader` takes, which only `kudio.core.stream` had.
+- `window=` on `file_to_spectrogram` and `logspec_from_files`, which were
+  Hamming only. It comes after their other arguments, so a call that passes
+  those by position is unchanged.
+
+### Documentation
+
+- The package description, the README's opening line and the site's English
+  description say what the site's home page says: a toolkit for audio, speech
+  most of all.
+- `syn_extra_mode` puts `dB` on both signs of an SNR (`n5dB`), where `syn()`
+  writes `n5`. Both stay, since corpora on disk use them; its docstring and
+  the synthesis guide say so and point at the manifest's `snr_db`.
+- The inspection guide still said DNSMOS averages the windows' raw outputs
+  and maps the average onto the MOS scale. Each window has been mapped first
+  since 3.8.0, as the code and the 3.8.0 entry below say.
 
 ## [3.8.0] - 2026-10-15
 
@@ -114,7 +258,9 @@ without saying which axis was time worked along the channels.
 - `resample`, and `save_wave(d_sample=)` with it: a 1 s stereo clip came back
   `(16000, 1)`, or as a 2 s mono file.
 - `highpass`, `lowpass`, `bandpass` and `bandstop` filtered across the
-  channels; `time_stretch` and `pitch_shift` worked across them too, and a
+  channels with `zero_phase=False`, and with the default failed on scipy's
+  padding of a two-sample "signal"; `time_stretch` and `pitch_shift` worked
+  across them too, and a
   stereo second came back from `time_stretch` as one channel; `trim_silence`
   cut nothing, so `convert_folder(mono=False, trim_db=...)` trimmed no stereo
   file; and `reverb` failed on a stereo array.
@@ -162,8 +308,9 @@ without saying which axis was time worked along the channels.
 - **`trad_enhance` dropped the last overlap**, leaving its final 256 samples at
   zero, and returned a different length from its input; it returns float32
   of the input's length. `wavelet_low_pass_filter` took its threshold from the
-  signed maximum, so a clip below zero throughout got a negative threshold and
-  came back unfiltered.
+  signed maximum, so a clip below zero throughout got a negative threshold,
+  which soft thresholding turns into a boost: its detail came back amplified
+  rather than removed.
 - **`STFT.inverse` and `save_spectrogram_as_wave` repeated one value** over the
   last `len(y) % hop` samples instead of rebuilding them, and accepted a
   spectrogram of the wrong shape.

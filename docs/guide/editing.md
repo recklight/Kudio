@@ -305,8 +305,8 @@ mix of the file; see [Command line](../cli.md).
 ### When the background is not silent
 
 Level relative to the loudest frame works where the gaps are far quieter than
-the sound, as in a studio take or around the impact in an inspection
-recording. In `take.wav` the room sits about 23 dB under the loudest frame, so
+the sound, as in a studio take or around a knock in a still room. In
+`take.wav` the room sits about 23 dB under the loudest frame, so
 at the default `top_db=30` every frame counts as sound and `split_on_silence`
 returns the whole file as one piece. Lowering `top_db` until the room drops out
 (23 does it here) also cuts into the quiet ends of words, which sit near the
@@ -352,7 +352,10 @@ dividing by zero. [`gain`][kudio.effects.augment.gain] and
 [`random_gain`][kudio.effects.augment.random_gain] change the level by a fixed
 or a seeded random number of dB. All four keep the input's dtype. Integer
 audio is scaled on its own full scale and rounded, and a gain that runs past
-full scale clips there rather than wrapping round.
+full scale clips there rather than wrapping round. The filters, fades,
+crossfades, `remove_dc`, `time_stretch` and `pitch_shift` treat integer audio
+the same way: a filter's overshoot or the 3 dB an equal-power seam adds is held
+at full scale instead of wrapping round to the other sign.
 
 The peak says nothing about how loud a clip sounds, since one stray click sets
 it. To make clips sound equally loud, use
@@ -386,7 +389,8 @@ matters when the noise is longer. The noise's mean is removed before it is
 scaled, so noise that is silent or constant over the stretch used would leave
 nothing to scale and hand back `y` untouched at any SNR; it raises
 `FeatureError` instead. Both signals are mono, and a stereo array is refused
-rather than mixed along the wrong axis.
+rather than mixed along the wrong axis. Integer audio is mixed on its own full
+scale and comes back in its own type, rounded and clipped.
 
 ```python
 import numpy as np

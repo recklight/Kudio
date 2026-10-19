@@ -6,6 +6,7 @@ import logging
 from pprint import pformat
 from typing import List, Optional, Tuple, Union
 
+from kudio.exceptions import DeviceError
 from kudio.util.tools import timer
 
 __all__ = [
@@ -207,16 +208,19 @@ class CheckDevice:
 
         Missing arguments are auto-detected (last input-capable device, first
         working rate of 16000/22050/44100, mono).
+
+        :raises DeviceError: when there is no input, or the device, rate or
+            channel count will not open.
         """
         if device is None:
             mics = [d for d in range(self.p.get_device_count())
                     if self._is_input_device(d)]
             if not mics:
-                raise RuntimeError("No microphone found on this system")
+                raise DeviceError("No microphone found on this system")
             log.info("Found %d microphone(s)", len(mics))
             device = mics[-1]
         if not self._is_input_device(device):
-            raise RuntimeError(f"Device unusable: {self._describe(device)}")
+            raise DeviceError(f"Device unusable: {self._describe(device)}")
 
         # sample rate
         if not (rate is not None and self._is_input_device(device, rate)):
@@ -225,7 +229,7 @@ class CheckDevice:
             if rate is None:
                 rate = int(self.get_device_info(device)["defaultSampleRate"])
         if not self._is_input_device(device, rate):
-            raise RuntimeError(
+            raise DeviceError(
                 f"Bad sample rate for device: {self._describe(device)}")
         log.info("Device %s, sample rate %s", device, rate)
 
@@ -238,7 +242,7 @@ class CheckDevice:
         else:
             channels = 1
         if not self._is_input_device(device, rate, channels):
-            raise RuntimeError(
+            raise DeviceError(
                 f"Bad channel setting ({channels}): {self._describe(device)}")
 
         self.device, self.rate, self.channels = device, rate, channels

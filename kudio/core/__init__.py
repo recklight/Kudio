@@ -100,6 +100,8 @@ from kudio.core.pitch import PitchTrack, f0
 from kudio.core.spectrogram import SpectrogramStream
 from kudio.core.stft import STFT
 from kudio.core.stream import (
+    PA_FLOAT32,
+    PA_INT16,
     LocalStreamReader,
     Recorder,
     RemoteStreamReader,
@@ -157,6 +159,7 @@ __all__ = [
     # stream
     'LocalStreamReader', 'Recorder', 'RemoteStreamReader', 'StreamRecorder',
     'play_audio', 'record', 'wave_decode', 'wave_encode',
+    'PA_FLOAT32', 'PA_INT16',
     # synth
     'Synthesizer',
 ]

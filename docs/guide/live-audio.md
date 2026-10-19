@@ -103,8 +103,10 @@ second.
 A second `stop()` returns the same take, not an empty array. `stop()` also
 shuts down the recorder's PyAudio instance, and a `start()` after it opens the
 stream again with the same settings and carries on the same take, the way a
-Pause button would; [`reset()`][kudio.core.stream.StreamRecorder.reset] throws
-the take away, so call it first for a new one. It works on an open stream as
+Pause button would. If the device comes back at another rate or channel count,
+`start()` raises `DeviceError` rather than join the two in one take;
+[`reset()`][kudio.core.stream.StreamRecorder.reset] throws the take away, so
+call it first for a new one. It works on an open stream as
 well and goes on recording. I cap the take at `max_seconds`
 (3600 by default, `None` for no cap) so that a recorder left running cannot
 fill memory: an hour of 16 kHz mono float32 is 230 MB. At the cap the take
@@ -438,12 +440,13 @@ if reader.get_status():                        # False: no input would open
 ```
 
 Each chunk is one-dimensional, `frame_size × channels` values with the
-channels interleaved: int16 by default, float32 with `wav_format=1`
-(PortAudio's code for float32). `rate` and `channels` are requests, settled as
+channels interleaved: int16 by default, float32 with
+`wav_format=kudio.PA_FLOAT32` (1, PortAudio's code for float32). `rate` and `channels` are requests, settled as
 for `StreamRecorder`. `get_setup()` returns what was opened, and `None` once
 `terminate()` has run, so ask before that. A device that will not open does
 not raise here: the reader stays uninitialised and `get_status()` says so,
-which lets a GUI offer to try again.
+which lets a GUI offer to try again. `stream_start()` or `play_audio()` on
+such a reader raises `DeviceError`.
 
 `on_frame` runs on PortAudio's thread, so store the chunk and return, and do
 the processing elsewhere. kudio catches and logs an exception raised inside

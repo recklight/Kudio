@@ -37,6 +37,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from kudio._samples import as_float
 from kudio.core._framing import frame_view
 from kudio.exceptions import FeatureError
 
@@ -124,15 +125,22 @@ def vad(y: np.ndarray, sr: int, *,
     :returns: non-overlapping ``(start, end)`` pairs, in order. Empty when
         nothing in the clip looks like speech.
 
-    :raises FeatureError: on non-mono audio or a non-positive sample rate.
+    :raises FeatureError: on non-mono audio, samples that are not finite, or
+        a non-positive sample rate. A clip with NaN or inf in it is refused,
+        as :func:`kudio.f0` and :func:`kudio.spectral_enhance` refuse it,
+        rather than judged with those frames left out.
     """
     if sr <= 0:
         raise FeatureError(f"vad() needs a positive sample rate, got {sr}")
-    y = np.ascontiguousarray(np.asarray(y, dtype=np.float64).squeeze())
+    y = np.ascontiguousarray(np.asarray(as_float(y), dtype=np.float64).squeeze())
     if y.ndim != 1:
         raise FeatureError(f"vad() takes mono audio, got shape {y.shape}")
     if y.size == 0:
         return []
+    if not np.all(np.isfinite(y)):
+        raise FeatureError(f"vad() got {int(np.count_nonzero(~np.isfinite(y)))} "
+                           f"sample(s) that are not finite (NaN or inf); repair "
+                           f"the clip first")
 
     size = max(16, int(round(frame * sr)))
     step = max(1, int(round(hop * sr)))
@@ -220,8 +228,8 @@ def vad_frames(y: np.ndarray, sr: int, *, hop_length: int = 256,
     A frame is speech when its centre falls inside a span :func:`vad` found.
     With the default ``center=True`` the frames are the ones
     :func:`kudio.waveform_to_spectrogram` and :class:`kudio.STFT` make with
-    the same *hop_length*, both of which centre their frames, so the mask
-    indexes their rows directly; *n_fft* only matters with ``center=False``::
+    the same *hop_length* and *n_fft*, both of which centre their frames, so
+    the mask indexes their rows directly::
 
         >>> spec = kudio.waveform_to_spectrogram(y)       # (frames, bins)
         >>> speech = kudio.vad_frames(y, sr)              # (frames,) bool
@@ -242,7 +250,10 @@ def vad_frames(y: np.ndarray, sr: int, *, hop_length: int = 256,
     spans = vad(y, sr, pad=pad, **kwargs)
     n = np.asarray(y).squeeze().shape[0] if np.asarray(y).size else 0
     if center:
-        centres = np.arange(1 + n // hop_length) * hop_length
+        # the count librosa gives after padding n_fft // 2 each side, which is
+        # one frame short of 1 + n // hop for an odd n_fft
+        count = 1 + (n + 2 * (n_fft // 2) - n_fft) // hop_length
+        centres = np.arange(count) * hop_length
     else:
         count = 1 + (n - n_fft) // hop_length if n >= n_fft else 0
         centres = np.arange(count) * hop_length + n_fft / 2

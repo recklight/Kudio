@@ -103,7 +103,14 @@ def load_manifest(path: PathLike) -> List[Pair]:
     known = {f.name for f in fields(Pair)}
     out: List[Pair] = []
     dropped: Dict[str, int] = {}
-    for row in rows:
+    for n, row in enumerate(rows, 1):
+        if not isinstance(row, dict):
+            raise ValueError(f"manifest {path}: row {n} is not an object: {row!r}")
+        missing = [k for k in ('noisy', 'clean') if not row.get(k)]
+        if missing:
+            raise ValueError(f"manifest {path}: row {n} has no "
+                             f"{' or '.join(missing)}; every row needs both "
+                             f"'noisy' and 'clean'")
         unknown = set(row) - known
         for key in unknown:
             dropped[key] = dropped.get(key, 0) + 1

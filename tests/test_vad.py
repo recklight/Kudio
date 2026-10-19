@@ -183,3 +183,18 @@ def test_the_example_output_is_fenced_not_a_link():
     offenders = [line for line in _markdown_lines(doc)
                  if _SHORTCUT_REFERENCE.match(line.strip())]
     assert not offenders, offenders
+
+
+# -- frame counts for any n_fft, and corrupt clips -----------------------------
+@pytest.mark.parametrize("n_fft", [512, 511, 400])
+def test_vad_frames_has_one_label_per_spectrogram_row(n_fft):
+    y = (0.1 * np.random.default_rng(0).standard_normal(32000)).astype(np.float32)
+    spec = kudio.waveform_to_spectrogram(y, n_fft=n_fft, hop_length=256)
+    assert len(kudio.vad_frames(y, 16000, hop_length=256, n_fft=n_fft)) == len(spec)
+
+
+def test_a_corrupt_clip_is_refused():
+    y = 0.1 * np.random.default_rng(0).standard_normal(16000)
+    y[100] = np.nan
+    with pytest.raises(kudio.FeatureError, match="not finite"):
+        kudio.vad(y, 16000)

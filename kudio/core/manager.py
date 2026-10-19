@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import List, Optional, Union
 
+from kudio._samples import to_float
 from kudio.core.feature import wave_separate
 from kudio.core.io import file_load, save_wave
 from kudio.core.stream import play_audio
@@ -170,7 +171,10 @@ class AudioDataManager:
             dir_ = Path(item['dir'])
         else:
             dir_ = Path(dst_path) / self._file_name(name)
-        if self.ch_ > 1:
+        # the clip's own channel count, not the manager's: a mono file loaded
+        # while the manager was set to two channels goes back where it came
+        # from, not to a new <name>_ch0.wav beside it
+        if len(item['wave']) > 1:
             return [dir_.parent / self._file_name(f"{name}_ch{i}")
                     for i in range(len(item['wave']))]
         return [dir_]
@@ -190,12 +194,8 @@ class AudioDataManager:
             log.warning("Manager: %r did not come from a file, so there is "
                         "nowhere to put it; pass dst_path= to say where", name)
             return False
-        if self.ch_ > 1:
-            for d, w in zip(targets, item['wave']):
-                save_wave(d, w, item['sr'], d_sample=down_sample)
-        else:
-            save_wave(targets[0], item['wave'][0], item['sr'],
-                      d_sample=down_sample)
+        for d, w in zip(targets, item['wave']):
+            save_wave(d, w, item['sr'], d_sample=down_sample)
         return True
 
     def save_all(self, dst_path=None, down_sample=None) -> bool:
@@ -228,5 +228,7 @@ class AudioDataManager:
         if item is None:
             log.warning("Manager: cannot play %r", name)
             return
-        w = item['wave'][0]
-        play_audio(wav=(w * volume).astype(w.dtype), rate=item['sr'])
+        # scaled in float and put back: int16 times 1.5, cast straight back,
+        # wraps round to the other sign
+        w, back = to_float(item['wave'][0])
+        play_audio(wav=back(w * volume), rate=item['sr'])

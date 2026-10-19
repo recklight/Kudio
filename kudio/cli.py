@@ -279,13 +279,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         logger.addHandler(_HANDLER)
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
+    from librosa.util.exceptions import LibrosaError
+
     from kudio.exceptions import KudioError
     with warnings.catch_warnings():
         if not args.verbose:
             warnings.showwarning = _show_warning
         try:
             return _run(args)
-        except (KudioError, ValueError, OSError) as e:
+        # librosa's own refusals are not ValueErrors, and a corrupt file
+        # reaching one printed a traceback with the exit code of a finding
+        except (KudioError, ValueError, OSError, LibrosaError) as e:
             if args.verbose:
                 raise
             print(f"kudio {args.command}: {e}", file=sys.stderr)
@@ -344,6 +348,9 @@ def _run(args) -> int:
         # mono mix of a stereo file read 3 LU low
         y, sr = kudio.file_load(args.file, sr=None, mono=False)
         integrated = kudio.loudness(y, sr)
+        if np.isnan(integrated):
+            return _fail(f"{args.file} has samples that are not finite, so its "
+                         f"loudness is undefined; repair it first")
         if integrated == float("-inf"):
             print("integrated      -inf LUFS — the file is digital silence")
             return 1 if args.target is not None else 0
@@ -471,14 +478,18 @@ def _run(args) -> int:
                 continue
             row = f"{r.label:<28}{r.seconds * 1000:7.0f}{r.noise_floor_db:12.1f}"
             if reference is not None:
-                row += f"{r.si_sdr_db:10.2f}{r.delta_snr_db:8.2f}"
+                row += (f"{r.si_sdr_db:10.2f}" if r.si_sdr_db is not None
+                        else f"{'—':>10}")
+                row += (f"{r.delta_snr_db:8.2f}" if r.delta_snr_db is not None
+                        else f"{'—':>8}")
                 row += f"{r.pesq:7.2f}" if r.pesq is not None else f"{'—':>7}"
                 row += f"{r.stoi:7.2f}" if r.stoi is not None else f"{'—':>7}"
             print(row)
 
         if reference is not None and results and not results[0].error:
             scored = [r for r in results if r.error is None]
-            if not any(r.delta_snr_db > 0 for r in scored):
+            if not any(r.delta_snr_db is not None and r.delta_snr_db > 0
+                       for r in scored):
                 print("\nNothing beat leaving the file alone. Either it is "
                       "already clean enough that the distortion costs more "
                       "than the noise removed, or the reference is not clean.")

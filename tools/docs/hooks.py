@@ -104,8 +104,13 @@ def _overview(config) -> str:
         if (inspect.isfunction(obj) or inspect.isclass(obj)) \
                 and (inspect.getdoc(obj) or "").startswith(_DEPRECATED):
             new = obj.__wrapped__
-            old_names.append(f"| `{name}` | [`{new.__name__}`]"
-                             f"[{new.__module__}.{new.__qualname__}] |")
+            # the name the docstring gives, `kudio.util.red` for one that only
+            # moved; and, as below, the module when the new one has no anchor
+            shown = _ROLE.search(inspect.getdoc(obj))
+            shown = shown.group(1) if shown else new.__name__
+            target = f"{new.__module__}.{new.__qualname__}" if inspect.getdoc(new) \
+                else new.__module__
+            old_names.append(f"| `{name}` | [`{shown}`][{target}] |")
             continue
         if inspect.isfunction(obj) or inspect.isclass(obj):
             module = obj.__module__

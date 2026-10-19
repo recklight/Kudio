@@ -39,6 +39,7 @@ from typing import Optional
 
 import numpy as np
 
+from kudio._samples import as_float
 from kudio.exceptions import FeatureError
 
 __all__ = ['SpectrogramStream']
@@ -210,7 +211,7 @@ class SpectrogramStream:
             when the block was longer than the window -- all are returned, only
             the last :attr:`n_columns` are kept.
         """
-        block = np.asarray(block)
+        block = as_float(block)
         if block.ndim > 1:
             raise FeatureError(
                 f"SpectrogramStream takes mono audio, got shape {block.shape}. "

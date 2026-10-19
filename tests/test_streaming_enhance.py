@@ -76,10 +76,11 @@ def test_nothing_comes_out_before_a_whole_frame_has_arrived():
     assert enhancer.process(np.zeros(256, dtype=np.float32)).size > 0
 
 
-def test_the_total_length_is_within_a_frame_of_the_input(noisy_and_clean):
+def test_the_total_length_is_the_input_length(noisy_and_clean):
+    """flush() used to hand back the zero padding too: 16000 in, 16383 out."""
     noisy, _ = noisy_and_clean
-    out = stream(noisy, method='logmmse')
-    assert abs(len(out) - len(noisy)) <= 512
+    for n in (len(noisy), SR, SR + 77, 100):
+        assert len(stream(noisy[:n], method='logmmse')) == n
 
 
 def test_flush_returns_the_tail_rather_than_dropping_it():
@@ -89,7 +90,7 @@ def test_flush_returns_the_tail_rather_than_dropping_it():
     during = enhancer.process(y)
     after = enhancer.flush()
     assert after.size > 0
-    assert len(during) + len(after) >= len(y)
+    assert len(during) + len(after) == len(y)
 
 
 def test_flush_on_an_untouched_enhancer_is_empty():

@@ -22,6 +22,7 @@ from typing import List, Optional
 
 import numpy as np
 
+from kudio._samples import as_float
 from kudio.core._framing import frame_view as _frame
 from kudio.core.loudness import loudness
 from kudio.exceptions import FeatureError
@@ -251,7 +252,7 @@ def audio_report(y: np.ndarray, sr: int) -> AudioReport:
     """
     if sr <= 0:
         raise FeatureError(f"audio_report() needs a positive sample rate, got {sr}")
-    y = np.ascontiguousarray(np.asarray(y, dtype=np.float64).squeeze())
+    y = np.ascontiguousarray(np.asarray(as_float(y), dtype=np.float64).squeeze())
     if y.ndim != 1:
         raise FeatureError(f"audio_report() takes mono audio, got shape {y.shape}")
     if y.size == 0:
@@ -292,10 +293,15 @@ def audio_report(y: np.ndarray, sr: int) -> AudioReport:
         loud = floor = float('-inf')
         silence_ratio, snr = 1.0, float('-inf')
 
-    try:
-        lufs = loudness(y, sr)
-    except FeatureError:                        # shorter than a BS.1770 block
+    if non_finite:
+        # undefined, and loudness() would warn about the samples this report
+        # already names as its first finding
         lufs = float('nan')
+    else:
+        try:
+            lufs = loudness(y, sr)
+        except FeatureError:                    # shorter than a BS.1770 block
+            lufs = float('nan')
 
     bandwidth = _bandwidth(y, sr)
     nyquist = sr / 2.0

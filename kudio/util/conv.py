@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import List, Union
 
+from kudio._deprecation import alias
 from kudio.exceptions import DependencyError
 
 __all__ = [
@@ -48,19 +49,18 @@ def data2xlsx(data: Union[dict, "pd.DataFrame"], xlsx_dir, sheet_name: str,
     xlsx_dir = Path(xlsx_dir)
     xlsx_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    if xlsx_dir.is_file():
-        with pd.ExcelWriter(xlsx_dir, engine='openpyxl', mode='a',
-                            if_sheet_exists='replace') as writer:
-            data_frame.to_excel(writer, sheet_name=sheet_name, index=index)
-            if fit_column:
-                from openpyxl.utils import get_column_letter
-                worksheet = writer.book[sheet_name]
-                for column_cells in worksheet.columns:
-                    length = max(len(str(cell.value)) for cell in column_cells)
-                    worksheet.column_dimensions[
-                        get_column_letter(column_cells[0].column)].width = length
-    else:
-        data_frame.to_excel(xlsx_dir, sheet_name=sheet_name, index=index)
+    # one writer for both cases: a new file used to skip fit_column entirely
+    append = xlsx_dir.is_file()
+    with pd.ExcelWriter(xlsx_dir, engine='openpyxl', mode='a' if append else 'w',
+                        **({'if_sheet_exists': 'replace'} if append else {})) as writer:
+        data_frame.to_excel(writer, sheet_name=sheet_name, index=index)
+        if fit_column:
+            from openpyxl.utils import get_column_letter
+            worksheet = writer.book[sheet_name]
+            for column_cells in worksheet.columns:
+                length = max(len(str(cell.value)) for cell in column_cells)
+                worksheet.column_dimensions[
+                    get_column_letter(column_cells[0].column)].width = length
     return None
 
 
@@ -72,4 +72,4 @@ def uppercase(lst) -> List[str]:
     return [_.upper() for _ in lst if isinstance(_, str)]
 
 
-upercase = uppercase  # backwards-compatible misspelling
+upercase = alias(uppercase, 'upercase', old_prefix='kudio.util')  # the misspelling

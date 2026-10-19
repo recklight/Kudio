@@ -2,6 +2,7 @@
 import numpy as np
 import pytest
 
+import kudio
 from kudio import (
     add_noise_snr,
     gain,
@@ -65,6 +66,27 @@ def test_add_noise_snr_reproducible():
     b = add_noise_snr(y, noise, snr_db=5, seed=42)
     np.testing.assert_array_equal(a, b)
     assert a.shape == y.shape
+
+
+def test_add_noise_snr_holds_the_snr_on_int16():
+    """int16 squared wraps round in int16: a quarter-scale tone mixed at
+    10 dB came out at 55.9 dB."""
+    y = np.round(0.25 * np.sin(2 * np.pi * 440 * np.arange(16000) / 16000)
+                 * 32768).astype(np.int16)
+    noise = (3000 * np.random.default_rng(0).standard_normal(16000)).astype(np.int16)
+    out = add_noise_snr(y, noise, snr_db=10, seed=0)
+    added = out.astype(np.float64) - y
+    assert out.dtype == np.int16
+    assert abs(10 * np.log10(np.mean(y.astype(np.float64) ** 2) / np.mean(added ** 2)) - 10) < 0.05
+
+
+def test_reverb_keeps_the_peak_of_int16_pinned_at_full_scale():
+    """abs(-32768) is -32768 in int16, and one sample there left the result
+    at a peak of 20000."""
+    y = (20000 * np.sin(2 * np.pi * 220 * np.arange(16000) / 16000)).astype(np.int16)
+    y[5000] = -32768
+    out = reverb(y, sr=16000)
+    assert out.dtype == np.int16 and np.abs(out.astype(np.int64)).max() == 32768
 
 
 def test_reverb():
@@ -206,3 +228,14 @@ def test_splice_of_one_part_is_a_copy():
     import kudio
     y = _tone()
     assert kudio.splice([y], 16000) is not y
+
+
+# -- stretching and shifting integer audio -------------------------------------
+@pytest.mark.parametrize("call", [
+    lambda y: kudio.time_stretch(y, 1.5),
+    lambda y: kudio.pitch_shift(y, 16000, 2),
+])
+def test_stretch_and_shift_take_integer_audio(call):
+    y = (3000 * np.sin(2 * np.pi * 220 * np.arange(16000) / 16000)).astype(np.int16)
+    out = call(y)
+    assert out.dtype == np.int16 and 2000 < np.abs(out).max() < 6000

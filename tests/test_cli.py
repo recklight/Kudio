@@ -643,3 +643,17 @@ def test_compare_writes_one_file_per_method_and_estimator(tmp_path):
                  "mcra", "minimum", "--write-to", str(tmp_path / "w")]) == 0
     assert sorted(p.name for p in (tmp_path / "w").iterdir()) == [
         "s_wiener_mcra.wav", "s_wiener_minimum.wav"]
+
+
+# -- a corrupt file is an error, not a finding ---------------------------------
+@pytest.mark.parametrize("command", ["pitch", "vad", "loudness", "trim", "compare"])
+def test_a_corrupt_file_exits_2_on_one_line(tmp_path, capsys, command):
+    import soundfile as sf
+    y = (0.1 * np.random.default_rng(0).standard_normal(32000)).astype(np.float32)
+    y[100] = np.nan
+    src = tmp_path / "nan.wav"
+    sf.write(str(src), y, 16000, subtype="FLOAT")
+    argv = [command, str(src)] + ([str(tmp_path / "out.wav")] if command == "trim" else [])
+    assert main(argv) == 2
+    err = capsys.readouterr().err
+    assert "not finite" in err and "Traceback" not in err

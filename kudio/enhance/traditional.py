@@ -11,6 +11,9 @@ from __future__ import annotations
 import numpy as np
 import pywt
 
+from kudio._samples import as_float
+from kudio.exceptions import FeatureError
+
 __all__ = ['trad_enhance', 'wavelet_low_pass_filter']
 
 
@@ -18,15 +21,23 @@ def wavelet_low_pass_filter(y: np.ndarray, thres: float = 0.8,
                             wavelet: str = 'db2') -> np.ndarray:
     """Soft-threshold the detail coefficients of a wavelet decomposition.
 
-    The threshold is *thres* times the clip's peak, ``max |y|``.
+    The threshold is *thres* times the clip's peak, ``max |y|``. The result
+    has the input's length; a silent clip comes back as it went in.
     """
+    y = as_float(y)                              # float32 stays float32, as pywt keeps it
+    if y.ndim != 1:
+        raise FeatureError(f"wavelet_low_pass_filter() takes mono audio, got shape {y.shape}")
     # the peak, not the signed maximum: a clip below zero throughout got a
     # negative threshold and came back unfiltered
-    level = thres * float(np.nanmax(np.abs(y))) if np.size(y) else 0.0
+    level = thres * float(np.nanmax(np.abs(y))) if y.size else 0.0
+    if not level > 0:
+        # a threshold of zero makes pywt divide by zero: NaN everywhere
+        return y.copy()
     coeff = pywt.wavedec(y, wavelet, mode='periodization')
     coeff[1:] = (pywt.threshold(i, value=level, mode='soft')
                  for i in coeff[1:])
-    return pywt.waverec(coeff, wavelet, mode='periodization')
+    # periodization rounds an odd length up by one sample
+    return pywt.waverec(coeff, wavelet, mode='periodization')[:len(y)]
 
 
 def trad_enhance(y: np.ndarray, sr: int) -> np.ndarray:
@@ -35,7 +46,16 @@ def trad_enhance(y: np.ndarray, sr: int) -> np.ndarray:
 
     Returns float32 of the same length as *y*. The last partial frame, under
     256 samples, has no frame of its own and comes back silent.
+
+    :raises FeatureError: for anything but mono audio, or a clip shorter than
+        one 512-sample frame, which would come back as silence.
     """
+    y = np.asarray(as_float(y), dtype=np.float64)
+    if y.ndim != 1:
+        raise FeatureError(f"trad_enhance() takes mono audio, got shape {y.shape}")
+    if len(y) < 512:
+        raise FeatureError(f"trad_enhance() needs at least one 512-sample frame, "
+                           f"got {len(y)} samples")
     len_ = 512           # frame size in samples
     PERC = 50            # window overlap as percent of frame
     len1 = len_ * PERC // 100
@@ -56,16 +76,20 @@ def trad_enhance(y: np.ndarray, sr: int) -> np.ndarray:
         insign = win * y[k - 1: k + len_ - 1]
         spec = np.fft.fft(insign, nFFT)
         sig = abs(spec)
-        ns_ps = sig ** 2          # noisy power spectrum
+        # a floor under the power: a frame of digital silence otherwise starts
+        # the noise estimate at zero and every gain after it at 0/0
+        ns_ps = sig ** 2 + 1e-12  # noisy power spectrum
         theta = np.angle(spec)    # noisy phase
 
         # noise estimation (MCRA)
         para = INIT(ns_ps, sr).mcra() if n == 0 else EST(ns_ps, para).mcra()
         noise_mu = np.sqrt(para['noise_ps'])
 
-        # posterior SNR
-        SNRpos = 10 * np.log10(
-            np.linalg.norm(sig, 2) ** 2 / np.linalg.norm(noise_mu, 2) ** 2)
+        # posterior SNR; -inf for a frame of digital silence, which the
+        # thresholds below read as the lowest SNR, so numpy need not warn
+        with np.errstate(divide='ignore'):
+            SNRpos = 10 * np.log10(
+                np.linalg.norm(sig, 2) ** 2 / np.linalg.norm(noise_mu, 2) ** 2)
 
         # over-subtraction factor by SNR
         if Expnt == 1.0:

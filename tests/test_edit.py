@@ -290,3 +290,25 @@ def test_crossfade_handles_stereo():
     b = np.zeros((1000, 2), dtype=np.float32)
     out = kudio.crossfade(a, b, SR, 0.005)
     assert out.shape == (2000 - int(0.005 * SR), 2)
+
+
+# -- integer audio past full scale ---------------------------------------------
+def test_an_integer_crossfade_does_not_wrap_round():
+    """An equal-power seam rises 3 dB above two int16 clips at 30000; cast
+    straight back, 280 of its 320 samples came out negative, down to -32732."""
+    a = np.full(800, 30000, np.int16)
+    out = kudio.crossfade(a, a, 16000, duration=0.02)
+    assert out.dtype == np.int16 and out.min() == 30000 and out.max() == 32767
+
+
+def test_an_integer_low_pass_does_not_wrap_round():
+    t = np.arange(16000) / 16000
+    square = np.where(np.sin(2 * np.pi * 100 * t) >= 0, 32000, -32000).astype(np.int16)
+    out = kudio.lowpass(square, 16000, cutoff=2000)
+    float_out = kudio.lowpass(square.astype(np.float64), 16000, cutoff=2000)
+    assert out.dtype == np.int16
+    assert not np.any(np.sign(out.astype(np.int64)) * np.sign(float_out) < 0)
+
+
+def test_remove_dc_rounds_integer_audio():
+    assert kudio.remove_dc(np.array([1, 2, 2], np.int16)).tolist() == [-1, 0, 0]

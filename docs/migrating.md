@@ -75,6 +75,12 @@ because `melspectrogram` calls that argument `source`: pass the path
 positionally or as `source=`. And the STFT functions changed their default
 `win_length` in 3.2, which the last part of this page covers.
 
+The console colour helpers warn from the top level too: `kudio.red`,
+`kudio.warn`, `kudio.error`, `kudio.info`, `kudio.h1` and the rest of
+`kudio.util.colors`, along with the misspelt `upercase`. They stay in
+`kudio.util`, where `kudio.util.red(...)` is silent, and `upercase` is
+`uppercase`.
+
 ## Removed modules
 
 3.0 removed four compatibility modules. Importing one now fails with
@@ -96,9 +102,10 @@ model or training settings from kudio's defaults should keep them in a YAML
 file of its own and load it with
 [`KudioConfig.load_config`][kudio.config.KudioConfig.load_config]. Check that
 the file exists first. On a path it cannot find, `load_config` returns the
-audio defaults and says so only at `INFO`, and a key that is not in the config
-reads as an empty config rather than an error, so `cfg.train.lr` after a
-mistyped path is `{}`. Test for a section with `"train" in cfg`.
+audio defaults with a `UserWarning`, and a key that is not in the config reads
+as an empty config rather than an error, so `cfg.train.lr` after a mistyped
+path is `{}`. Test for a section with `"train" in cfg`, or call `cfg.freeze()`
+to make a missing key raise `KeyError`.
 
 ## Packages that are no longer installed
 

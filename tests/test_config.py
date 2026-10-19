@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import pytest
 import yaml
 
 from kudio import KC, KudioConfig
@@ -50,3 +51,15 @@ def test_freeze():
     cfg.unfreeze()
     cfg['new_key'] = 2
     assert cfg.new_key == 2
+
+
+# -- a path that leads nowhere is said, not swallowed -------------------------
+def test_a_config_path_that_is_not_there_warns(tmp_path):
+    with pytest.warns(UserWarning, match="no config at"):
+        cfg = KudioConfig.load_config(str(tmp_path / "cfg.yml"))
+    assert cfg.waveform.default_rate == 16000
+    for sub in ("a", "b"):
+        (tmp_path / sub).mkdir()
+        (tmp_path / sub / "cfg.yaml").write_text("x: 1\n", encoding="utf-8")
+    with pytest.warns(UserWarning, match=r"2 cfg\.yaml"):
+        KudioConfig.load_config(str(tmp_path))

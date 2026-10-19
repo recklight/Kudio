@@ -16,6 +16,7 @@ import numpy as np
 import soundfile as sf
 from tqdm import tqdm
 
+from kudio._samples import as_float
 from kudio.exceptions import AudioIOError
 
 __all__ = [
@@ -47,11 +48,14 @@ def check_path(path: PathLike, exist_ok: bool = False, sep: str = '') -> str:
     path = Path(path)
     if exist_ok or not path.exists():
         return str(path)
-    siblings = path.parent.glob(f"{path.name}{sep}*") if path.parent.exists() else []
-    matches = (re.fullmatch(rf"{re.escape(path.name)}{re.escape(sep)}(\d+)", p.name)
-               for p in siblings)
-    indices = [int(m.group(1)) for m in matches if m]
+    # listed rather than globbed: a name holding [ or * is a glob pattern,
+    # and runs/exp[1] missed its own runs/exp[1]2 and handed it back
+    pattern = re.compile(rf"{re.escape(path.name)}{re.escape(sep)}(\d+)")
+    siblings = path.parent.iterdir() if path.parent.exists() else []
+    indices = [int(m.group(1)) for m in (pattern.fullmatch(p.name) for p in siblings) if m]
     n = max(indices) + 1 if indices else 2
+    while Path(f"{path}{sep}{n}").exists():
+        n += 1
     return f"{path}{sep}{n}"
 
 
@@ -95,7 +99,7 @@ def _free_wave_path(path: Path, sep: str = '') -> Path:
     """
     stem, suffix = path.stem, path.suffix
     pattern = re.compile(rf"{re.escape(stem)}{re.escape(sep)}(\d+)")
-    existing = path.parent.glob(f"{stem}{sep}*")
+    existing = path.parent.iterdir() if path.parent.exists() else []
     indices = [int(m.group(1)) for m in
                (pattern.fullmatch(p.stem) for p in existing) if m]
     n = max(indices) + 1 if indices else 2
@@ -377,7 +381,9 @@ def audio_info(source: Union[PathLike, np.ndarray], sr: Optional[int] = None,
         channels = 1 if y.ndim == 1 else int(y.shape[1])
         top: Optional[float] = None
         if peak:
-            top = _peak(y, "<array>")
+            # on the full scale a file's peak is read on; abs(-32768) is
+            # -32768 in int16 besides
+            top = _peak(as_float(y), "<array>")
         return AudioInfo(sr=int(sr), channels=channels, frames=frames,
                          duration=frames / float(sr) if sr else 0.0, peak=top)
 
@@ -696,13 +702,14 @@ def convert_folder(src: Any, dst: PathLike, *,
 
 
 class LoadAudio:
-    """Iterate over the ``.wav`` files found (recursively) in a directory."""
+    """Iterate over the ``.wav`` files found (recursively) in a directory,
+    collected the way :func:`check_input` collects them."""
 
     def __init__(self, waves_dirs: PathLike):
         self.sr_pth = Path(waves_dirs)
         if not self.sr_pth.is_dir():
             raise NotADirectoryError(f"Folder not found: {self.sr_pth.absolute()}")
-        self.files = sorted(self.sr_pth.rglob(f"*{WAVE_SUFFIX}"))
+        self.files = check_input(self.sr_pth)[0]
         self.nf = len(self.files)
 
     def __iter__(self):

@@ -200,6 +200,14 @@ reads such a file back: int16 by 1/32768, int32 by 1/2**31, and uint8 around
 its midpoint of 128, which is silence in an 8-bit file. An int16 array written
 as `PCM_16` survives the round trip bit for bit.
 
+Every other function reads an integer array the same way, so an int16 array
+from [`Recorder`][kudio.core.stream.Recorder] or `scipy.io.wavfile` measures
+what the file it came from measures, and the loudness, a metric or a
+spectrogram of it are those of the float clip. Read as plain numbers, an int16
+clip measured 90.3 dB louder, 20 log10 32768. What returns float32 still does;
+the editing functions and `normalize_lufs` hand back the input's type,
+rounded and clipped at full scale.
+
 ### NaN and inf
 
 A file holding NaN or inf samples still loads, because repairing a corpus

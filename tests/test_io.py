@@ -688,3 +688,19 @@ def test_audio_info_treats_an_array_like_a_file():
     y[5] = np.inf
     with pytest.warns(UserWarning, match="not finite"):
         assert np.isnan(kudio.audio_info(y, sr=16000).peak)
+
+
+# -- names with brackets, and every folder reader alike ------------------------
+def test_check_path_lists_rather_than_globs(tmp_path):
+    """[1] is a glob character class: runs/exp[1] could not see its own
+    runs/exp[1]2 and handed that folder back as if it were free."""
+    (tmp_path / "exp[1]").mkdir()
+    (tmp_path / "exp[1]2").mkdir()
+    free = Path(check_path(tmp_path / "exp[1]"))
+    assert free.name == "exp[1]3" and not free.exists()
+
+
+def test_load_audio_collects_what_check_input_collects(tmp_path, sine):
+    sf.write(str(tmp_path / "ZOOM0001.WAV"), sine, 16000)
+    sf.write(str(tmp_path / "b.wav"), sine, 16000)
+    assert list(kudio.LoadAudio(tmp_path)) == check_input(tmp_path)[0]

@@ -24,12 +24,15 @@ import logging
 import math
 import os
 import re
+import shutil
+import subprocess
 import warnings
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from tqdm import tqdm
 
+from kudio._samples import as_float
 from kudio.exceptions import DependencyError
 
 __all__ = ['AudioEvaluate', 'eval_metrics', 'score', 'pesq', 'sdi', 'METRICS',
@@ -73,7 +76,9 @@ def _align(ref: np.ndarray, deg: np.ndarray, *,
     :param names: what to call the two in the message -- file paths where the
         caller has them, otherwise the argument names.
     """
-    ref, deg = np.asarray(ref), np.asarray(deg)
+    # an int16 pair scored as numbers is mostly right, being a ratio, until
+    # one side is float: then the scales differ by 32768
+    ref, deg = as_float(ref), as_float(deg)
     if ref.ndim != 1 or deg.ndim != 1:
         # a (frames, channels) pair used to give some metrics a number over
         # both channels at once and others numpy's own shape error
@@ -210,8 +215,7 @@ def pesq(ref: np.ndarray, deg: np.ndarray, sr: int, *, mode: str = 'auto',
         from pesq import pesq as _pesq
     except ImportError as e:
         raise DependencyError('pesq', extra='pesq') from e
-    ref, deg = _align(np.asarray(ref, dtype=np.float64).squeeze(),
-                      np.asarray(deg, dtype=np.float64).squeeze())
+    ref, deg = _align(np.asarray(ref).squeeze(), np.asarray(deg).squeeze())
     lqo = float(_pesq(int(sr), ref, deg, mode))
     if scale == 'lqo':
         return lqo
@@ -484,6 +488,8 @@ class AudioEvaluate:
         return rows
 
     def _means(self, column: str):
+        if self.enhanced_list is None:
+            raise ValueError("no enhanced files yet: call eval(method, files) first")
         self._check_length(self.enhanced_list)
         base = self._score_rows('Baseline', self.noisy_list, [column])
         enhanced = self._score_rows('enhanced', self.enhanced_list, [column])
@@ -511,20 +517,29 @@ class AudioEvaluate:
         ``pesq_mode='nb', pesq_scale='raw'``.
         """
         log.info("==== Evaluate PESQ (pesq.exe) ====")
+        if self.enhanced_list is None:
+            raise ValueError("no enhanced files yet: call eval(method, files) first")
+        if shutil.which(pesq_exe) is None:
+            # a wrong path is a mistake in the call, not a file that scored nan
+            raise FileNotFoundError(f"pesq binary not found: {pesq_exe!r}")
+
+        def run(clean, other) -> float:
+            # an argument list, not a shell line: a file name with a quote or
+            # a space in it is passed as it is
+            out = subprocess.run([pesq_exe, f'+{rate}', str(clean), str(other)],
+                                 capture_output=True, text=True).stdout
+            try:
+                return float(re.sub(r'^.*= ', '', out.strip().splitlines()[-1].strip()))
+            except (IndexError, ValueError):     # no score printed for this pair
+                return float('nan')
+
         rows = []
         for cln, noy, enh in tqdm(zip(self.clean_list, self.noisy_list,
                                       self.enhanced_list),
                                   total=len(self.clean_list)):
-            pesq_base = os.popen(f'{pesq_exe} +{rate} "{cln}" "{noy}"').readlines()[-1]
-            pesq_enh = os.popen(f'{pesq_exe} +{rate} "{cln}" "{enh}"').readlines()[-1]
-            try:
-                rows.append({
-                    'wave': os.path.basename(str(cln)),
-                    'Baseline-PESQ': float(re.sub(r'^.*= ', '', pesq_base.strip())),
-                    'Enhance-PESQ': float(re.sub(r'^.*= ', '', pesq_enh.strip()))})
-            except ValueError:
-                rows.append({'wave': os.path.basename(str(cln)),
-                             'Baseline-PESQ': np.nan, 'Enhance-PESQ': np.nan})
+            rows.append({'wave': os.path.basename(str(cln)),
+                         'Baseline-PESQ': run(cln, noy),
+                         'Enhance-PESQ': run(cln, enh)})
         mean = _pandas().DataFrame(rows).dropna().mean(numeric_only=True)
         log.info("pesq_mean:\n%s", mean)
         return mean['Baseline-PESQ'], mean['Enhance-PESQ']

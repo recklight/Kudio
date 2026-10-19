@@ -22,6 +22,17 @@ _EXP_FLOOR_DB = -60.0
 DEFAULT_CROSSFADE = 0.005
 
 
+def _as_type(out: np.ndarray, dtype) -> np.ndarray:
+    """*out* in the input's type. An integer one is rounded and held to the
+    type's range: an equal-power seam rises 3 dB above two int16 clips at
+    30000, and cast straight back 280 of a 320-sample seam came out negative,
+    down to -32732."""
+    if np.issubdtype(dtype, np.integer):
+        limits = np.iinfo(dtype)
+        return np.clip(np.round(out), limits.min, limits.max).astype(dtype)
+    return out.astype(dtype, copy=False)
+
+
 def _ramp(n: int, shape: str) -> np.ndarray:
     """A rising 0 → 1 curve of *n* samples, inclusive at both ends."""
     if shape not in SHAPES:
@@ -69,7 +80,7 @@ def fade_in(y: np.ndarray, sr: int, duration: float = 0.01,
     out = y.astype(np.float64, copy=True)
     curve = _ramp(n, shape)
     out[:n] *= curve if y.ndim == 1 else curve[:, None]
-    return out.astype(y.dtype, copy=False)
+    return _as_type(out, y.dtype)
 
 
 def fade_out(y: np.ndarray, sr: int, duration: float = 0.01,
@@ -82,7 +93,7 @@ def fade_out(y: np.ndarray, sr: int, duration: float = 0.01,
     out = y.astype(np.float64, copy=True)
     curve = _ramp(n, shape)[::-1]
     out[-n:] *= curve if y.ndim == 1 else curve[:, None]
-    return out.astype(y.dtype, copy=False)
+    return _as_type(out, y.dtype)
 
 
 def fade(y: np.ndarray, sr: int, fade_in_s: float = 0.01,
@@ -152,8 +163,7 @@ def crossfade(first: np.ndarray, second: np.ndarray, sr: int,
         down, up = down[:, None], up[:, None]
 
     blended = first[-n:] * down + second[:n] * up
-    return np.concatenate([first[:-n], blended, second[n:]]).astype(
-        first.dtype, copy=False)
+    return _as_type(np.concatenate([first[:-n], blended, second[n:]]), first.dtype)
 
 
 def splice(parts, sr: int, duration: float = DEFAULT_CROSSFADE,
@@ -202,4 +212,4 @@ def remove_dc(y: np.ndarray) -> np.ndarray:
     # accumulate in float64: a float32 mean over a long clip carries enough
     # rounding error to leave behind the offset it was asked to remove
     offset = np.mean(y, axis=0, dtype=np.float64, keepdims=True)
-    return (y - offset).astype(y.dtype, copy=False)
+    return _as_type(y - offset, y.dtype)

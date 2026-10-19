@@ -31,6 +31,8 @@ __all__ = [
     'RemoteStreamReader',
     'LocalStreamReader',
     'StreamRecorder',
+    'PA_FLOAT32',
+    'PA_INT16',
 ]
 
 log = logging.getLogger(__name__)
@@ -419,8 +421,11 @@ class LocalStreamReader:
                  buffer: Optional[AudioBuffer] = None,
                  on_frame: Optional[Callable[[np.ndarray], None]] = None):
         """
-        :param device: input device index (default: system default)
-        :param rate: sample rate (default: device default)
+        :param device: **PyAudio** input index. Omitted, the last device
+            that opens as an input (:meth:`kudio.CheckDevice.input_device`).
+        :param rate: sample rate, a request. Omitted or refused, the first of
+            16000, 22050 and 44100 the device accepts, else its own default;
+            :meth:`get_setup` says what was opened.
         :param channels: channel count, default 1
         :param frame_size: frames per buffer, default 2048
         :param wav_format: ``PA_FLOAT32`` (1) or ``PA_INT16`` (8)
@@ -451,6 +456,11 @@ class LocalStreamReader:
     def set_stream(self, device: Optional[int] = None, rate: Optional[int] = None,
                    channels: int = 1, frame_size: int = 2048,
                    wav_format: int = PA_INT16) -> bool:
+        if wav_format not in (PA_FLOAT32, PA_INT16):
+            # before PortAudio is opened, so a refused format leaves nothing running
+            log.error("Stream: unsupported wav_format %r", wav_format)
+            self.isInitial.clear()
+            return False
         pyaudio = _pyaudio()
         if self.p is not None:
             # a retry used to leave the previous PortAudio instance running
@@ -471,13 +481,10 @@ class LocalStreamReader:
 
         self.frame_size_ = frame_size
         self.receive_buffer_size_ = frame_size * (2 if wav_format == PA_INT16 else 4)
-        if wav_format in (PA_FLOAT32, PA_INT16):
-            self.format = wav_format
-            self.data_type = np.int16 if wav_format == PA_INT16 else np.float32
-            self.isInitial.set()
-            return True
-        log.error("Stream: unsupported wav_format %r", wav_format)
-        return False
+        self.format = wav_format
+        self.data_type = np.int16 if wav_format == PA_INT16 else np.float32
+        self.isInitial.set()
+        return True
 
     def get_status(self) -> bool:
         return self.isInitial.is_set()
@@ -485,8 +492,14 @@ class LocalStreamReader:
     def get_setup(self):
         return (self.device_, self.rate_, self.channels_) if self.get_status() else None
 
+    def _require_device(self, what: str) -> None:
+        if not self.get_status():
+            raise DeviceError(f"LocalStreamReader.{what}(): no input device is "
+                              f"open; check get_status(), or call set_stream() again")
+
     def play_audio(self) -> None:
         """Open a playback stream that echoes the microphone input."""
+        self._require_device("play_audio")
         self.play_stream = self.p.open(
             format=self.format,
             channels=self.channels_,
@@ -518,6 +531,7 @@ class LocalStreamReader:
         return in_data, pyaudio.paContinue
 
     def stream_start(self) -> None:
+        self._require_device("stream_start")
         self.rec_stream = self.p.open(
             format=self.format,
             channels=self.channels_,
@@ -651,6 +665,18 @@ class StreamRecorder:
             # recorder take a second take instead of failing on a dead handle
             if not self._reader.set_stream(*self._stream_args):
                 raise DeviceError("no input device could be opened")
+            sr = int(self._reader.rate_ or self._sr)
+            channels = int(self._reader.channels_ or self._channels)
+            with self._lock:
+                carried = bool(self._chunks)
+            if carried and (sr, channels) != (self._sr, self._channels):
+                # the take would hold two rates or two layouts end to end
+                self._reader.terminate()
+                raise DeviceError(
+                    f"the device reopened at {sr} Hz, {channels} channel(s), "
+                    f"and the take so far is {self._sr} Hz, {self._channels}; "
+                    f"stop() and reset() before starting again")
+            self._sr, self._channels = sr, channels
         if self._monitor:
             self._reader.play_audio()
         self._reader.stream_start()

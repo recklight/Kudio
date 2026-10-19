@@ -42,6 +42,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from kudio._samples import as_float
 from kudio.exceptions import FeatureError
 
 __all__ = ['PitchTrack', 'f0']
@@ -199,7 +200,7 @@ def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
     >>> track.median_hz                                    # doctest: +SKIP
     124.7
     """
-    y = np.asarray(y, dtype=np.float32)
+    y = np.asarray(as_float(y), dtype=np.float32)
     if y.ndim > 1 and y.shape[1] == 1:
         y = y[:, 0]
     if y.ndim != 1:
@@ -207,6 +208,10 @@ def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
         # half its pitch: fan.wav came back at 65 Hz instead of 126
         raise FeatureError(f"f0 takes mono audio, got shape {y.shape}; pass "
                            f"one channel or mix down first")
+    if not np.all(np.isfinite(y)):
+        raise FeatureError(f"f0 got {int(np.count_nonzero(~np.isfinite(y)))} "
+                           f"sample(s) that are not finite (NaN or inf); repair "
+                           f"the clip first")
     sr = int(sr)
     if sr <= 0:
         raise FeatureError(f"f0 needs a positive rate, got {sr}")

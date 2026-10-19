@@ -407,15 +407,13 @@ pieces = [enhancer.process(noisy[i:i + 1024])       # one 64 ms block at a time
 pieces.append(enhancer.flush())
 streamed = np.concatenate(pieces)
 print(len(noisy), len(streamed))
-
-streamed = streamed[:len(noisy)]
 print(f"streamed {kudio.si_sdr(clean, streamed):.2f} dB,",
       f"offline {kudio.si_sdr(clean, enhanced):.2f} dB")
 ```
 
 ```text
 latency 32 ms
-80000 80383
+80000 80000
 streamed 13.45 dB, offline 12.21 dB
 ```
 
@@ -423,8 +421,8 @@ The latency is one analysis frame, `n_fft / sr`: nothing comes out until a
 whole frame has arrived, and then the output follows in hop-sized pieces. That
 is a wait, not a shift, so sample *i* of everything concatenated lines up with
 sample *i* of the input. `flush()` zero-pads the last partial frame so the tail
-is processed rather than dropped, which is why the total runs past the input;
-trim it to the input's length. The test suite feeds the same audio in blocks of
+is processed rather than dropped, and stops where the input stopped, so the
+whole output is as long as the input. The test suite feeds the same audio in blocks of
 1, 7, 128, 512, 1024 and 9999 samples and gets the same output to within
 10⁻⁶. [`reset`][kudio.enhance.streaming.StreamEnhancer.reset] clears every
 buffer and estimate for the next take.
@@ -520,15 +518,17 @@ print(f"{kudio.si_sdr(clean, out):.2f} dB")
 
 The output is as long as the input. Its frames step by 256 samples, so a tail
 shorter than that has no frame of its own and comes back silent: the last 128
-samples here, 8 ms.
+samples here, 8 ms. A clip shorter than one 512-sample frame is refused with
+`FeatureError`, since it would come back as silence.
 
 [`wavelet_low_pass_filter`][kudio.enhance.traditional.wavelet_low_pass_filter]
 soft-thresholds the detail coefficients of a full `db2` decomposition with one
 threshold for every level, `thres` times the clip's peak, `max |y|`. The
 fine levels go first, so it acts as a low-pass, and at the default `thres=0.8`
 a heavy one: on this clip the voices themselves lost 7.6 dB below 1 kHz, and
-SI-SDR fell from 4.98 to 4.00 dB (11.20 dB at `thres=0.1`). An odd-length
-input comes back one sample longer. For a plain cutoff frequency, the
+SI-SDR fell from 4.98 to 4.00 dB (11.20 dB at `thres=0.1`). The output has
+the input's length, and a silent clip comes back as it went in. For a plain
+cutoff frequency, the
 Butterworth filters in [Editing and effects](editing.md) are the tool.
 
 ## From the command line

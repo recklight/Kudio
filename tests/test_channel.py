@@ -595,3 +595,15 @@ def test_a_bad_link_is_refused_when_it_is_described():
 def test_no_link_still_refuses_stereo():
     with pytest.raises(FeatureError):
         kudio.apply_channel(np.zeros((100, 2), dtype=np.float32), 16000, None)
+
+
+# -- dither at any bit depth ---------------------------------------------------
+@pytest.mark.parametrize("bits", [2, 4, 8])
+def test_dither_brings_a_quarter_step_sine_back_at_any_depth(bits):
+    """Two grid steps wide at every depth; 2 / 2**bits was half that at 2 bits."""
+    step = 1.0 / (2 ** (bits - 1) - 1)
+    t = np.arange(4 * 16000) / 16000
+    quiet = 0.25 * step * np.sin(2 * np.pi * 997 * t)
+    gains = [float(np.dot(kudio.bit_depth(quiet, bits, dither=True, seed=s), quiet)
+                   / np.dot(quiet, quiet)) for s in range(10)]
+    assert abs(np.mean(gains) - 1.0) < 0.05

@@ -42,6 +42,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from kudio._samples import as_float
 from kudio.exceptions import FeatureError
 
 __all__ = ['Reverberation', 'rir', 'apply_rir', 'rt60', 'schroeder_curve',
@@ -280,7 +281,7 @@ def _mono(where: str, x, what: str) -> np.ndarray:
     out of apply_rir twice as long, and a two-column copy of a 0.6 s response
     would measure 1.2 s with a perfect fit.
     """
-    x = np.asarray(x, dtype=np.float64)
+    x = np.asarray(as_float(x), dtype=np.float64)
     if x.ndim > 1 and x.shape[1] == 1:
         x = x[:, 0]
     if x.ndim != 1:

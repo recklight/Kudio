@@ -639,3 +639,40 @@ def test_enhance_folder_takes_the_stft_settings_and_mirrors_a_list(tmp_path, noi
     assert result.written == 2
     assert sorted(p.relative_to(tmp_path / "out").as_posix() for p in result.outputs) == [
         "day1/take1.wav", "day2/take1.wav"]
+
+
+# -- corrupt, silent, short and odd-length input -------------------------------
+def test_spectral_enhance_refuses_a_corrupt_clip():
+    y = np.random.default_rng(0).standard_normal(4000).astype(np.float32)
+    y[3] = np.nan
+    with pytest.raises(kudio.FeatureError, match="not finite"):
+        kudio.spectral_enhance(y, 16000)
+    with pytest.raises(kudio.FeatureError, match="not finite"):
+        kudio.compare_enhancers(y, 16000, ['wiener'])
+
+
+def test_trad_enhance_survives_leading_and_total_silence():
+    y = 0.1 * np.random.default_rng(0).standard_normal(16000)
+    y[:1000] = 0.0
+    assert np.all(np.isfinite(kudio.trad_enhance(y, 16000)))
+    assert not np.any(kudio.trad_enhance(np.zeros(16000), 16000))
+
+
+def test_trad_enhance_refuses_what_it_cannot_frame():
+    with pytest.raises(kudio.FeatureError, match="512-sample frame"):
+        kudio.trad_enhance(np.ones(300) * 0.1, 16000)
+    with pytest.raises(kudio.FeatureError, match="mono"):
+        kudio.trad_enhance(np.ones((4000, 2)) * 0.1, 16000)
+
+
+def test_the_wavelet_filter_keeps_the_length_and_leaves_silence_alone():
+    y = 0.1 * np.random.default_rng(0).standard_normal(101)
+    assert len(kudio.wavelet_low_pass_filter(y)) == 101
+    silent = kudio.wavelet_low_pass_filter(np.zeros(64))
+    assert np.all(np.isfinite(silent)) and not silent.any()
+
+
+def test_the_wavelet_filter_keeps_float32():
+    y = (0.1 * np.random.default_rng(0).standard_normal(256)).astype(np.float32)
+    assert kudio.wavelet_low_pass_filter(y).dtype == np.float32
+    assert kudio.wavelet_low_pass_filter(np.zeros(64, np.float32)).dtype == np.float32

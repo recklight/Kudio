@@ -36,6 +36,7 @@ from typing import Any, Optional, Sequence, Union
 
 import numpy as np
 
+from kudio._samples import as_float
 from kudio.exceptions import DependencyError, FeatureError
 
 __all__ = ['DnsmosScore', 'dnsmos', 'find_dnsmos_model']
@@ -165,17 +166,28 @@ def _session(model_path: Path) -> Any:
 
 
 def _segments(y: np.ndarray, sr: int) -> Sequence[np.ndarray]:
-    """9.01-second windows at a 1-second hop, as the model expects.
+    """9.01-second windows at a 1-second hop, laid out as DNS-Challenge's
+    ``dnsmos_local.py`` lays them out, so a score here is the one that script
+    gives the same audio, but for the long clips the last paragraph names.
 
-    A clip shorter than one window is tiled rather than zero-padded: silence
-    scores as ruined speech, and padding a two-second answer with seven seconds
-    of nothing would report a problem that is not there.
+    A clip shorter than one window is doubled until it holds one -- repeated,
+    not zero-padded: silence scores as ruined speech -- and every window of
+    the doubled clip is scored, so 2 s becomes 16 s and seven windows.
+    Windows start on whole seconds and end inside the clip's last whole
+    second, ``int(floor(seconds) - 9.01) + 1`` of them: 10.5 s gets one.
+
+    The script works out each window's end as ``int((i + 9.01) * sr)``, and
+    for the windows starting at 7 to 23 s that rounds one sample short, so it
+    skips them: 7 of a 20 s clip's 11. Here the end is the start plus the
+    window, so a clip that reaches 17 s, after any doubling, gets all of its
+    windows; below that the two agree window for window.
     """
     n = int(SEGMENT_SECONDS * sr)
-    if y.size < n:
-        y = np.tile(y, int(np.ceil(n / max(y.size, 1))))[:n]
     hop = int(HOP_SECONDS * sr)
-    return [y[start:start + n] for start in range(0, len(y) - n + 1, hop)]
+    while y.size < n:
+        y = np.concatenate([y, y])
+    hops = int(np.floor(len(y) / sr) - SEGMENT_SECONDS) + 1
+    return [y[i * hop:i * hop + n] for i in range(hops)]
 
 
 def dnsmos(y: np.ndarray, sr: int, model_dir: Optional[PathLike] = None, *,
@@ -198,7 +210,7 @@ def dnsmos(y: np.ndarray, sr: int, model_dir: Optional[PathLike] = None, *,
     """
     if sr <= 0:
         raise FeatureError(f"dnsmos() needs a positive sample rate, got {sr}")
-    y = np.ascontiguousarray(np.asarray(y, dtype=np.float32).squeeze())
+    y = np.ascontiguousarray(np.asarray(as_float(y), dtype=np.float32).squeeze())
     if y.ndim != 1:
         raise FeatureError(f"dnsmos() takes mono audio, got shape {y.shape}")
     if y.size == 0:

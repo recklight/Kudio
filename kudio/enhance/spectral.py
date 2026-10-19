@@ -76,6 +76,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from kudio._samples import as_float
 from kudio.core.io import ConvertResult
 from kudio.exceptions import FeatureError
 
@@ -599,15 +600,14 @@ def spectral_enhance(y: np.ndarray, sr: int, method: str = 'logmmse', *,
     >>> clean = kudio.spectral_enhance(y, sr, noise='quantile')
 
     The output is the **same length** as the input, so it lines up sample for
-    sample with what it came from. (`trad_enhance` returns 128 samples fewer,
-    which is a small thing until you try to A/B them.)
+    sample with what it came from.
 
     :param method: see :data:`METHODS`; each entry lists its own parameters.
     :param noise: see :data:`NOISE_ESTIMATORS`. The estimator matters at least
         as much as the gain rule.
     :param params: method parameters, defaulted from ``METHODS[method]``.
-    :raises FeatureError: on an unknown method, non-mono audio or a clip too
-        short to frame.
+    :raises FeatureError: on an unknown method, non-mono audio, samples that
+        are not finite, or a clip too short to frame.
     """
     if method not in METHODS:
         raise FeatureError(
@@ -616,7 +616,7 @@ def spectral_enhance(y: np.ndarray, sr: int, method: str = 'logmmse', *,
     if sr <= 0:
         raise FeatureError(f"spectral_enhance() needs a positive rate, got {sr}")
 
-    y = np.ascontiguousarray(np.asarray(y, dtype=np.float32).squeeze())
+    y = np.ascontiguousarray(np.asarray(as_float(y), dtype=np.float32).squeeze())
     if y.ndim != 1:
         raise FeatureError(
             f"spectral_enhance() takes mono audio, got shape {y.shape}")
@@ -624,6 +624,11 @@ def spectral_enhance(y: np.ndarray, sr: int, method: str = 'logmmse', *,
         raise FeatureError(
             f"clip is shorter than one {n_fft}-sample frame ({y.size} samples); "
             f"pass a smaller n_fft")
+    if not np.all(np.isfinite(y)):
+        # librosa's own refusal names neither the function nor the fix
+        raise FeatureError(
+            f"spectral_enhance() got {int(np.count_nonzero(~np.isfinite(y)))} "
+            f"sample(s) that are not finite (NaN or inf); repair the clip first")
 
     hop_length = hop_length or n_fft // 4
     settings = METHODS[method].defaults()
@@ -804,8 +809,8 @@ def compare_enhancers(y: np.ndarray, sr: int,
     :param common: passed to every run (`n_fft=`, `alpha=`, ...). Anything a
         given method does not accept is dropped for that method, so one call
         can hold the framing still across all of them.
-    :raises FeatureError: on an unknown method or estimator, or on passing
-        ``noise=`` and ``noises=`` together.
+    :raises FeatureError: on an unknown method or estimator, on passing
+        ``noise=`` and ``noises=`` together, or on a clip with NaN or inf in it.
     """
     entries = [_as_enhancer(m) for m in
                (methods if methods is not None else list(METHODS))]
@@ -832,7 +837,13 @@ def compare_enhancers(y: np.ndarray, sr: int,
         # run every method on its defaults
         raise FeatureError(f"no method here takes {', '.join(sorted(stray))}")
 
-    y = np.asarray(y, dtype=np.float32)
+    y = np.asarray(as_float(y), dtype=np.float32)
+    if not np.all(np.isfinite(y)):
+        # every run would fail on it, one line each, and the table would
+        # still come back as if something had been compared
+        raise FeatureError(
+            f"compare_enhancers() got {int(np.count_nonzero(~np.isfinite(y)))} "
+            f"sample(s) that are not finite (NaN or inf); repair the clip first")
     baseline = (_reference_metrics(reference, y, sr, metrics, pesq_mode,
                                    pesq_scale)
                 if reference is not None else None)
@@ -1061,8 +1072,8 @@ def _reference_metrics(reference, degraded, sr, metrics,
     other metric: a mismatch warns, and past MAX_LENGTH_MISMATCH it raises."""
     from kudio.core.evaluator import _align, si_sdr as _si_sdr, snr as _snr
 
-    ref = np.asarray(reference, dtype=np.float32).squeeze()
-    deg = np.asarray(degraded, dtype=np.float32).squeeze()
+    ref = np.asarray(as_float(reference), dtype=np.float32).squeeze()
+    deg = np.asarray(as_float(degraded), dtype=np.float32).squeeze()
     if min(len(ref), len(deg)) == 0:
         return (None, None, None, None)
     ref, deg = _align(ref, deg, names=('the reference', 'the clip'))
@@ -1074,15 +1085,19 @@ def _reference_metrics(reference, degraded, sr, metrics,
         snr = si_sdr = None
     pesq = stoi = None
     if metrics:
-        try:
-            # PESQ and STOI only: eval_metrics would run a full BSS-eval SDR
-            # on every run as well, for a number nothing here reports
-            from kudio.core.evaluator import _compute, check_metrics_install
-            has_pesq, has_stoi, _ = check_metrics_install()
-            if has_pesq and int(sr) in (8000, 16000):
+        # PESQ and STOI only: eval_metrics would run a full BSS-eval SDR on
+        # every run as well, for a number nothing here reports. Each in its own
+        # try, so a PESQ that finds no utterance does not take STOI with it.
+        from kudio.core.evaluator import _compute, check_metrics_install
+        has_pesq, has_stoi, _ = check_metrics_install()
+        if has_pesq and int(sr) in (8000, 16000):
+            try:
                 pesq = _compute('pesq', ref, deg, int(sr), pesq_mode, pesq_scale)
-            if has_stoi:
+            except Exception as e:                          # noqa: BLE001
+                log.debug("PESQ could not be computed: %s", e)
+        if has_stoi:
+            try:
                 stoi = _compute('stoi', ref, deg, int(sr))
-        except Exception as e:                              # noqa: BLE001
-            log.debug("optional metrics unavailable: %s", e)
+            except Exception as e:                          # noqa: BLE001
+                log.debug("STOI could not be computed: %s", e)
     return (snr, si_sdr, pesq, stoi)

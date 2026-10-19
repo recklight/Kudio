@@ -111,18 +111,28 @@ class AudioBuffer:
         would never end, and ``TypeError`` when it is not a whole number. A
         *timeout* that expires raises ``TimeoutError`` and ends the capture,
         so nothing is left waiting on the buffer to take the next one's
-        frames.
+        frames. One capture runs at a time: a second one started while the
+        first waits raises ``RuntimeError``, since the two would share one
+        set of frames.
         """
         count = _checked_frame_count(queue_size, "AudioBuffer.get_fixed_size_data")
         with self._cond:
+            if self._capture is not None:
+                raise RuntimeError("AudioBuffer: a capture is already running on "
+                                   "this buffer; wait for it, or capture from "
+                                   "another AudioBuffer")
             self._capture = []
             self._capture_left = count
             self._capture_done.clear()
         log.info("Buffer: capturing %d frames", count)
-        finished = self._capture_done.wait(timeout)
-        with self._cond:
-            frames, self._capture = self._capture, None
-            self._capture_left = 0
+        try:
+            finished = self._capture_done.wait(timeout)
+        finally:
+            # also when the wait is interrupted (Ctrl-C in a notebook), or the
+            # buffer would refuse every capture after this one
+            with self._cond:
+                frames, self._capture = self._capture, None
+                self._capture_left = 0
         if not finished:
             raise TimeoutError(
                 "AudioBuffer.get_fixed_size_data timed out after {0} s with {1} "

@@ -465,6 +465,9 @@ The output folder is emptied first, under the same guard as
 [`syn()`][kudio.core.synth.Synthesizer.syn], but the rest differs:
 
 - Rooms and links are not applied.
+- Names carry `dB` on both signs, `n5dB` and `5dB`, where `syn()` writes `n5`.
+  Corpora on disk already use both spellings, so neither changes; match on
+  the manifest's `snr_db` rather than on the name.
 - The output is flat: clean files that share a name, such as two talkers'
   `sx133.wav`, write to the same output names. It warns, and the second
   overwrites the first, so give this mode clean files whose names are

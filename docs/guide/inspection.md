@@ -508,16 +508,26 @@ which one runs. Then:
 
 - The audio is resampled to 16 kHz, the rate the model was trained at.
 - It is cut into 9.01 s windows at a 1 s hop, the length the model expects,
-  and the raw outputs of the windows are averaged; `score.segments` says over
-  how many. What comes after the last full window is not scored: a 20 s clip
-  gets 11 windows, and its last 0.99 s is left out.
-- A clip shorter than one window is repeated to fill it, not padded with
-  zeros. Silence scores as ruined speech, and seven seconds of it after a
-  two-second clip would report a problem the clip does not have.
-- The average goes onto the MOS scale through
+  and the windows' scores are averaged; `score.segments` says over how many.
+  The windows are laid out as in DNS-Challenge's `dnsmos_local.py`, so a
+  score here matches one published from that script: they start on whole
+  seconds and end inside the clip's last whole second, so a 10.5 s clip gets
+  one and a 20 s clip 11, with its last 0.99 s left out. The script itself
+  scores only 7 of those 11: it works out each window's end in floating
+  point, which rounds the windows starting at 7 to 23 s one sample short, and
+  skips them. I keep them, so the two agree on any clip that stays under
+  17 s once doubled, and kudio scores more of a longer one.
+- A clip shorter than one window is doubled until it holds one, as that
+  script does, rather than padded with zeros, and every window of the result
+  is scored: a 2 s clip becomes 16 s and seven windows. Silence scores as
+  ruined speech, and seven seconds of it after a two-second clip would report
+  a problem the clip does not have.
+- Each window's raw outputs go onto the MOS scale through
   [`POLYFIT`][kudio.core.dnsmos.POLYFIT], the polynomials published for the
-  non-personalised model. A `polyfit.json` beside the model replaces them,
-  which any other model needs, and `polyfit=False` keeps the raw outputs.
+  non-personalised model, before the average is taken, the order
+  DNS-Challenge's `dnsmos_local.py` uses. A `polyfit.json` beside the model
+  replaces them, which any other model needs, and `polyfit=False` keeps the
+  raw outputs.
 
 [`summary()`][kudio.core.dnsmos.DnsmosScore.summary] calls OVRL from 4.0 up
 clean, from 3.0 usable, from 2.0 poor and below that bad. When SIG and BAK are

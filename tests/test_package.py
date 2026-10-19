@@ -293,3 +293,23 @@ def test_the_release_checks_the_artifacts_before_uploading_them():
     assert 'twine check --strict' in before
     assert 'walk_packages' in before, "the built wheel is never import-walked"
     assert 'GITHUB_REF' in before, "the tag is never compared with _version.py"
+
+
+# -- helpers leaving the top level ----------------------------------------------
+@pytest.mark.parametrize("name", ["error", "info", "warn", "red", "h1", "color_test"])
+def test_console_colour_helpers_warn_from_the_top_level(name, capsys):
+    with pytest.warns(DeprecationWarning, match=re.escape(f"kudio.util.{name}()")):
+        getattr(kudio, name)("x")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        getattr(kudio.util, name)("x")          # where they stay, silent
+
+
+def test_upercase_points_at_uppercase():
+    with pytest.warns(DeprecationWarning, match=r"kudio\.uppercase"):
+        assert kudio.upercase(["a", 1]) == ["A"]
+    with pytest.warns(DeprecationWarning, match=r"kudio\.util\.uppercase"):
+        assert kudio.util.upercase(["a"]) == ["A"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert kudio.uppercase(["a"]) == ["A"]

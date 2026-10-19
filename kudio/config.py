@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -190,7 +191,14 @@ class KudioConfig(Dict):
         """Load a YAML config file.
 
         *cfg_dir* may be a file, or a directory containing exactly one
-        ``cfg.yaml``. Anything else falls back to :meth:`default_config`.
+        ``cfg.yaml`` at any depth. Anything else falls back to
+        :meth:`default_config`, with a ``UserWarning`` when a path was named
+        or a search found more than one file: a misspelt file name came back
+        as the defaults with nothing said.
+
+        A key the file does not have reads as an empty section, which is what
+        lets ``cfg.a.b = 1`` build a new one. Call :meth:`freeze` on the result
+        to make a misspelt key raise ``KeyError`` instead.
         """
 
         def _load(f_: Path):
@@ -205,6 +213,14 @@ class KudioConfig(Dict):
             candidates = list(_file.rglob("cfg.yaml"))
             if len(candidates) == 1:
                 return cls(_load(candidates[0]))
+            if candidates or cfg_dir:
+                warnings.warn(f"{len(candidates)} cfg.yaml file(s) under "
+                              f"{str(cfg_dir) or '.'}, and load_config needs "
+                              f"exactly one; using the defaults",
+                              UserWarning, stacklevel=2)
+        elif cfg_dir:
+            warnings.warn(f"no config at {str(cfg_dir)!r}; using the defaults",
+                          UserWarning, stacklevel=2)
         log.info("No config file found, using defaults")
         return cls(**cls.default_config())
 

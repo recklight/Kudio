@@ -238,3 +238,57 @@ def test_no_playback_backend_is_a_dependency_error(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", without_audio)
     with pytest.raises(kudio.DependencyError, match="audio"):
         kudio.play_audio(np.zeros(160, dtype=np.float32), 16000)
+
+
+# -- no device, and a device that comes back different -------------------------
+def test_a_reader_with_no_device_says_so():
+    reader = object.__new__(stream_module.LocalStreamReader)
+    reader.isInitial = threading.Event()
+    with pytest.raises(kudio.DeviceError, match="no input device"):
+        reader.stream_start()
+    with pytest.raises(kudio.DeviceError, match="no input device"):
+        reader.play_audio()
+
+
+class ReopeningReader(FakeReader):
+    """Closes on terminate(), and comes back at 44.1 kHz when reopened."""
+
+    def get_status(self):
+        return not self.terminated
+
+    def set_stream(self, *args):
+        self.terminated = False
+        self.rate_ = 44100
+        return True
+
+
+def test_a_take_is_not_continued_at_another_rate(monkeypatch):
+    monkeypatch.setattr(stream_module, "LocalStreamReader",
+                        lambda **kwargs: ReopeningReader(**kwargs))
+    rec = kudio.StreamRecorder(sr=SR).start()
+    rec._reader.feed(np.ones(1024))
+    rec.stop()
+    with pytest.raises(kudio.DeviceError, match="44100 Hz"):
+        rec.start()
+    rec.reset()
+    rec.start()
+    assert rec.sr == 44100
+
+
+# -- format codes, and a missing microphone named as a device error -----------
+def test_the_portaudio_format_codes_are_public():
+    assert (kudio.PA_FLOAT32, kudio.PA_INT16) == (1, 8)
+
+
+def test_input_device_without_a_microphone_is_a_device_error():
+    class NoInputs:
+        def get_device_count(self):
+            return 0
+
+    check = kudio.CheckDevice.__new__(kudio.CheckDevice)
+    check.p = NoInputs()
+    from kudio.exceptions import DeviceError
+    with pytest.raises(DeviceError, match="No microphone") as caught:
+        check.input_device()
+    # still what code catching the old RuntimeError expects
+    assert isinstance(caught.value, RuntimeError)

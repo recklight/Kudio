@@ -4,6 +4,7 @@ import pytest
 
 import warnings
 
+import kudio
 from kudio import (
     features2matrix,
     logspec_from_files,
@@ -409,3 +410,32 @@ def test_frame_windows_says_when_there_is_nothing_to_cut():
     from kudio.exceptions import FeatureError
     with pytest.raises(FeatureError, match="no frames"):
         frame_windows(np.zeros((0, 64)), 16)
+
+
+# -- one channel, and a peak to normalise by -----------------------------------
+@pytest.mark.parametrize("call", [
+    lambda y: kudio.mfcc(y, 16000),
+    lambda y: kudio.melspectrogram(y, sr=16000),
+    lambda y: kudio.STFT().analyse(y),
+])
+def test_stereo_is_refused_rather_than_framed_as_two_sample_signals(call):
+    y = np.zeros((16000, 2), dtype=np.float32)
+    with pytest.raises(kudio.FeatureError, match="mono"):
+        call(y)
+
+
+def test_denoise_wav2spec_refuses_a_silent_clip():
+    with pytest.raises(kudio.FeatureError, match="silent"):
+        kudio.denoise_wav2spec(np.zeros(16000))
+
+
+# -- the window, from a file ----------------------------------------------------
+def test_file_to_spectrogram_takes_the_window(tmp_path):
+    y = (0.1 * np.random.default_rng(0).standard_normal(8000)).astype(np.float32)
+    path = tmp_path / "clip.wav"
+    kudio.save_wave(path, y, 16000, subtype="FLOAT")
+    hann = kudio.file_to_spectrogram(path, window="hann")
+    np.testing.assert_array_equal(hann, kudio.waveform_to_spectrogram(y, window="hann"))
+    assert not np.array_equal(hann, kudio.file_to_spectrogram(path))
+    stacked = kudio.logspec_from_files([path, path], False, 0, False, window="hann")
+    np.testing.assert_array_equal(stacked, np.vstack([hann, hann]))

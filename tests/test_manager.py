@@ -3,8 +3,10 @@ import logging
 
 import numpy as np
 
-from conftest import make_sine
+import kudio
 from kudio import AudioDataManager, file_load
+
+from conftest import make_sine
 
 
 def test_add_local_file_and_lookup(wav_file):
@@ -111,3 +113,27 @@ def test_two_clips_that_want_one_file_are_refused_before_anything_is_written(
     assert saved is False
     assert list(tmp_path.glob("*.wav")) == [], "not one of them was written"
     assert "take.wav" in caplog.text and "rename" in caplog.text
+
+
+# -- a clip's own channel count ------------------------------------------------
+def test_a_mono_clip_goes_back_to_its_own_file_when_the_manager_is_stereo(tmp_path):
+    path = tmp_path / "take.wav"
+    kudio.save_wave(path, 0.1 * np.ones(1600), 16000)
+    manager = AudioDataManager()
+    manager.set_params(16000, 2)
+    manager.add_local_file(path)
+    assert manager.save_all()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["take.wav"]
+
+
+# -- volume on integer audio ------------------------------------------------------
+def test_play_volume_clips_integer_audio_rather_than_wrapping(monkeypatch):
+    played = {}
+    monkeypatch.setattr("kudio.core.manager.play_audio",
+                        lambda wav, rate: played.update(wav=wav, rate=rate))
+    m = AudioDataManager()
+    m.add_new_file("take", wave=[np.array([20000, -20000, 1000], np.int16)],
+                   sr=16000, ch=1)
+    m.play_audio("take", volume=2.0)
+    assert played["wav"].dtype == np.int16
+    assert played["wav"].tolist() == [32767, -32768, 2000]

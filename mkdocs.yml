@@ -1,6 +1,6 @@
 site_name: Kudio
 site_url: https://recklight.github.io/Kudio/
-site_description: Lightweight, composable audio toolkit for acoustic inspection
+site_description: Lightweight, composable toolkit for audio, speech most of all
 site_author: RL
 repo_url: https://github.com/recklight/Kudio
 repo_name: recklight/Kudio

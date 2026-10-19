@@ -218,3 +218,18 @@ def test_one_bad_file_does_not_stop_the_rest(wav_dir, tmp_path):
         rows = ev._score_rows("m", [bad] + files[1:], ["SDR"])
     assert len(rows) == len(files) and np.isnan(rows[0]["SDR"])
     assert any("was not scored" in str(w.message) for w in caught)
+
+
+# -- AudioEvaluate before eval(), and pesq.exe ---------------------------------
+def test_a_score_before_eval_says_what_to_call(wav_dir):
+    files = sorted(wav_dir.glob("*.wav"))
+    with pytest.raises(ValueError, match="call eval"):
+        AudioEvaluate(files, files).sdr_score()
+
+
+def test_a_pesq_binary_that_is_not_there_is_named(wav_dir):
+    files = sorted(wav_dir.glob("*.wav"))
+    ev = AudioEvaluate(files, files)
+    ev.enhanced_list = files
+    with pytest.raises(FileNotFoundError, match="no-such-pesq-binary"):
+        ev.pesq_score_exe("no-such-pesq-binary.exe")

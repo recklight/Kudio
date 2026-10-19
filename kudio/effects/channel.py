@@ -41,6 +41,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from kudio._samples import as_float
 from kudio.exceptions import FeatureError
 
 __all__ = ['mu_law', 'a_law', 'bit_depth', 'dropouts', 'telephone',
@@ -139,7 +140,7 @@ def _burst_runs(packets: int, n_lost: int, burst: float,
 
 
 def _mono(name: str, y: np.ndarray) -> np.ndarray:
-    y = np.asarray(y)
+    y = as_float(y)
     if y.ndim > 1:
         raise FeatureError(
             f"{name} takes mono audio, got shape {y.shape}. A channel degrades "
@@ -154,8 +155,8 @@ def _quantise(values: np.ndarray, bits: int) -> np.ndarray:
     Sign kept separately, magnitude quantised to ``2**(bits-1) - 1`` steps.
     That is G.711's own layout, and it is the version with a code exactly at
     zero: spreading ``2**bits`` levels evenly across ``[-1, 1]`` leaves none
-    there, so digital silence comes back as a small DC offset and the curve
-    stops being odd. Both were true of the first version of this.
+    there, so digital silence would come back as a small DC offset and the
+    curve would stop being odd.
     """
     levels = 2 ** (bits - 1) - 1
     return np.clip(np.round(values * levels) / levels, -1.0, 1.0)
@@ -237,7 +238,9 @@ def bit_depth(y: np.ndarray, bits: int = 8, *,
     y = np.clip(y, -1.0, 1.0)
 
     if dither:
-        step = 2.0 / (2 ** bits)
+        # the grid's own step: _quantise has 2**(bits-1) - 1 levels each side
+        # of zero, and 2 / 2**bits is half of that at 2 bits
+        step = 1.0 / (2 ** (bits - 1) - 1)
         rng = np.random.default_rng(seed)
         # triangular: the difference of two uniforms of one step each, two
         # steps peak to peak -- the width that takes the signal out of the

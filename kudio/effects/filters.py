@@ -59,7 +59,10 @@ def band_filter(y: np.ndarray, sr: int, cutoff, btype: str = 'highpass',
     :param zero_phase: forwards-and-backwards (no delay) when True.
 
     A ``(frames, channels)`` array is filtered along its frames, each channel
-    on its own.
+    on its own. Integer audio comes back in its own type, rounded and held to
+    the type's range: a filter overshoots at an edge, and cast straight back a
+    near-full-scale int16 square wave through a 2 kHz low-pass had 1194
+    samples wrap round to the other sign.
     """
     if btype not in _BTYPES:
         raise FeatureError(f"btype must be one of {_BTYPES}, got {btype!r}")
@@ -77,7 +80,7 @@ def band_filter(y: np.ndarray, sr: int, cutoff, btype: str = 'highpass',
     # channels-last array is the channel axis
     sos = butter(order, wn, btype=btype, fs=sr, output='sos')
     if not zero_phase:
-        return np.asarray(sosfilt(sos, y, axis=0), dtype=y.dtype)
+        return _back(sosfilt(sos, y, axis=0), y.dtype)
 
     # sosfiltfilt reflects the signal at both ends by 3 * n_sections * 2
     # samples; a clip shorter than that cannot be padded and scipy raises.
@@ -86,7 +89,16 @@ def band_filter(y: np.ndarray, sr: int, cutoff, btype: str = 'highpass',
     if padlen < 1:
         raise FeatureError(
             f"clip is too short to filter ({y.shape[0]} samples)")
-    return np.asarray(sosfiltfilt(sos, y, axis=0, padlen=padlen), dtype=y.dtype)
+    return _back(sosfiltfilt(sos, y, axis=0, padlen=padlen), y.dtype)
+
+
+def _back(out: np.ndarray, dtype) -> np.ndarray:
+    """The filtered signal in the input's type, rounded and clipped for an
+    integer one rather than truncated and wrapped."""
+    if np.issubdtype(dtype, np.integer):
+        limits = np.iinfo(dtype)
+        return np.clip(np.round(out), limits.min, limits.max).astype(dtype)
+    return np.asarray(out, dtype=dtype)
 
 
 def highpass(y: np.ndarray, sr: int, cutoff: float = 80.0, order: int = 4,

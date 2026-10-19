@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+import kudio
 from kudio import audio_report, resample
 from kudio.exceptions import FeatureError
 
@@ -192,3 +193,16 @@ def test_a_file_is_not_said_to_be_upsampled_from_its_own_rate():
     y = kudio.lowpass(rng.standard_normal(16000 * 3) * 0.1, 16000, cutoff=7000)
     for line in kudio.audio_report(y, 16000).problems():
         assert "upsampled from 16000" not in line
+
+
+# -- a corrupt clip, said once -------------------------------------------------
+def test_a_corrupt_clip_is_reported_without_a_second_warning():
+    """The report names the bad samples itself; loudness() repeating it as a
+    warning printed the same finding twice on `kudio report`."""
+    import warnings
+    y = 0.1 * np.random.default_rng(0).standard_normal(16000)
+    y[100] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        report = kudio.audio_report(y, 16000)
+    assert np.isnan(report.lufs) and report.non_finite_samples == 1

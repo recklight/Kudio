@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import kudio
 from kudio import Synthesizer, file_load
 
 
@@ -1052,3 +1053,39 @@ def test_a_dotted_file_name_keeps_its_whole_stem(tmp_path, clean_noise_dirs):
         mode="inc", seed=0)
     assert sorted(p.name for p in out.rglob("*.wav")) == \
         ["take.v2_white_0dB.wav", "take.v2_white_5dB.wav"]
+
+
+# -- inputs that cannot be mixed, named ----------------------------------------
+def _one_clean(tmp_path, noise):
+    import soundfile as sf
+    (tmp_path / "c").mkdir()
+    (tmp_path / "n").mkdir()
+    t = np.arange(16000) / 16000
+    kudio.save_wave(tmp_path / "c" / "a.wav", 0.1 * np.sin(2 * np.pi * 220 * t), 16000)
+    sf.write(str(tmp_path / "n" / "x.wav"), noise.astype(np.float32), 16000,
+             subtype="FLOAT")
+    return Synthesizer(str(tmp_path / "c"), str(tmp_path / "n"),
+                       out_path=str(tmp_path / "o"), snr_ratio=0)
+
+
+def test_an_empty_noise_file_is_named(tmp_path):
+    syx = _one_clean(tmp_path, np.zeros(0))
+    with pytest.raises(kudio.SynthesisError, match="noise file is empty"):
+        syx.syn(seed=0)
+
+
+def test_a_noise_file_with_nan_in_it_is_named(tmp_path):
+    noise = np.random.default_rng(0).standard_normal(16000)
+    noise[5] = np.nan
+    syx = _one_clean(tmp_path, noise)
+    with pytest.raises(kudio.SynthesisError, match="could not read noise file .*x.wav"):
+        syx.syn(seed=0)
+
+
+def test_a_bad_target_rate_is_refused_before_the_folder_is_emptied(tmp_path):
+    syx = _one_clean(tmp_path, np.random.default_rng(0).standard_normal(16000))
+    (tmp_path / "o").mkdir()
+    (tmp_path / "o" / "keep.txt").write_text("from an earlier run")
+    with pytest.raises(ValueError, match="target_sr"):
+        syx.syn(seed=0, target_sr=0)
+    assert (tmp_path / "o" / "keep.txt").exists()

@@ -177,3 +177,11 @@ def test_the_default_frame_grows_with_the_rate():
     t = np.arange(sr) / sr
     track = kudio.f0((0.3 * np.sin(2 * np.pi * 150 * t)).astype(np.float32), sr)
     assert abs(track.median_hz - 150) < 3
+
+
+# -- corrupt clips -------------------------------------------------------------
+def test_f0_refuses_a_corrupt_clip():
+    y = 0.1 * np.random.default_rng(0).standard_normal(16000)
+    y[100] = np.nan
+    with pytest.raises(kudio.FeatureError, match="not finite"):
+        kudio.f0(y, 16000)

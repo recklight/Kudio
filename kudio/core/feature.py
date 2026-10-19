@@ -32,6 +32,7 @@ import numpy as np
 from tqdm import tqdm
 
 from kudio._deprecation import alias
+from kudio._samples import as_float
 from kudio.core.io import file_load, save_wave
 from kudio.exceptions import FeatureError
 
@@ -57,6 +58,18 @@ log = logging.getLogger(__name__)
 #: computed from float32 audio. The value -- and the -31.3 a digitally silent
 #: bin comes out at -- is unchanged, since trained models have seen it.
 _EPS = float(np.finfo(float).eps)
+
+
+def _mono(y, where: str) -> np.ndarray:
+    """*y* as a 1-D float array, integers on their own full scale, or a
+    FeatureError. librosa reads the last axis as time, so a (frames, channels)
+    array would be analysed as thousands of two-sample signals and come back
+    the wrong shape without an error."""
+    y = as_float(y)
+    if y.ndim != 1:
+        raise FeatureError(f"{where} takes a mono waveform (n,), got shape {y.shape}; "
+                           f"pick a channel or mix down first")
+    return y
 
 
 def wave_separate(wave: np.ndarray, channels: int) -> list:
@@ -91,9 +104,7 @@ def waveform_to_spectrogram(y: np.ndarray,
         ``(frames, channels)`` array would be read as one short frame per
         sample, so pick a channel or mix down first.
     """
-    y = np.asarray(y)
-    if y.ndim != 1:
-        raise FeatureError(f"expected a mono waveform (n,), got shape {y.shape}")
+    y = _mono(y, "waveform_to_spectrogram()")
     if desired_length and desired_length < len(y):
         y = y[:desired_length]
     D = librosa.stft(y, n_fft=n_fft, hop_length=hop_length,
@@ -163,11 +174,16 @@ def file_to_spectrogram(file,
                         n_fft: int = 512,
                         win_length: Optional[int] = None,
                         desired_length: Optional[int] = None,
-                        resample_rate: Optional[int] = None) -> np.ndarray:
-    """File -> log-power spectrogram (see :func:`waveform_to_spectrogram`)."""
+                        resample_rate: Optional[int] = None,
+                        window: str = 'hamming') -> np.ndarray:
+    """File -> log-power spectrogram (see :func:`waveform_to_spectrogram`).
+
+    *window* comes last, after the arguments callers already pass by
+    position.
+    """
     y, _ = file_load(file, sr=resample_rate, mono=True)
     return waveform_to_spectrogram(y, sequence, forward_backward, norm,
-                                   hop_length, n_fft, win_length,
+                                   hop_length, n_fft, win_length, window,
                                    desired_length=desired_length)
 
 
@@ -185,7 +201,8 @@ def save_spectrogram_as_wave(wave_out_dir, noisy_file, enhanced_spec,
 
 
 def mfcc(y: np.ndarray, sr: int, n_mfcc: int = 40) -> np.ndarray:
-    """Waveform -> MFCC, shaped ``(1, n_frames, n_mfcc)``."""
+    """Waveform -> MFCC, shaped ``(1, n_frames, n_mfcc)``. *y* is mono."""
+    y = _mono(y, "mfcc()")
     return librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc).T.reshape(1, -1, n_mfcc)
 
 
@@ -217,13 +234,15 @@ def logspec_from_files(wav_list: Sequence,
                        hop_length: int = 256,
                        n_fft: int = 512,
                        win_length: Optional[int] = None,
-                       desired_samples: Optional[int] = None) -> np.ndarray:
+                       desired_samples: Optional[int] = None,
+                       window: str = 'hamming') -> np.ndarray:
     """Convert each file to a log spectrogram and stack them."""
     return np.vstack([
         file_to_spectrogram(file=file, sequence=sequence,
                             forward_backward=forward_backward, norm=norm,
                             hop_length=hop_length, n_fft=n_fft,
-                            win_length=win_length, desired_length=desired_samples)
+                            win_length=win_length, desired_length=desired_samples,
+                            window=window)
         for file in tqdm(wav_list, desc='[kudio] log-spectrograms')
     ])
 
@@ -251,7 +270,7 @@ def melspectrogram(source, n_mels: int = 64, n_frames: int = 5,
     else:
         if sr is None:
             raise FeatureError("melspectrogram() needs sr= when given a waveform")
-        y = np.asarray(source, dtype=np.float32)
+        y = np.asarray(_mono(source, "melspectrogram()"), dtype=np.float32)
     mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft,
                                          hop_length=hop_length, n_mels=n_mels,
                                          power=power)
@@ -271,8 +290,15 @@ def denoise_wav2spec(waveform: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     The two come back in different layouts: the spectrogram as
     ``(1, frames, bins)`` and the phase as ``(bins, frames)``, the way
     :func:`denoise_spec2wav` takes them back.
+
+    :raises FeatureError: for a silent clip, which has no peak to normalise by.
     """
-    D = librosa.stft(waveform / np.max(np.abs(waveform)),
+    waveform = _mono(waveform, "denoise_wav2spec()")
+    peak = float(np.max(np.abs(waveform))) if waveform.size else 0.0
+    if not peak > 0:
+        raise FeatureError("denoise_wav2spec() got a silent clip; there is no "
+                           "peak to normalise by")
+    D = librosa.stft(waveform / peak,
                      n_fft=512, hop_length=256, win_length=512, window='hann')
     D += np.finfo(float).eps
     Sxx = np.abs(D)
@@ -288,7 +314,8 @@ def denoise_spec2wav(spec: np.ndarray, phase: np.ndarray) -> np.ndarray:
     spec = np.squeeze(spec).T
     pred_wav = librosa.istft(np.multiply(spec, np.exp(1j * phase)),
                              hop_length=256, win_length=512, window='hann')
-    return pred_wav / np.max(np.abs(pred_wav))
+    peak = float(np.max(np.abs(pred_wav))) if pred_wav.size else 0.0
+    return pred_wav / peak if peak > 0 else pred_wav
 
 
 def stack_context(frames: np.ndarray, context: int,

@@ -29,6 +29,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from scipy.signal import freqz, lfilter, tf2zpk, zpk2tf
 
+from kudio._samples import as_float, to_float
 from kudio.exceptions import FeatureError
 
 __all__ = ['loudness', 'normalize_lufs', 'match_loudness',
@@ -129,8 +130,9 @@ def _k_weighting(sr: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarra
 
 
 def _as_channels(y: np.ndarray) -> np.ndarray:
-    """``(samples,)`` or ``(samples, channels)`` -> ``(samples, channels)``."""
-    y = np.asarray(y, dtype=np.float64)
+    """``(samples,)`` or ``(samples, channels)`` -> ``(samples, channels)``,
+    integer audio on its own full scale."""
+    y = np.asarray(as_float(y), dtype=np.float64)
     if y.ndim == 1:
         return y[:, np.newaxis]
     if y.ndim == 2:
@@ -523,7 +525,8 @@ def normalize_lufs(y: np.ndarray, sr: int, lufs: float = -23.0,
     -23 LUFS is the EBU R 128 broadcast target. This applies a gain and nothing
     else, so the result can exceed full scale; that is warned about rather than
     silently limited, because clamping here would change the loudness you just
-    asked for.
+    asked for. Integer audio comes back in its own type, rounded, and there
+    the clipping has already happened.
 
     :raises FeatureError: for a clip with NaN or inf in it, which has no
         loudness to scale from.
@@ -536,14 +539,17 @@ def normalize_lufs(y: np.ndarray, sr: int, lufs: float = -23.0,
                            "not finite; repair it first")
     if not np.isfinite(current):
         return np.asarray(y)
-    out = np.asarray(y) * float(10 ** ((lufs - current) / 20.0))
+    x, back = to_float(y)
+    out = x * float(10 ** ((lufs - current) / 20.0))
     peak = float(np.max(np.abs(out))) if out.size else 0.0
     if peak > 1.0:
+        fate = ("integer audio is clipped there"
+                if np.issubdtype(np.asarray(y).dtype, np.integer)
+                else "the signal will clip when written to an integer format")
         warnings.warn(f"normalize_lufs: {lufs:.1f} LUFS puts the peak at "
-                      f"{peak:.2f} ({20 * np.log10(peak):.1f} dBFS over); the "
-                      f"signal will clip when written to an integer format",
-                      UserWarning, stacklevel=2)
-    return out
+                      f"{peak:.2f} ({20 * np.log10(peak):.1f} dBFS over); "
+                      f"{fate}", UserWarning, stacklevel=2)
+    return back(out)
 
 
 def match_loudness(y: np.ndarray, reference: np.ndarray, sr: int,
@@ -554,7 +560,8 @@ def match_loudness(y: np.ndarray, reference: np.ndarray, sr: int,
     The primitive behind a fair A/B: comparing a processed clip against its
     source tells you about the processing only once the level difference is
     out of the way, since the louder of two clips is reliably preferred
-    regardless of quality. Returns *y* unchanged when either side is silent.
+    regardless of quality. Returns *y* unchanged when either side is silent,
+    and integer audio in its own type, rounded and clipped.
 
     :raises FeatureError: when either clip has NaN or inf in it, and so no
         loudness to match.
@@ -573,4 +580,5 @@ def match_loudness(y: np.ndarray, reference: np.ndarray, sr: int,
                            f"are not finite; repair it first")
     if not (np.isfinite(target) and np.isfinite(current)):
         return np.asarray(y)
-    return np.asarray(y) * float(10 ** ((target - current) / 20.0))
+    x, back = to_float(y)
+    return back(x * float(10 ** ((target - current) / 20.0)))

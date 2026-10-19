@@ -131,8 +131,7 @@ level for the 8 dB test described [below](#how-vad-decides).
 clatter comes back too, as 2.17 to 2.50 s.
 
 `split_on_silence` is still the tool for something that is not speech in a
-quiet room, such as an impact in an inspection recording. For speech, use
-`vad`.
+quiet room, such as a knock. For speech, use `vad`.
 
 ## Cutting, trimming and counting
 

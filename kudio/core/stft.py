@@ -102,7 +102,8 @@ class STFT:
         needs the phase kept — see :func:`kudio.spectral_enhance`.
         """
         import librosa
-        spec = librosa.stft(np.asarray(y, dtype=np.float32),
+        from kudio.core.feature import _mono
+        spec = librosa.stft(np.asarray(_mono(y, "STFT.analyse()"), dtype=np.float32),
                             n_fft=self.n_fft, hop_length=self.hop_length,
                             win_length=self.win_length, window=self.window)
         return spec.T                              # (frames, bins), as kudio speaks

@@ -105,3 +105,14 @@ def test_visual_names_the_viz_extra_without_matplotlib():
     done = subprocess.run([sys.executable, "-c", code],
                           capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
+
+
+# -- column widths on a new workbook -------------------------------------------
+def test_data2xlsx_fits_the_columns_of_a_new_file(tmp_path):
+    pytest.importorskip("pandas")
+    openpyxl = pytest.importorskip("openpyxl")
+    xlsx = tmp_path / "new.xlsx"
+    data2xlsx({'a_long_column_name': [1], 'b': ['fifteen letters']}, xlsx, 'S')
+    sheet = openpyxl.load_workbook(xlsx)['S']
+    assert sheet.column_dimensions['A'].width == len('a_long_column_name')
+    assert sheet.column_dimensions['B'].width == len('fifteen letters')

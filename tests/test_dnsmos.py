@@ -58,17 +58,18 @@ def test_windows_are_the_length_the_model_expects():
 def test_hop_is_one_second():
     session = StubSession()
     score = kudio.dnsmos(_noise(12.01), SR, session=session)
-    # 12.01s of audio, 9.01s windows, 1s hop -> 4 windows
-    assert score.segments == 4
-    assert len(session.calls) == 4
+    # windows start on whole seconds and end by the 12th: at 0, 1 and 2 s
+    assert score.segments == 3
+    assert len(session.calls) == 3
 
 
-def test_short_clip_is_tiled_into_one_window():
-    """Zero-padding a two-second clip would score seven seconds of silence."""
+def test_short_clip_is_doubled_not_padded():
+    """Zero-padding a two-second clip would score seven seconds of silence;
+    doubled to 16 s, as dnsmos_local.py does it, it gives seven windows."""
     session = StubSession()
     score = kudio.dnsmos(_noise(2), SR, session=session)
-    assert score.segments == 1
-    assert session.calls[0] == (1, int(SEGMENT_SECONDS * SR))
+    assert score.segments == 7
+    assert all(shape == (1, int(SEGMENT_SECONDS * SR)) for shape in session.calls)
 
 
 def test_raw_mode_returns_the_model_output_untouched():
@@ -168,7 +169,7 @@ class _Alternating(StubSession):
 def test_each_window_is_mapped_before_the_mean():
     """DNS-Challenge's dnsmos_local.py maps every window and then averages;
     with a quadratic mapping the other order is a different number."""
-    score = kudio.dnsmos(_noise(10.01), SR, session=_Alternating())
+    score = kudio.dnsmos(_noise(11), SR, session=_Alternating())
     expected = (np.polyval(POLYFIT["ovrl"], 1.0) + np.polyval(POLYFIT["ovrl"], 4.0)) / 2
     assert score.ovrl == pytest.approx(expected)
 
@@ -177,3 +178,55 @@ def test_the_p808_model_is_not_taken_for_the_p835_one(tmp_path):
     (tmp_path / "model_v8.onnx").write_bytes(b"")
     with pytest.raises(FeatureError, match="not found"):
         kudio.find_dnsmos_model(tmp_path)
+
+
+# -- the same windows as the reference script -----------------------------------
+def _reference_windows(audio, fs=SR):
+    """DNS-Challenge, DNSMOS/dnsmos_local.py, ComputeScore.__call__, as written."""
+    INPUT_LENGTH = 9.01
+    len_samples = int(INPUT_LENGTH * fs)
+    while len(audio) < len_samples:
+        audio = np.append(audio, audio)
+    num_hops = int(np.floor(len(audio) / fs) - INPUT_LENGTH) + 1
+    hop_len_samples = fs
+    out = []
+    for idx in range(num_hops):
+        audio_seg = audio[int(idx * hop_len_samples): int((idx + INPUT_LENGTH) * hop_len_samples)]
+        if len(audio_seg) < len_samples:
+            continue
+        out.append(audio_seg)
+    return out
+
+
+class _Recording(StubSession):
+    def __init__(self):
+        super().__init__()
+        self.windows = []
+
+    def run(self, outputs, feed):
+        self.windows.append(np.array(feed["input_1"][0]))
+        return super().run(outputs, feed)
+
+
+@pytest.mark.parametrize("seconds", [0.3, 2, 4.6, 9.01, 9.5, 10.5, 12.01, 16.5])
+def test_the_windows_are_the_reference_scripts(seconds):
+    y = _noise(seconds)
+    session = _Recording()
+    kudio.dnsmos(y, SR, session=session, polyfit=False)
+    expected = _reference_windows(y.astype(np.float64))
+    assert len(session.windows) == len(expected)
+    for got, want in zip(session.windows, expected):
+        np.testing.assert_array_equal(got, want.astype(np.float32))
+
+
+def test_a_long_clip_keeps_the_windows_the_script_rounds_away():
+    """The script's int((idx + 9.01) * fs) comes out one sample short for the
+    windows starting at 7 to 10 s of a 20 s clip, and it skips them."""
+    y = _noise(20)
+    session = _Recording()
+    kudio.dnsmos(y, SR, session=session, polyfit=False)
+    assert len(_reference_windows(y.astype(np.float64))) == 7
+    assert len(session.windows) == 11
+    n = int(SEGMENT_SECONDS * SR)
+    for i, window in enumerate(session.windows):
+        np.testing.assert_array_equal(window, y[i * SR:i * SR + n])

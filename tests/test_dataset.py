@@ -51,7 +51,7 @@ def test_unknown_keys_are_dropped_not_fatal(tmp_path):
 def test_missing_required_key_is_an_error(tmp_path):
     path = tmp_path / "m.json"
     path.write_text(json.dumps([{"noisy": "a.wav"}]), encoding="utf-8")
-    with pytest.raises(TypeError):
+    with pytest.raises(ValueError, match="row 1 has no clean"):
         kudio.load_manifest(path)
 
 

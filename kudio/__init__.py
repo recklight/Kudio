@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""kudio — a lightweight, composable audio toolkit for acoustic inspection.
+"""kudio — a lightweight, composable toolkit for audio, speech most of all.
 
 Audio I/O, streaming/recording, feature extraction, noisy-data synthesis,
 effects/augmentation, enhancement, and evaluation metrics.
@@ -33,6 +33,20 @@ from kudio.core import *  # noqa: F401,F403  (curated __all__)
 from kudio.effects import *  # noqa: F401,F403
 from kudio.enhance import *  # noqa: F401,F403  (curated __all__)
 from kudio.util import *  # noqa: F401,F403  (curated __all__)
+
+# The console colour helpers and the misspelt `upercase` reached the top level
+# through `from kudio.util import *`, where `error`, `info` and `warn` read as
+# part of kudio's error handling, and a star import lays them over a script's
+# own names. They keep working from here behind a warning, and stay in
+# kudio.util.
+from kudio._deprecation import alias as _alias  # noqa: E402
+
+for _name in ('blu', 'color_test', 'cya', 'dkblu', 'dkcya', 'dkgre', 'dkpur',
+              'dkred', 'dkyel', 'error', 'fGre', 'fRed', 'gre', 'h1', 'info',
+              'pur', 'red', 'warn', 'yel'):
+    globals()[_name] = _alias(getattr(util, _name), new_prefix='kudio.util')
+upercase = _alias(util.uppercase, 'upercase')
+del _name
 
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())
 

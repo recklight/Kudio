@@ -404,8 +404,7 @@ repeating, 15872 samples into a one-second clip.
 [`file_to_spectrogram`][kudio.core.feature.file_to_spectrogram] loads a file
 mono and returns what
 [`waveform_to_spectrogram`][kudio.core.feature.waveform_to_spectrogram] would,
-always with the Hamming window; for an [`STFT`][kudio.core.stft.STFT] with
-another window, load the file and call `stft.forward`. Two more helpers run
+with the Hamming window unless `window=` names another. Two more helpers run
 over a list of files and stack the results:
 
 ```python

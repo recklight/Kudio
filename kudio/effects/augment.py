@@ -13,6 +13,7 @@ import librosa
 import numpy as np
 from scipy.signal import fftconvolve
 
+from kudio._samples import to_float as _to_float
 from kudio.exceptions import FeatureError
 
 __all__ = [
@@ -47,38 +48,28 @@ def _quietly(fn: Callable, *args, **kwargs):
         return fn(*args, **kwargs)
 
 
-def _to_float(y: np.ndarray):
-    """Integer audio as float on its own full scale, and what undoes it."""
-    y = np.asarray(y)
-    if not np.issubdtype(y.dtype, np.integer):
-        return y, lambda out: out.astype(y.dtype)
-    limits = np.iinfo(y.dtype)
-    full = -float(limits.min) if limits.min < 0 else (int(limits.max) + 1) / 2.0
-    offset = 0.0 if limits.min < 0 else full
-
-    def back(out):
-        # round and clip into range: casting a float back wraps 1.2 round to -0.8
-        return np.clip(np.round(out * full + offset), limits.min, limits.max).astype(y.dtype)
-    return (y.astype(np.float64) - offset) / full, back
-
-
 def time_stretch(y: np.ndarray, rate: float) -> np.ndarray:
     """Speed up (``rate>1``) or slow down (``rate<1``) without changing pitch.
 
-    A ``(frames, channels)`` array is stretched channel by channel.
+    A ``(frames, channels)`` array is stretched channel by channel, and
+    integer audio comes back in its own type, as :func:`gain` does it.
     """
     if rate <= 0:
         raise ValueError(f"rate must be > 0, got {rate}")
-    return _each_channel(y, lambda c: _quietly(librosa.effects.time_stretch, c, rate=rate))
+    x, back = _to_float(y)
+    return back(_each_channel(
+        x, lambda c: _quietly(librosa.effects.time_stretch, c, rate=rate)))
 
 
 def pitch_shift(y: np.ndarray, sr: int, n_steps: float) -> np.ndarray:
     """Shift pitch by *n_steps* semitones without changing duration.
 
-    A ``(frames, channels)`` array is shifted channel by channel.
+    A ``(frames, channels)`` array is shifted channel by channel, and integer
+    audio comes back in its own type, as :func:`gain` does it.
     """
-    return _each_channel(
-        y, lambda c: _quietly(librosa.effects.pitch_shift, c, sr=sr, n_steps=n_steps))
+    x, back = _to_float(y)
+    return back(_each_channel(
+        x, lambda c: _quietly(librosa.effects.pitch_shift, c, sr=sr, n_steps=n_steps)))
 
 
 def gain(y: np.ndarray, db: float) -> np.ndarray:
@@ -151,14 +142,19 @@ def add_noise_snr(y: np.ndarray, noise: np.ndarray, snr_db: float,
     elif len(noise) > len(y):
         off = rng.integers(0, len(noise) - len(y) + 1)
         noise = noise[off:off + len(y)]
+    # integers in float before any arithmetic: int16 squared wraps round in
+    # int16, and a quarter-scale int16 tone mixed at 10 dB came out at 55.9
+    if np.issubdtype(noise.dtype, np.integer):
+        noise = noise.astype(np.float64)
     if not np.ptp(noise) > 0:
         raise FeatureError("the noise has no variation (silence or a constant), "
                            "so there is nothing to mix in at any SNR")
+    x, back = _to_float(y)
     noise = noise - np.mean(noise)
-    sig_pwr = np.mean(y ** 2)
+    sig_pwr = np.mean(x ** 2)
     noise_pwr = np.mean(noise ** 2) + 1e-12
     scale = np.sqrt(sig_pwr / (noise_pwr * 10 ** (snr_db / 10)))
-    return (y + scale * noise).astype(y.dtype)
+    return back(x + scale * noise)
 
 
 def reverb(y: np.ndarray, sr: int, decay: float = 0.3,
@@ -178,10 +174,12 @@ def reverb(y: np.ndarray, sr: int, decay: float = 0.3,
         impulse[t] += amp
         amp *= decay
         t += delay
-    y = np.asarray(y)
-    wet = _each_channel(y, lambda c: fftconvolve(c, impulse)[:len(c)])
+    # integer audio in float first: abs(-32768) stays -32768 in int16, so a
+    # sample pinned there was missed as the peak (20000 came back, not 32768)
+    x, back = _to_float(y)
+    wet = _each_channel(x, lambda c: fftconvolve(c, impulse)[:len(c)])
     peak = np.max(np.abs(wet)) + 1e-12
-    return (wet / peak * np.max(np.abs(y))).astype(y.dtype)
+    return back(wet / peak * np.max(np.abs(x)))
 
 
 def spec_augment(spec: np.ndarray, n_freq_masks: int = 1, n_time_masks: int = 1,

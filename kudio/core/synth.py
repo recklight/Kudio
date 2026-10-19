@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Noisy-speech synthesis: the whole chain between a talker and a file.
 
-A recording is degraded three ways and this class can now put all three in.
+A recording is degraded three ways and this class puts all three in.
 Noise is *additive*, a room is *convolutive*, and the channel is neither, so
 they are applied in the order the signal actually meets them::
 
@@ -96,6 +96,16 @@ def _file_seed(base: int, out, root) -> int:
     file directly in *root* the two are the same."""
     rel = Path(out).relative_to(root).as_posix()
     return int(base) ^ (zlib.crc32(rel.encode('utf-8')) & 0x7FFFFFFF)
+
+
+def _load(path, sr: Optional[int], what: str) -> Tuple[np.ndarray, int]:
+    """One input file, or a SynthesisError that names it. librosa's own errors
+    -- an unreadable file, NaN or inf in the samples -- do not say which of
+    the thousands of inputs they came from."""
+    try:
+        return librosa.load(str(path), sr=sr)
+    except Exception as e:                              # noqa: BLE001
+        raise SynthesisError(f"could not read {what} file {path}: {e}") from e
 
 
 class Synthesizer:
@@ -298,6 +308,9 @@ class Synthesizer:
                 DeprecationWarning, stacklevel=2)
             if target_sr is None:
                 target_sr = desired_sample
+        if target_sr is not None and not target_sr > 0:
+            # checked before the output folder is emptied, not on the first file
+            raise ValueError(f"target_sr must be a positive rate or None, got {target_sr}")
         log.info("==== Audio synthesizing ====")
         if self.noisyDir.is_dir() and any(self.noisyDir.iterdir()):
             if overwrite:
@@ -488,6 +501,11 @@ class Synthesizer:
         the same guard as :meth:`syn`; *seed* is as there. Rooms, the link
         and resampling are not applied in this mode, and the output is written
         flat, one folder for everything.
+
+        Names carry ``dB`` on both signs, ``n5dB`` and ``5dB``, where
+        :meth:`syn` writes ``n5``. Corpora on disk already use both spellings,
+        so neither changes; match on the manifest, which holds each SNR as a
+        number, rather than on the name.
 
         :param is_pool: write stage two through a process pool once it holds
             more than 200 files. A pool needs the calling script's top level
@@ -773,8 +791,11 @@ class Synthesizer:
         # target_sr=None keeps the clean file's native rate; the noise is then
         # resampled to whatever the clean file turned out to be, so the two are
         # never mixed at different rates
-        y_clean, sr_clean = librosa.load(str(clean_file), sr=target_sr)
-        y_noise, _ = librosa.load(str(noise_file), sr=sr_clean)
+        y_clean, sr_clean = _load(clean_file, target_sr, "clean")
+        y_noise, _ = _load(noise_file, sr_clean, "noise")
+        if not len(y_noise):
+            raise SynthesisError(f"noise file is empty: {noise_file}. Drop it "
+                                 f"from the noise set.")
 
         room = (rooms or {}).get(out)
         if room is not None:

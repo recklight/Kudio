@@ -43,8 +43,13 @@ class UnsupportedFormatError(AudioIOError):
     """
 
 
-class DeviceError(KudioError):
-    """An audio input/output device could not be opened or configured."""
+class DeviceError(KudioError, RuntimeError):
+    """An audio input/output device could not be opened or configured.
+
+    Also a ``RuntimeError``: :meth:`kudio.CheckDevice.input_device` raised
+    plain ``RuntimeError`` for the same failures, and code written against
+    that still catches them.
+    """
 
 
 class FeatureError(KudioError):

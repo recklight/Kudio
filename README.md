@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.txt)
 [![Docs](https://img.shields.io/badge/docs-recklight.github.io%2FKudio-blue.svg)](https://recklight.github.io/Kudio/)
 
-**Lightweight, composable audio toolkit for acoustic inspection.**
+**Lightweight, composable toolkit for audio, speech most of all.**
 
 Kudio gives you audio I/O, streaming/recording, feature extraction, noisy-data
 synthesis, effects & augmentation, enhancement, and quality metrics — as small
@@ -379,7 +379,10 @@ Also: `matplotlib` / `pandas` / `openpyxl` are no longer installed by default
 (use the `[viz]` / `[data]` extras), and the deprecated `_config` / `_enh` /
 `version` compatibility shims were removed. The plotting and spreadsheet helpers
 left the top level too: import `WaveVisualizer`, `history_plot` and `Common`
-from `kudio.util.visual`, and `data2xlsx` from `kudio.util.conv`.
+from `kudio.util.visual`, and `data2xlsx` from `kudio.util.conv`. The console
+colour helpers (`red`, `warn`, `error`, `info`, `h1` and the rest) and the
+misspelt `upercase` still answer from the top level with a
+`DeprecationWarning`; call them from `kudio.util`, and `uppercase` instead.
 
 ## License
 

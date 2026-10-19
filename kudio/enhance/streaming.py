@@ -36,6 +36,7 @@ from typing import Optional
 
 import numpy as np
 
+from kudio._samples import as_float
 from kudio.enhance.spectral import (
     METHODS,
     RECURSIVE_METHODS,
@@ -153,6 +154,8 @@ class StreamEnhancer:
         self._norm = np.zeros(self.n_fft, dtype=np.float64)
         self._pending: list = []
         self._frames = 0
+        self._samples_in = 0
+        self._samples_out = 0
 
     def process(self, block: np.ndarray) -> np.ndarray:
         """Feed a block in; get the enhanced audio that is finished back.
@@ -163,7 +166,7 @@ class StreamEnhancer:
         at the end; sample *i* of that concatenation lines up with sample *i*
         of the input.
         """
-        block = np.asarray(block, dtype=np.float64)
+        block = np.asarray(as_float(block), dtype=np.float64)
         if block.ndim > 1 and block.shape[1] == 1:
             block = block[:, 0]
         if block.ndim != 1:
@@ -172,6 +175,7 @@ class StreamEnhancer:
             raise FeatureError(f"StreamEnhancer takes mono blocks, got shape "
                                f"{block.shape}")
         self._input = np.concatenate([self._input, block])
+        self._samples_in += len(block)
 
         while len(self._input) >= self.n_fft:
             self._consume_frame(self._input[:self.n_fft])
@@ -183,7 +187,8 @@ class StreamEnhancer:
 
         Pads the last partial frame with zeros so the tail is processed rather
         than dropped — a stream that quietly loses its final 30 ms is the kind
-        of bug that only shows up on short takes.
+        of bug that only shows up on short takes — and stops where the input
+        stopped, so the whole output is as long as the whole input.
         """
         while len(self._input):
             padded = np.zeros(self.n_fft, dtype=np.float64)
@@ -201,7 +206,14 @@ class StreamEnhancer:
             self._pending.append(tail.astype(np.float32))
         self._acc[:] = 0.0
         self._norm[:] = 0.0
-        return self._emit()
+        out = self._emit()
+        # what lies past the last input sample came out of the zero padding;
+        # left on, 16000 samples in came back as 16383
+        extra = self._samples_out - self._samples_in
+        if extra > 0:
+            out = out[:len(out) - extra]
+            self._samples_out -= extra
+        return out
 
     # ---------------------------------------------------------------- internal
 
@@ -231,6 +243,7 @@ class StreamEnhancer:
             return np.zeros(0, dtype=np.float32)
         out = np.concatenate(self._pending)
         self._pending = []
+        self._samples_out += len(out)
         return out
 
 

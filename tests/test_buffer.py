@@ -167,3 +167,38 @@ def test_a_timed_out_capture_leaves_nothing_behind():
     threading.Thread(target=producer, daemon=True).start()
     data = FetchBuffer(buf).get_data(3, timeout=2)
     np.testing.assert_array_equal(data, np.repeat([0, 1, 2], 4))
+
+
+# -- one capture at a time -----------------------------------------------------
+def test_a_second_capture_on_one_buffer_is_refused():
+    buf = AudioBuffer(4)
+    got = {}
+    first = threading.Thread(
+        target=lambda: got.setdefault("a", buf.get_fixed_size_data(2, timeout=5)))
+    first.start()
+    deadline = time.time() + 5
+    while buf._capture is None and time.time() < deadline:
+        time.sleep(0.01)
+    with pytest.raises(RuntimeError, match="already running"):
+        buf.get_fixed_size_data(1, timeout=0.5)
+    buf.add(np.ones(3))
+    buf.add(np.ones(3) * 2)
+    first.join(5)
+    assert got["a"].tolist() == [1, 1, 1, 2, 2, 2]
+
+
+def test_an_interrupted_capture_does_not_lock_the_buffer(monkeypatch):
+    """Ctrl-C while a capture waits must not leave it marked as running."""
+    buf = AudioBuffer(4)
+
+    def interrupted(timeout=None):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(buf._capture_done, "wait", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        buf.get_fixed_size_data(2, timeout=1)
+    monkeypatch.undo()
+    feeder = threading.Thread(target=lambda: [buf.add(np.ones(2)) or time.sleep(0.02)
+                                              for _ in range(4)])
+    feeder.start()
+    assert buf.get_fixed_size_data(2, timeout=5).tolist() == [1, 1, 1, 1]
+    feeder.join(5)
