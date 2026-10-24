@@ -437,7 +437,8 @@ def _peak(y: np.ndarray, name: Any) -> float:
     return float(np.max(np.abs(y)))
 
 
-def load_wave(wave, num: Optional[int] = None):
+def load_wave(wave: Any, num: Optional[int] = None
+              ) -> Union[Tuple[np.ndarray, int], List[Tuple[np.ndarray, int]]]:
     """Load one wave file or a list of them into ``(waveform, sr)`` tuples."""
     info = wave if num is None else wave[num]
     if isinstance(info, (list, tuple)):
@@ -448,7 +449,8 @@ def load_wave(wave, num: Optional[int] = None):
     raise ValueError(f"Unexpected wave input: {info!r}")
 
 
-def load_waves(wave, use_pool: bool = False, std_len: bool = False, core_: int = 8):
+def load_waves(wave: Any, use_pool: bool = False, std_len: bool = False, core_: int = 8
+               ) -> Union[List[Tuple[np.ndarray, int]], Tuple[List[np.ndarray], int, int]]:
     """Convert every ``.wav`` in *wave* (see :func:`check_input`) to waveform data.
 
     Returns a list of ``(np.ndarray, int)``. With ``std_len=True`` returns
@@ -572,7 +574,7 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
         raise AudioIOError(f"Could not write audio file: {path} ({e})") from e
 
 
-def copy_waves(path: PathLike, wave_) -> List[Path]:
+def copy_waves(path: PathLike, wave_: Any) -> List[Path]:
     """Copy wave files into directory *path* and return where they went.
 
     Note the order: the destination comes first. *wave_* is anything

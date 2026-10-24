@@ -37,7 +37,7 @@ not, and this does not claim to be one.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -253,7 +253,8 @@ def bit_depth(y: np.ndarray, bits: int = 8, *,
 def dropouts(y: np.ndarray, sr: int, *, loss: float = 0.05,
              packet_ms: float = PACKET_MS, conceal: str = 'silence',
              burst: Optional[float] = None, seed: Optional[int] = None,
-             return_spans: bool = False):
+             return_spans: bool = False
+             ) -> Union[np.ndarray, Tuple[np.ndarray, List[Tuple[float, float]]]]:
     """Drop packets, the way a bad link does.
 
     :param loss: fraction of packets to lose. Achieved exactly -- ``round(loss
@@ -414,7 +415,7 @@ CHANNEL_PRESETS = {
 }
 
 
-def channel_spec(spec) -> dict:
+def channel_spec(spec: Optional[Union[str, dict]]) -> dict:
     """Normalise *spec* -- a preset name, a dict, or ``None`` -- to a dict.
 
     :param spec: ``None`` or ``'none'`` for no channel; one of
@@ -486,7 +487,7 @@ def channel_spec(spec) -> dict:
     return out
 
 
-def channel_tag(spec) -> str:
+def channel_tag(spec: Optional[Union[str, dict]]) -> str:
     """A short, stable description of *spec*, for a manifest or a filename.
 
     Readable rather than exhaustive: it is what went on the corpus label, and
@@ -520,7 +521,7 @@ def channel_tag(spec) -> str:
     return '+'.join(parts)
 
 
-def apply_channel(y: np.ndarray, sr: int, spec,
+def apply_channel(y: np.ndarray, sr: int, spec: Optional[Union[str, dict]],
                   seed: Optional[int] = None) -> np.ndarray:
     """Run *y* through a whole link in the order a link does it.
 

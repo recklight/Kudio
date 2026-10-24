@@ -33,7 +33,7 @@ cut does not land on the first consonant. Pure numpy — no webrtcvad, no torch.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import numpy as np
 

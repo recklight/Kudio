@@ -66,7 +66,7 @@ class AudioBuffer:
         self._capture_left = 0
         self._capture_done = threading.Event()
 
-    def add(self, data, drop_full: bool = True) -> None:
+    def add(self, data: np.ndarray, drop_full: bool = True) -> None:
         """Append one frame.
 
         With ``drop_full=True`` (default) the oldest frame is dropped when the
@@ -89,7 +89,7 @@ class AudioBuffer:
             self._frames.append(data)
             self._cond.notify_all()
 
-    def get(self, timeout: Optional[float] = None):
+    def get(self, timeout: Optional[float] = None) -> np.ndarray:
         """Pop the oldest frame, blocking until one is available.
 
         Raises ``TimeoutError`` if *timeout* (seconds) elapses first.
@@ -223,6 +223,6 @@ class FetchBuffer(threading.Thread):
             except TimeoutError as e:
                 self._error = e
 
-    def join(self, timeout: Optional[float] = None):
+    def join(self, timeout: Optional[float] = None) -> Optional[np.ndarray]:
         super().join(timeout)
         return self.data

@@ -77,10 +77,10 @@ unknown name is a `ValueError`, a missing package a
 [`DependencyError`][kudio.exceptions.DependencyError] that names the extra to
 install.
 
-[Getting started](../getting-started.md) has why mir_eval is pinned below 0.9,
-and shows
-[`check_metrics_install`][kudio.core.evaluator.check_metrics_install], which
-logs an install hint for each missing back-end once per process.
+[Getting started](../getting-started.md) has why mir_eval is pinned below 0.9.
+[`check_metrics_install`][kudio.core.evaluator.check_metrics_install] returns
+`(pesq_ok, stoi_ok, sdr_ok)`, which back-ends this machine has, and logs an
+install hint for each missing one once per process.
 `AudioEvaluate` and `eval_metrics` call it too, so configure logging before
 the first of them, or that one hint goes nowhere.
 

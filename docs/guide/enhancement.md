@@ -117,9 +117,10 @@ Which matters more depends on the recording, which is why
 | `omlsa` | log-MMSE weighted by a speech-presence probability[^omlsa] | Takes bins it judges speech-free down to the gain floor, so the pauses here come out about 3 dB quieter than log-MMSE's; `q` sets how readily a bin counts as empty | `alpha` 0.98, `q` 0.30 |
 | `spectral_gate` | Keeps bins more than `n_std_thresh` times the noise estimate's spread over time (in dB) above it, through a smoothed mask | A plain threshold, as in noisereduce. On this page's white noise it came last under every estimator and turned the speech down 5 dB along with the noise | `n_std_thresh` 1.5, `prop_decrease` 1.0, `freq_smooth_hz` 500, `time_smooth_ms` 50 |
 
-A constant noise estimate (`initial`, `quantile`) has no spread over time, so
-there `spectral_gate` takes the noisy signal's spread instead, speech
-included. All the others also take `gain_floor_db`, −25 dB by default: how far
+A noise estimate that holds still has next to no spread over time, `quantile`
+none at all and `initial` only over the opening frames it averages, so with
+those `spectral_gate`'s threshold sits on the estimate or just above it. All
+the others also take `gain_floor_db`, −25 dB by default: how far
 any bin may be turned down. A hard zero is the wrong goal, because total
 suppression is what makes the residue warble. For the same $\xi$ and $\gamma$,
 Wiener turns a bin down furthest, MMSE-STSA least and log-MMSE in between, and
@@ -314,8 +315,7 @@ an object. A model trained with
 [KudioEnhance](https://github.com/recklight/KudioEnhance) goes in the same way,
 as `("model", Enhancer.load(run_dir).enhance)` with `Enhancer` from
 `kudio_enhance.inference`. The reference metrics compare the samples both
-signals have, so a shorter output such as
-[`trad_enhance`][kudio.enhance.traditional.trad_enhance]'s is fine, and a
+signals have, so an output that comes back a little short is fine, and a
 delayed one is not: line it up first, as [Measuring quality](metrics.md) shows.
 
 ## Where it does not help

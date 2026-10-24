@@ -8,6 +8,8 @@ prevent one.
 """
 from __future__ import annotations
 
+from typing import Sequence
+
 import numpy as np
 
 from kudio.exceptions import FeatureError
@@ -166,7 +168,7 @@ def crossfade(first: np.ndarray, second: np.ndarray, sr: int,
     return _as_type(np.concatenate([first[:-n], blended, second[n:]]), first.dtype)
 
 
-def splice(parts, sr: int, duration: float = DEFAULT_CROSSFADE,
+def splice(parts: Sequence[np.ndarray], sr: int, duration: float = DEFAULT_CROSSFADE,
            shape: str = 'linear') -> np.ndarray:
     """Join several clips end to end, crossfading every seam.
 

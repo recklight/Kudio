@@ -4,6 +4,45 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Documentation and type annotations; nothing in the library behaves
+differently.
+
+### Changed
+
+- Every public function and method the API reference shows has a type on
+  each parameter and on its return: 60 of them were missing some, so their
+  signatures on the site were incomplete. `lowercase` and `uppercase` have
+  docstrings. All of it is annotation only; every module already had
+  `from __future__ import annotations`, so nothing is evaluated at run time.
+
+### Documentation
+
+- The Traditional Chinese site covers every guide page, the migration notes
+  and the API overview, where it had the home page, Getting started and the
+  command line. The API pages stay in English, since they are the
+  docstrings.
+- On the Chinese pages, a line break between Chinese and Latin text, a number
+  or inline code lost its space when the build joined the lines, so the pages
+  printed "Python裡" and "400 ms的": 56 places on the three pages already
+  published.
+- Guide pages that still described 3.7: `STFT.inverse` and
+  `spectrogram_to_waveform` rebuild every sample and refuse a wrong shape
+  with `FeatureError`; `RemoteStreamReader` puts a chunk that arrives in
+  pieces back together (40 of 40 through a server cutting them into
+  1460-byte pieces, where 3.7.3 got one); the mel rows of
+  `SpectrogramStream.freqs` are the band centres; `kudio loudness` measures a
+  stereo file as stereo; and `normalize_lufs` pushing a peak past full scale
+  raises a `UserWarning` rather than logging.
+- Claims the code never matched: the band-limited finding names the
+  bandwidth, not twice it; `spectral_gate` keeps its threshold on a
+  `quantile` or `initial` estimate rather than taking the noisy signal's
+  spread; `save_wave(d_sample=)` is not mono only; `trad_enhance`'s output is
+  as long as its input; and `syn_extra_mode` still reads each noise at the
+  rate of the file it is mixed into. The home page described KudioEnhance as
+  Keras on TensorFlow, which it has not been since its 0.2.0.
+
 ## [3.9.0] - 2026-10-19
 
 A minor version rather than a patch, because two results move: DNSMOS lays

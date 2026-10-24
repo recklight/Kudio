@@ -25,7 +25,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple, Union
 
 import librosa
 import numpy as np
@@ -33,7 +33,7 @@ from tqdm import tqdm
 
 from kudio._deprecation import alias
 from kudio._samples import as_float
-from kudio.core.io import file_load, save_wave
+from kudio.core.io import PathLike, file_load, save_wave
 from kudio.exceptions import FeatureError
 
 __all__ = [
@@ -166,7 +166,7 @@ def spectrogram_to_waveform(y: np.ndarray, enhanced_spec: np.ndarray,
                          window=window, n_fft=n_fft, length=len(y))
 
 
-def file_to_spectrogram(file,
+def file_to_spectrogram(file: PathLike,
                         sequence: bool = False,
                         forward_backward: int = 0,
                         norm: bool = False,
@@ -187,7 +187,8 @@ def file_to_spectrogram(file,
                                    desired_length=desired_length)
 
 
-def save_spectrogram_as_wave(wave_out_dir, noisy_file, enhanced_spec,
+def save_spectrogram_as_wave(wave_out_dir: PathLike, noisy_file: PathLike,
+                             enhanced_spec: np.ndarray,
                              squeeze: bool = False, hop_length: int = 256,
                              n_fft: int = 512,
                              win_length: Optional[int] = None,
@@ -247,7 +248,8 @@ def logspec_from_files(wav_list: Sequence,
     ])
 
 
-def melspectrogram(source, n_mels: int = 64, n_frames: int = 5,
+def melspectrogram(source: Union[PathLike, np.ndarray], n_mels: int = 64,
+                   n_frames: int = 5,
                    n_fft: int = 1024, hop_length: int = 512,
                    power: float = 2.0, *,
                    sr: Optional[int] = None) -> np.ndarray:
@@ -378,7 +380,8 @@ class ContextFrames:
     3-D array is read as a stack of them.
     """
 
-    def __init__(self, utterances, context: int, pad: str = 'edge'):
+    def __init__(self, utterances: Union[np.ndarray, Sequence[np.ndarray]],
+                 context: int, pad: str = 'edge'):
         if context < 0:
             raise FeatureError(f"context must be >= 0, got {context}")
         if pad not in ('edge', 'zero'):
@@ -518,7 +521,7 @@ class Standardizer:
         if not self.fitted:
             raise FeatureError("Standardizer has not been fitted")
 
-    def save(self, path) -> Path:
+    def save(self, path: PathLike) -> Path:
         """Write the statistics to an ``.npz`` file and return its path.
 
         numpy adds ``.npz`` to a name without it, so the path returned is the
@@ -533,7 +536,7 @@ class Standardizer:
         return path
 
     @classmethod
-    def load(cls, path) -> "Standardizer":
+    def load(cls, path: PathLike) -> "Standardizer":
         """Read statistics :meth:`save` wrote. ``'stats'`` finds ``stats.npz``."""
         path = Path(path)
         if not path.exists() and path.suffix != '.npz':

@@ -292,9 +292,8 @@ depends on its width, and a full-scale sine reads well below 0 dB:
 The 80 dB clamp comes after the filters, so it costs the mel view those 18 to
 24 dB of range: with 64 bands a 1 kHz tone at -70 dBFS already sits on the
 floor. For a mel view, set `vmax` to about -15 or raise `top_db`. The row labels in
-`freqs` run from `fmin` to `fmax`, which puts the outermost ones off the
-filters' centres: 0 and 8000 Hz for bands centred at 46 and 7626 Hz, with 64
-bands at 16 kHz. Read levels off the linear axis, and use the mel one to see
+`freqs` are the filters' centres, not `fmin` and `fmax`: 46 to 7626 Hz with
+64 bands at 16 kHz. Read levels off the linear axis, and use the mel one to see
 what is being said.
 
 ### Columns are not centred
@@ -505,16 +504,13 @@ sends before closing. Other commands go out with
 can end up in the buffer as a chunk. `initialize_params` opens PyAudio even
 when nothing is played locally, so this class needs `kudio[audio]` too.
 
-!!! warning "Each chunk has to arrive on its own"
-    After a short first read, each further read asks for a whole chunk. When
-    the end of one chunk and the start of the next arrive together, the reads
-    overshoot and the chunk is dropped ("unexpected data size" in the log),
-    along with the bytes of the next one that the last read took. Against a
-    local server that cut the stream into 1460-byte pieces regardless of where
-    chunks began, none of 40 chunks came through; with a pause after each
-    chunk, all 40 did. A chunk that takes more than 10 further reads
-    (`break_count`, counted in reads, not seconds) stops the reader, so for a
-    device that sends each chunk in many small packets, raise
+!!! warning "A chunk in many small packets"
+    A chunk that arrives in pieces is put back together: after a short first
+    read, each further read asks only for the rest of the chunk. Against a
+    local server that cut 40 chunks into 1460-byte pieces regardless of where
+    chunks began, all 40 came through, in order. A chunk that takes more than
+    10 further reads (`break_count`, counted in reads, not seconds) stops the
+    reader, so for a device that sends each chunk in many small packets, raise
     `remote.break_count` before `start()`.
 
 ## Where the parameters are

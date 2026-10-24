@@ -2,7 +2,6 @@
 """Parallel batch processing helpers."""
 from __future__ import annotations
 
-from functools import partial
 from multiprocessing import Pool
 from typing import Callable, Iterable, List, Optional
 

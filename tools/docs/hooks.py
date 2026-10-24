@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from markdown.extensions.toc import slugify
+
 import kudio
 
 #: Where in ``docs/reference/index.md`` the generated tables go.
@@ -87,7 +89,7 @@ def _reference_pages(config, docs_dir: Path) -> List[Tuple[str, str, List[str]]]
     return found
 
 
-def _overview(config) -> str:
+def _overview(config, language: str = "en") -> str:
     docs_dir = Path(config["docs_dir"])
     sections = _reference_pages(config, docs_dir)
     home: Dict[str, int] = {}
@@ -116,7 +118,8 @@ def _overview(config) -> str:
             module = obj.__module__
             # an object with no docstring gets no anchor of its own in the
             # reference, so its row points at the module instead
-            target = f"{module}.{obj.__qualname__}" if inspect.getdoc(obj)                 else module
+            target = f"{module}.{obj.__qualname__}" if inspect.getdoc(obj) \
+                else module
             kind = "class" if inspect.isclass(obj) else "function"
         else:
             module = _defined_in(name, obj)
@@ -133,19 +136,63 @@ def _overview(config) -> str:
         rows[section].append(
             f"| [`{name}`][{target}] | {kind} | {_summary(obj)} |")
 
+    words = _WORDS[language]
+    names = _nav_names(config, language)
     out = []
     for (title, page, _), lines in zip(sections, rows):
         if not lines:
             continue
-        out += [f"## {title}", "",
-                f"Documented in full on [{title}]({Path(page).name}).", "",
-                "| Name | Kind | What it does |", "|---|---|---|", *lines, ""]
+        shown = names.get(title, title)
+        # the English heading's anchor in both languages, so a link to
+        # #audio-files works from either page
+        anchor = f" {{#{slugify(title, '-')}}}" if shown != title else ""
+        out += [f"## {shown}{anchor}", "",
+                words["full"].format(title=shown, page=Path(page).name), "",
+                words["head"], "|---|---|---|",
+                *(_KIND.sub(lambda m: words[m.group(1)], line) for line in lines), ""]
     if old_names:
-        out += ["## Old names", "",
-                "Still importable, but each call warns and points at the new "
-                "name. They will be removed in a future release.", "",
-                "| Old name | Use instead |", "|---|---|", *old_names, ""]
+        out += [words["old"], "", words["old_text"], "",
+                words["old_head"], "|---|---|", *old_names, ""]
     return "\n".join(out)
+
+
+#: The overview's own words, per language; the summaries in its third column
+#: are the docstrings' first sentences and stay in English.
+_WORDS = {
+    "en": {
+        "full": "Documented in full on [{title}]({page}).",
+        "head": "| Name | Kind | What it does |",
+        "function": "function", "class": "class", "constant": "constant",
+        "old": "## Old names",
+        "old_text": "Still importable, but each call warns and points at the new "
+                    "name. They will be removed in a future release.",
+        "old_head": "| Old name | Use instead |",
+    },
+    "zh-TW": {
+        "full": "完整說明在[{title}]({page})。",
+        "head": "| 名稱 | 種類 | 用途（取自 docstring） |",
+        "function": "函式", "class": "類別", "constant": "常數",
+        "old": "## 舊名稱 {#old-names}",
+        "old_text": "這些名稱還能匯入，但每次呼叫都會發出警告，並指出新名稱。"
+                    "之後的版本會把它們移除。",
+        "old_head": "| 舊名稱 | 新名稱 |",
+    },
+}
+#: The kind cell of a generated row, as written before it is translated.
+_KIND = re.compile(r"(?<=\] \| )(function|class|constant)(?= \| )")
+
+
+def _nav_names(config, language: str) -> Dict[str, str]:
+    """English page titles to their names in *language*, from the i18n
+    plugin's nav_translations in mkdocs.yml, so a page is named one way in
+    the navigation and in the overview."""
+    if language == "en":
+        return {}
+    plugin = config["plugins"].get("i18n")
+    for lang in getattr(getattr(plugin, "config", None), "languages", []) or []:
+        if lang.locale == language:
+            return dict(lang.nav_translations or {})
+    return {}
 
 
 #: A Chinese character or full-width punctuation mark.
@@ -154,12 +201,27 @@ _CJK = re.compile("[　-〿一-鿿＀-￯]")
 _OPENS = re.compile(r"[ \t]*(?:[-*+]\s|\d+\.\s|[|#>:<]|!!!|\?\?\?|===|```|~~~)")
 #: A line that ends a block, so the next line is never joined onto it.
 _CLOSED = re.compile(r"[ \t]*(?:[|#<]|!!!|\?\?\?|===|```|~~~)")
+#: A Han character, which the pages set apart from Latin text by a space.
+_HAN = re.compile("[一-鿿]")
+#: Latin text: a letter, a digit, or the backtick that opens inline code.
+_LATIN = re.compile("[A-Za-z0-9`]")
+
+
+def _edge(line: str, end: bool) -> str:
+    """The character a reader sees at the end (or start) of a line, past a
+    link's target, its brackets and emphasis marks."""
+    if end:
+        line = re.sub(r"\]\([^)]*\)$|\]\[[^\]]*\]$", "", line.rstrip())
+        return line.rstrip("*_]")[-1:]
+    return line.lstrip().lstrip("[*_")[:1]
 
 
 def _join_cjk_lines(markdown: str) -> str:
     """Join the lines of a Chinese paragraph. A browser renders a line break
     as a space, and next to a Chinese character that space shows; the sources
-    stay wrapped at 80 columns for the diffs. Fenced code is left alone."""
+    stay wrapped at 80 columns for the diffs. Where a break falls between a
+    Chinese character and a Latin word, a number or inline code, the join
+    keeps the space the pages put there. Fenced code is left alone."""
     lines = markdown.split("\n")
     out: List[str] = []
     fenced = False
@@ -173,15 +235,18 @@ def _join_cjk_lines(markdown: str) -> str:
         if (not fenced and stripped and prev.strip() and not _OPENS.match(line)
                 and not _CLOSED.match(prev)
                 and (_CJK.match(prev.rstrip()[-1]) or _CJK.match(stripped[0]))):
-            out[-1] = prev.rstrip() + stripped
+            a, b = _edge(prev, True), _edge(stripped, False)
+            mixed = (_HAN.match(a) and _LATIN.match(b)) or (_LATIN.match(a) and _HAN.match(b))
+            out[-1] = prev.rstrip() + (" " if mixed else "") + stripped
             continue
         out.append(line)
     return "\n".join(out)
 
 
 def on_page_markdown(markdown: str, page, config, files, **kwargs) -> str:
-    if page.file.src_uri.endswith(".zh-TW.md"):
+    chinese = page.file.src_uri.endswith(".zh-TW.md")
+    if chinese:
         markdown = _join_cjk_lines(markdown)
     if MARKER not in markdown:
         return markdown
-    return markdown.replace(MARKER, _overview(config))
+    return markdown.replace(MARKER, _overview(config, "zh-TW" if chinese else "en"))

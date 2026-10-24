@@ -282,9 +282,10 @@ from a clone of its GitHub repository.
     you settle on there carries straight over to code.
 
 [KudioEnhance](https://github.com/recklight/KudioEnhance) (`kudio-enhance`)
-:   Trains learned denoisers on log-power spectrograms, with Keras 3 on
-    TensorFlow 2.16 or newer: a dense denoising autoencoder, a bidirectional
-    LSTM and a dilated convolutional autoencoder. Its training data is mixed by
+:   Trains learned denoisers on log-power spectrograms with PyTorch: a dense
+    denoising autoencoder, a bidirectional LSTM, a dilated convolutional
+    autoencoder, a causal convolutional recurrent network and a 2-D U-Net. Its
+    training data is mixed by
     [`Synthesizer`][kudio.core.synth.Synthesizer], and a trained model can go
     into [`compare_enhancers`][kudio.enhance.spectral.compare_enhancers] next
     to the statistical methods, scored against the same reference.

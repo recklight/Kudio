@@ -35,12 +35,15 @@ if the scaling is left to the FFT.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
 from kudio._samples import as_float
 from kudio.exceptions import FeatureError
+
+if TYPE_CHECKING:
+    from kudio.core.stft import STFT
 
 __all__ = ['SpectrogramStream']
 
@@ -172,7 +175,7 @@ class SpectrogramStream:
         while the display is still filling up."""
         return self._filled
 
-    def to_stft(self):
+    def to_stft(self) -> STFT:
         """The equivalent :class:`kudio.STFT` geometry.
 
         Useful for recording what a live view was computed with, or for

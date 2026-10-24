@@ -12,13 +12,13 @@ import socket
 import threading
 import wave
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 import soundfile as sf
 
 from kudio.core.buffer import AudioBuffer
-from kudio.core.io import check_file
+from kudio.core.io import PathLike, check_file
 from kudio.exceptions import DependencyError, DeviceError
 from kudio.util.check import CheckDevice
 
@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 
 
 def record(seconds: float, sr: int = 16000, channels: int = 1,
-           device=None) -> np.ndarray:
+           device: Optional[int] = None) -> np.ndarray:
     """Blocking record for *seconds* via sounddevice (modern backend).
 
     Returns float32 samples, shape ``(n,)`` for mono else ``(n, channels)``.
@@ -87,7 +87,8 @@ def wave_encode(signal: np.ndarray) -> bytes:
     return signal.flatten().astype(np.int16).tobytes()
 
 
-def play_audio(wav, rate: Optional[int] = None, channels: int = 1):
+def play_audio(wav: Union[str, Path, wave.Wave_read, np.ndarray],
+               rate: Optional[int] = None, channels: int = 1) -> Optional[str]:
     """Play audio from a file path, an opened ``wave.Wave_read``, or an ndarray.
 
     ndarray input must be int16 or float32; *rate* is required in that case,
@@ -225,7 +226,7 @@ class Recorder:
         per_channel = [self.frames[c::self.channels] for c in range(self.channels)]
         return np.array(per_channel).T.squeeze()
 
-    def save(self, file_dir, rename: bool = False,
+    def save(self, file_dir: PathLike, rename: bool = False,
              resample: Optional[int] = None) -> bool:
         """Write the last recording to *file_dir* (16-bit PCM)."""
         if self.frames is None:
@@ -293,7 +294,8 @@ class RemoteStreamReader(threading.Thread):
             log.error("Stream: %s", e)
             return False
 
-    def sock_send(self, input_data: str, recv_buffer_size: int):
+    def sock_send(self, input_data: str, recv_buffer_size: int
+                  ) -> Optional[np.ndarray]:
         """Send a text command; returns decoded waveform when the reply is
         binary audio data."""
         if input_data == '':
@@ -489,7 +491,7 @@ class LocalStreamReader:
     def get_status(self) -> bool:
         return self.isInitial.is_set()
 
-    def get_setup(self):
+    def get_setup(self) -> Optional[Tuple[Optional[int], int, int]]:
         return (self.device_, self.rate_, self.channels_) if self.get_status() else None
 
     def _require_device(self, what: str) -> None:

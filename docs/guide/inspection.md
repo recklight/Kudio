@@ -124,8 +124,8 @@ So the report averages the spectrum over 1024-sample Hann frames and takes the
 highest frequency still within 50 dB of the strongest one. Below 0.9 of Nyquist
 the clip counts as band-limited. When twice that frequency is within 15 % of a
 common rate (8, 11.025, 16, 22.05, 32, 44.1 or 48 kHz), the finding names it
-as the rate the file was upsampled from; otherwise it says "band-limited to
-about" twice the bandwidth, 6438 Hz for content that stops at 3219 Hz.
+as the rate the file was upsampled from; otherwise it names the frequency
+itself, "band-limited to about 3219 Hz".
 
 ```python
 narrow = kudio.resample(kudio.resample(take, sr, 8000), 8000, sr)
@@ -328,8 +328,8 @@ print(f"{kudio.loudness(loud, sr):.1f} LUFS, peak {np.max(np.abs(loud)):.2f}")
 -14.0 LUFS, peak 1.34
 ```
 
-It logs a warning when that happens, and kudio's logging is silent until your
-program configures it ([Getting started](../getting-started.md) shows how).
+It raises a `UserWarning` when that happens, which Python shows without any
+setup.
 Save such a clip with `subtype="FLOAT"` or aim lower, since as `PCM_16` it
 clips in the way the report barely notices ([Clipping](#clipping)). The
 warning is about samples only; the [true peak](#true-peak) between them can be
@@ -416,7 +416,7 @@ below.
 curve to one figure in LU, to EBU Tech 3342: its relative gate sits 20 LU below
 the mean, not the 10 LU of the integrated figure, and it takes the spread from
 the 10th to the 95th percentile, so a single door slam does not set it. 20 ms
-at full scale in 20 s of steady tone moves it by 0.03 LU. A short-term curve
+at full scale in 20 s of a steady tone peaking at 0.3 moves it by 0.03 LU. A short-term curve
 you already have gives
 the same number as [`range_lu`][kudio.core.loudness.LoudnessCurve.range_lu],
 without measuring again:
@@ -474,8 +474,8 @@ for target in (-23.0, -17.0):
 -17 LUFS: samples -0.43 dBFS, true peak -0.14 dBTP
 ```
 
-At -17 LUFS every sample is below full scale, nothing is logged, and the take
-is still over the ceiling.
+At -17 LUFS every sample is below full scale, no warning is raised, and the
+take is still over the ceiling.
 
 ## DNSMOS: what a listener would say
 
@@ -565,8 +565,7 @@ kudio loudness take.wav --target -23       # exit 1 when over 1 LU off
 `kudio report` prints the report and its findings and exits 1 when there are
 any. `kudio loudness` prints the integrated loudness, the range, the true peak
 and the loudest and quietest moments; `--over-time` adds the curve, one line
-per 100 ms. Both read the file as mono, averaging the channels. On a stereo
-file that puts `kudio loudness` 3.01 LU or more under the BS.1770 figure, and
-`--target` judges that number, so measure a stereo master in Python with
-`mono=False`. The flags are on [Command line](../cli.md), and every parameter
+per 100 ms. `kudio report` reads the file as mono, averaging the channels;
+`kudio loudness` keeps them, since BS.1770 weights and sums the channels and
+the mono mix of a stereo file reads 3 LU low. The flags are on [Command line](../cli.md), and every parameter
 of the functions here is in the [API reference](../reference/inspection.md).

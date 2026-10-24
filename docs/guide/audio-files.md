@@ -145,7 +145,7 @@ kudio.save_wave("out/clip.wav", y, sr)                        # 16-bit PCM
 kudio.save_wave("out/clip24.wav", y, sr, subtype="PCM_24")
 kudio.save_wave("out/clipf.wav", y, sr, subtype="FLOAT")      # 32-bit float
 kudio.save_wave("out/clip.flac", y, sr)                       # FLAC, by extension
-kudio.save_wave("out/clip8k.wav", y, sr, d_sample=8000)       # mono only
+kudio.save_wave("out/clip8k.wav", y, sr, d_sample=8000)       # resampled first
 ```
 
 [`save_wave`][kudio.core.io.save_wave] creates missing folders and replaces an
@@ -501,8 +501,8 @@ and `save_wave` are simpler.
 `save_all(dst_path="session/")` writes every clip into that folder, a clip
 named `clip.quiet` to `session/clip.quiet.wav`. Without `dst_path` it writes
 each clip back over the file it came from, and since `add_local_file` keeps a
-mono downmix whatever `ch` says, with `ch=1`, the default, a stereo source is
-replaced by its downmix. Before writing, `save_all` checks that no two clips
+mono downmix whatever `ch` says, a stereo source is replaced by its
+downmix. Before writing, `save_all` checks that no two clips
 land on one file, `take` and `take.wav` for instance; if two would, it returns
 `False`, writes nothing and logs both names. A clip with no file of its own
 and no `dst_path` is only found when its turn comes: the clips before it are

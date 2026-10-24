@@ -372,7 +372,7 @@ and a `frame_length` that does not hold more than two periods of `fmin`,
 `2 * floor(sr / fmin) + 2` samples. Left out, `frame_length` is 2048, which
 holds two periods of 65 Hz up to 66.56 kHz, or the next power of two that is
 long enough above that: 4096 at 88.2 and 96 kHz. `kudio pitch` picks it the
-same way. A `frame_length` you pass yourself is checked, not raised.
+same way. A `frame_length` you pass yourself is checked, never lengthened.
 
 ### Reading the track
 

@@ -49,7 +49,8 @@ def _check_cutoff(cutoff: Union[float, Sequence[float]], sr: int,
     return value
 
 
-def band_filter(y: np.ndarray, sr: int, cutoff, btype: str = 'highpass',
+def band_filter(y: np.ndarray, sr: int, cutoff: Union[float, Sequence[float]],
+                btype: str = 'highpass',
                 order: int = 4, zero_phase: bool = True) -> np.ndarray:
     """Butterworth filter of any of the four kinds.
 

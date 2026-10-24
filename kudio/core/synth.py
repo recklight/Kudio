@@ -39,14 +39,14 @@ import warnings
 from functools import partial
 from multiprocessing import Pool
 from pathlib import Path, PurePath
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import librosa
 import numpy as np
 from tqdm import tqdm, trange
 
 from kudio.core.dataset import Pair
-from kudio.core.io import (_abspath, _is_fixed_point, _relative, _source_root,
+from kudio.core.io import (PathLike, _abspath, _is_fixed_point, _relative, _source_root,
                            check_input, save_wave)
 from kudio.exceptions import SynthesisError
 
@@ -158,13 +158,13 @@ class Synthesizer:
         they are.
     """
 
-    def __init__(self, clean, noise, out_path: str = '',
+    def __init__(self, clean: Any, noise: Any, out_path: str = '',
                  snr_ratio: Union[float, Sequence[float]] = (-5, 0, 5),
                  rt60: Optional[Union[float, Sequence[float]]] = None,
                  drr_db: float = 0.0,
-                 channel=None,
+                 channel: Optional[Union[str, dict]] = None,
                  write_targets: bool = False,
-                 root=None,
+                 root: Optional[PathLike] = None,
                  subtype: str = 'PCM_16'):
         for what, given in (('clean', clean), ('noise', noise)):
             if isinstance(given, (str, PurePath)) and not Path(given).exists():
@@ -249,13 +249,14 @@ class Synthesizer:
         #: target output rate; ``None`` keeps each clean file's own rate
         self.target_sr: Optional[int] = None
 
-    def wave_input(self):
+    def wave_input(self) -> Tuple[List[Path], List[Path]]:
         return self.cleanWaves, self.noiseWaves
 
     def wave_syn(self) -> Optional[list]:
         return self.synWavesList
 
-    def waveform(self, is_pool: bool = False):
+    def waveform(self, is_pool: bool = False
+                 ) -> Tuple[List[Tuple[np.ndarray, int]], List[Tuple[np.ndarray, int]]]:
         """Load the clean and noise file lists into waveform data."""
         from kudio.core.io import load_waves
         return (load_waves(self.cleanWaves, use_pool=is_pool),
@@ -488,7 +489,7 @@ class Synthesizer:
                 for out, cln, nos, snr in self.synWavesList
                 if Path(out) not in getattr(self, '_noise_only', ())]
 
-    def syn_extra_mode(self, background_path='../data/backgroundnoise',
+    def syn_extra_mode(self, background_path: Any = '../data/backgroundnoise',
                        background_snr: Union[float, Sequence[float]] = (5,),
                        seed: Optional[int] = None,
                        is_pool: bool = True) -> list:
@@ -753,7 +754,8 @@ class Synthesizer:
                 for wave in tqdm(entries, desc="[kudio] Audio synthesis")]
 
     @staticmethod
-    def syn_waves(synWavesList, isSilence: bool, target_sr: Optional[int],
+    def syn_waves(synWavesList: Union[tuple, Sequence[tuple]], isSilence: bool,
+                  target_sr: Optional[int],
                   num: Optional[int] = None,
                   rooms: Optional[Dict[Path, tuple]] = None,
                   channels: Optional[Dict[Path, tuple]] = None,

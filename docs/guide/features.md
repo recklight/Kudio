@@ -357,22 +357,17 @@ print(round(float(change[:, stft.n_bins // 2:].mean()), 3))   # -1.987, in bels
 - The rows have to be plain log10 power from the same geometry, one per frame
   of the reference. A `norm=True` spectrogram runs without an error and comes
   back at the wrong level with a flattened spectrum. Context-stacked rows, or
-  windows with their tail padding still on, raise numpy's `ValueError`
-  (operands could not be broadcast together), which is why the block above
-  flattens the windows and cuts them back to `len(spec)` rows.
-- The output always has `len(y)` samples, but the last `len(y) % hop_length`
-  of them repeat the last rebuilt sample instead of coming from the
-  spectrogram. This clip is exactly 125 hops, so nothing is repeated and the
-  unmodified round trip is off by at most 6e-8. A one-second clip at 16 kHz
-  ends in 128 repeated samples, off by up to 0.35 on this noise. The
-  reference metrics on [Measuring quality](metrics.md) compare that tail too,
-  so rebuild output that will be scored with
-  [`analyse`][kudio.core.stft.STFT.analyse] and
-  [`synthesise`][kudio.core.stft.STFT.synthesise] (below), which reconstruct
-  every sample.
+  windows with their tail padding still on, raise a
+  [`FeatureError`][kudio.exceptions.FeatureError] that gives both shapes,
+  which is why the block above flattens the windows and cuts them back to
+  `len(spec)` rows.
+- The output has exactly `len(y)` samples, and every one of them is rebuilt
+  from the spectrogram, a last partial hop included. Unmodified, the round
+  trip is off by at most 6e-8, on this clip and on its first second alone,
+  which ends half-way through a hop.
 
 [`save_spectrogram_as_wave`][kudio.core.feature.save_spectrogram_as_wave] does
-the same from a file, repeated tail included:
+the same from a file:
 `kudio.save_spectrogram_as_wave("enhanced.wav", "noisy.wav", cleaned)` takes
 the phase from `noisy.wav` at that file's own rate and writes 16-bit PCM,
 clipped at full scale rather than wrapped around. It takes the geometry as
@@ -396,8 +391,8 @@ out = stft.synthesise(np.sqrt(10.0 ** cleaned) * np.exp(1j * np.angle(X)),
                       length=len(y))
 ```
 
-Pass `length=len(y)`. Without it `synthesise` stops where `inverse` starts
-repeating, 15872 samples into a one-second clip.
+Pass `length=len(y)`. Without it `synthesise` stops at the last whole hop,
+15872 samples into a one-second clip.
 
 ## Many files at once
 

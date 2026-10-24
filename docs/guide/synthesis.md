@@ -472,8 +472,9 @@ The output folder is emptied first, under the same guard as
   `sx133.wav`, write to the same output names. It warns, and the second
   overwrites the first, so give this mode clean files whose names are
   distinct.
-- It takes no `target_sr=` and resamples nothing, whatever an earlier `syn()`
-  on the same Synthesizer asked for.
+- It takes no `target_sr=`: each output stays at its clean file's rate,
+  whatever an earlier `syn()` on the same Synthesizer asked for. The noise is
+  still read at the rate of the file it is mixed into, as in `syn()`.
 - Above 200 outputs it writes through the 8-process pool unless you pass
   `is_pool=False`, and then needs the `if __name__ == "__main__":` guard on
   Windows and macOS.

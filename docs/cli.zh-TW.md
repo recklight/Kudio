@@ -45,7 +45,7 @@ python -m kudio.cli info take.wav   # when the kudio script is not on PATH
   輸出會改用新檔名（`mic_a2.wav`）。`synth` 剛好相反，會先清空它的輸出資料夾。
 - 結果輸出到標準輸出，連同結果下方的摘要行，以及指令什麼都沒找到時印的那一行訊息
   （`no speech detected`）。錯誤與拒絕、記錄、警告和進度條則輸出到標準錯誤。所以
-  `kudio vad take.wav > spans.txt` 會留下片段和它們的摘要，而腳本應該檢查結束代碼，
+  `kudio vad take.wav > spans.txt` 會留下區段和它們的摘要，而腳本應該檢查結束代碼，
   不要去檢查檔案。
 - `-v` 會把 kudio 的記錄調到 DEBUG，發生錯誤時顯示 Python 的 traceback 而不是一行訊息，
   而且要放在子指令前面：`kudio -v report take.wav`。放在後面的話，參數解析器會拒絕它。
@@ -54,7 +54,7 @@ python -m kudio.cli info take.wav   # when the kudio script is not on PATH
 ## 範例檔案 {#the-example-files}
 
 這一頁的每個輸出都是指令實際印出來的，跑在幾個合成檔案上。`take.wav` 是 16 kHz、
-十秒長：四段音高在 105 到 170 Hz 之間滑動的有聲樂句，第三段小 12 dB，中間有停頓和
+十秒長：四段音高在 105 到 170 Hz 之間滑動的有聲語句，第三段小 12 dB，中間有停頓和
 環境音。`hot.wav` 是同一段錄音放大五倍並削峰，`excerpt.wav` 是從 4.2 秒開始的四秒，
 `silence.wav` 是三秒的零。`noisy.wav` 以 5 dB SNR 加入白雜訊，`processed.wav` 是
 `noisy.wav` 降噪後再延遲 128 個樣本。`raw/` 在兩個子資料夾裡放了三段 44.1 kHz 立體聲
@@ -146,7 +146,7 @@ peak      : 0.2922
 
 ### report
 
-不需要乾淨參考訊號的健康檢查：電平、削峰、直流偏移、靜音、雜訊底、估計的 SNR，以及內容
+不需要乾淨參考訊號的健康檢查：準位、削峰、直流偏移、靜音、雜訊底、估計的 SNR，以及內容
 佔滿的頻寬。它先印出 [`AudioReport`][kudio.core.report.AudioReport] 的一行摘要，再印出
 [`problems()`][kudio.core.report.AudioReport.problems] 的發現，有任何發現就以 1 結束。
 
@@ -169,7 +169,7 @@ kudio report hot.wav
 ### loudness
 
 依 BS.1770 的整合響度、依 EBU Tech 3342 的響度範圍、最大聲和最小聲的 3 秒視窗以及它們
-的中心時間，還有真實峰值，讀取前至少超取樣到 192 kHz。最小聲的視窗會略過數位靜音，
+的中心時間，還有真峰值，讀取前至少超取樣到 192 kHz。最小聲的視窗會略過數位靜音，
 因為停頓不算發現。
 
 ```bash
@@ -191,7 +191,7 @@ true peak     -10.60 dBTP
 | `--target LUFS` | 無 | 整合響度和目標差超過 1 LU，或檔案是靜音時，以 1 結束 |
 
 `--over-time` 是用來找出一段錄音在哪裡飄掉，不用打開編輯器。在 `excerpt.wav` 上，
-視窗從第二段樂句移到小聲的第三段時，電平降了 10 LU：
+視窗從第二段語句移到小聲的第三段時，準位降了 10 LU：
 
 ```bash
 kudio loudness excerpt.wav --over-time
@@ -218,7 +218,7 @@ true peak     -10.69 dBTP
 ```
 
 每一行標的是視窗的中心時間，所以用 3 秒視窗時，第一行在 1.50 秒。短於 3 秒的片段仍然會
-得到整合響度和真實峰值，範圍那一行會說它填不滿視窗；加 `--momentary` 時還會得到 400 ms
+得到整合響度和真峰值，範圍那一行會說它填不滿視窗；加 `--momentary` 時還會得到 400 ms
 的極值，範圍那一行會說需要 3 秒。短於 400 ms，也就是一個 BS.1770 區塊，連整合響度都沒有，
 指令會以錯誤結束。數位靜音的檔案會印出 `-inf` 並說明，立體聲檔案則照立體聲量測。
 
@@ -238,15 +238,15 @@ true peak       0.34 dBTP
 13.30 LU over the -23 LUFS target
 ```
 
-它會以 1 結束。檔案裡沒有任何樣本超過滿刻度，真實峰值卻在 0 dBTP 以上：削峰後的波形在
+它會以 1 結束。檔案裡沒有任何樣本超過滿刻度，真峰值卻在 0 dBTP 以上：削峰後的波形在
 樣本之間衝過頭了。
 
 ### vad
 
-[`vad`][kudio.core.vad.vad] 找到的語音片段，以秒為單位。門檻是從檔案本身的雜訊底往上算，
+[`vad`][kudio.core.vad.vad] 找到的語音區段，以秒為單位。門檻是從檔案本身的雜訊底往上算，
 所以同一個值在安靜的檔案和有嘶聲的檔案上都適用。`--threshold-db`（預設 8）是音框必須
-高出雜訊底多少：小聲的說話者被漏掉時調低，一陣陣的環境噪音被當成語音時調高。
-`--split-to DIR` 還會把每個片段各寫成一個檔案，命名為 `<stem>_001.wav` 依序往下。
+高出雜訊底多少：小聲的說話者被漏掉時調低，一陣陣的房間雜訊被當成語音時調高。
+`--split-to DIR` 還會把每個區段各寫成一個檔案，命名為 `<stem>_001.wav` 依序往下。
 
 ```bash
 kudio vad take.wav
@@ -260,7 +260,7 @@ kudio vad take.wav
 4 span(s), 7.12s of 10.00s (71%)
 ```
 
-在 `noisy.wav` 上它找到三段，不是四段。第三段樂句比其他的小 12 dB，在 5 dB SNR 下就落到
+在 `noisy.wav` 上它找到三段，不是四段。第三段語句比其他的小 12 dB，在 5 dB SNR 下就落到
 雜訊底下了。沒有語音的檔案會印出 `no speech detected` 並以 1 結束。
 
 ### pitch
@@ -282,8 +282,8 @@ median 128.5 Hz  ·  111.2-158.9 Hz (6.2 semitones)  ·  71% voiced
 wrote 4 label(s) to voiced.txt
 ```
 
-`--labels` 用 [`save_labels`][kudio.core.dataset.save_labels] 寫出有聲片段。`voiced.txt`
-是 Audacity 的標籤軌（開始、結束、文字，以 tab 分隔），所以在編輯器裡這些片段會疊在波形
+`--labels` 用 [`save_labels`][kudio.core.dataset.save_labels] 寫出有聲區段。`voiced.txt`
+是 Audacity 的標籤軌（開始、結束、文字，以 tab 分隔），所以在編輯器裡這些區段會疊在波形
 上面；檔名是 `.txt` 或 `.tsv` 時用這個格式，其他副檔名則寫成 JSON。完全沒有有聲音框時，
 指令會以 1 結束：對 3 秒的 `silence.wav` 它會印出 `no voiced frames in 301 (65-400 Hz)`，
 301 是音框數。
@@ -333,7 +333,7 @@ kudio convert raw/ 16k/ --rate 16000 --recursive --lufs -23
 
 把檔案調整到指定的響度 `--lufs`（不給時是 -23），或指定的峰值 `--peak`，兩者不能同時用。
 峰值是線性振幅，大於 0、最多 1，例如 0.99，不是 dBFS；其他的值會以錯誤結束，數位靜音的
-檔案也一樣，因為它沒有電平可以縮放。各聲道會保留。要用耳朵比較兩個檔案之前，該用的是
+檔案也一樣，因為它沒有準位可以縮放。各聲道會保留。要用耳朵比較兩個檔案之前，該用的是
 響度，因為兩個版本中比較大聲的那個，不管其他地方有什麼差異，往往就會勝出。
 
 ```bash
@@ -681,7 +681,7 @@ wiener + minimum                 64       -51.3      5.23    0.75      —   0.5
 ```
 
 `initial` 從檔案最前面的音框取得雜訊，而 `noisy.wav` 開頭有 0.6 秒沒人說話的純雜訊，正是
-它設計時針對的情況。把同一對檔案從 1.0 秒開始截，也就是落在第一段樂句裡面，兩列 `initial`
+它設計時針對的情況。把同一對檔案從 1.0 秒開始截，也就是落在第一段語句裡面，兩列 `initial`
 就會掉到表格最底下，`dSNR` 是 -2.89 和 -3.44 dB，比什麼都不做還糟。
 
 | 選項 | 預設 | 作用 |
@@ -707,7 +707,7 @@ PESQ 欄用的是 kudio 預設的 MOS-LQO：16 kHz 是寬頻、8 kHz 是窄頻�
 ### align
 
 用 [`find_delay`][kudio.core.align.find_delay] 量一段錄音落後另一段多少。每個參考型指標都是
-拿第 *i* 個樣本和第 *i* 個樣本比，兩個檔案有位移時，沒有一個指標能察覺，只會給出很差的分數。
+拿第 *i* 個樣本和第 *i* 個樣本比，兩個檔案錯開時，沒有一個指標能察覺，只會給出很差的分數。
 
 ```bash
 kudio align take.wav processed.wav --metrics --write-to aligned/

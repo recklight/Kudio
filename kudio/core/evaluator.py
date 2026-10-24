@@ -27,9 +27,12 @@ import re
 import shutil
 import subprocess
 import warnings
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import pandas as pd
 from tqdm import tqdm
 
 from kudio._samples import as_float
@@ -423,7 +426,7 @@ class AudioEvaluate:
             self.score_dict[column].append(np.around(enhanced, 4))
             setattr(self, f"base_{column.lower()}", base)
 
-    def get_df(self):
+    def get_df(self) -> pd.DataFrame:
         """Return the collected scores (plus a Baseline row) as a DataFrame.
 
         Before anything has been scored the DataFrame is empty, with the
@@ -441,7 +444,7 @@ class AudioEvaluate:
             table['SDR'].append(np.around(self.base_sdr, 4))
         return _pandas().DataFrame.from_dict(table, orient='columns')
 
-    def per_file(self):
+    def per_file(self) -> pd.DataFrame:
         """Every file's scores as a DataFrame, one row per method and file.
 
         The 'Baseline' rows score the noisy files; :attr:`rows` holds the
@@ -487,7 +490,7 @@ class AudioEvaluate:
             rows.append(row)
         return rows
 
-    def _means(self, column: str):
+    def _means(self, column: str) -> Tuple[float, float]:
         if self.enhanced_list is None:
             raise ValueError("no enhanced files yet: call eval(method, files) first")
         self._check_length(self.enhanced_list)
@@ -495,22 +498,23 @@ class AudioEvaluate:
         enhanced = self._score_rows('enhanced', self.enhanced_list, [column])
         return _paired_means(base, enhanced, column)
 
-    def sdr_score(self):
+    def sdr_score(self) -> Tuple[float, float]:
         """``(baseline, enhanced)`` mean SDR over :attr:`enhanced_list`."""
         log.info("==== Evaluate SDR ====")
         return self._means('SDR')
 
-    def stoi_score(self):
+    def stoi_score(self) -> Tuple[float, float]:
         """``(baseline, enhanced)`` mean STOI over :attr:`enhanced_list`."""
         log.info("==== Evaluate STOI ====")
         return self._means('STOI')
 
-    def pesq_score(self):
+    def pesq_score(self) -> Tuple[float, float]:
         """``(baseline, enhanced)`` mean PESQ over :attr:`enhanced_list`."""
         log.info("==== Evaluate PESQ ====")
         return self._means('PESQ')
 
-    def pesq_score_exe(self, pesq_exe: str = 'pesq.exe', rate: int = 16000):
+    def pesq_score_exe(self, pesq_exe: str = 'pesq.exe', rate: int = 16000
+                       ) -> Tuple[float, float]:
         """Legacy PESQ via the ITU ``pesq.exe`` binary on PATH (Windows).
 
         The binary prints the raw narrowband P.862 score, the same scale as
@@ -545,7 +549,8 @@ class AudioEvaluate:
         return mean['Baseline-PESQ'], mean['Enhance-PESQ']
 
 
-def _paired_means(base: List[dict], enhanced: List[dict], column: str):
+def _paired_means(base: List[dict], enhanced: List[dict], column: str
+                  ) -> Tuple[float, float]:
     """Mean of *column* over the files where both sides have a value -- a file
     that failed on one side is left out of both, so the two stay comparable."""
     pairs = [(b[column], e[column]) for b, e in zip(base, enhanced)
@@ -557,7 +562,8 @@ def _paired_means(base: List[dict], enhanced: List[dict], column: str):
 
 
 def eval_metrics(rate: int, ref: np.ndarray, deg: np.ndarray, *,
-                 pesq_mode: str = 'auto', pesq_scale: str = 'lqo'):
+                 pesq_mode: str = 'auto', pesq_scale: str = 'lqo'
+                 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """Score a single (reference, degraded) pair with every available metric.
 
     Returns ``(pesq, stoi, sdr)`` -- always three values, whatever is

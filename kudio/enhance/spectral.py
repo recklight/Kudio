@@ -71,13 +71,13 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path, PurePath
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
 from kudio._samples import as_float
-from kudio.core.io import ConvertResult
+from kudio.core.io import ConvertResult, PathLike
 from kudio.exceptions import FeatureError
 
 __all__ = [
@@ -565,7 +565,8 @@ def _spectral_gate_gains(power: np.ndarray, noise: np.ndarray, *,
 RECURSIVE_METHODS = ('wiener', 'mmse_stsa', 'logmmse', 'omlsa')
 
 
-def make_gain_rule(method: str, settings: Optional[dict] = None):
+def make_gain_rule(method: str, settings: Optional[dict] = None
+                   ) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
     """The per-frame gain function for one of :data:`RECURSIVE_METHODS`.
 
     Exposed so the streaming enhancer resolves a method name the same way the
@@ -919,7 +920,8 @@ class EnhanceFolderResult(ConvertResult):
         return float(np.mean([b - a for b, a in usable]))
 
 
-def enhance_folder(src, dst, method='logmmse', *,
+def enhance_folder(src: Any, dst: PathLike,
+                   method: Union[str, Callable, Tuple[str, Callable]] = 'logmmse', *,
                    noise: str = 'mcra',
                    n_fft: int = 512,
                    hop_length: Optional[int] = None,
@@ -928,10 +930,10 @@ def enhance_folder(src, dst, method='logmmse', *,
                    sr: Optional[int] = None,
                    subtype: str = 'PCM_16',
                    overwrite: bool = False,
-                   progress=None,
+                   progress: Optional[Callable[[int, int, Path], None]] = None,
                    on_error: str = 'collect',
                    report: bool = False,
-                   **params):
+                   **params) -> EnhanceFolderResult:
     """Denoise every ``.wav`` file under *src* into *dst*.
 
     The counterpart of :func:`kudio.convert_folder`, and it mirrors the input's

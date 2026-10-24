@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Union
+from typing import TYPE_CHECKING, Iterable, List, Optional, Union
 
 from kudio._deprecation import alias
 from kudio.exceptions import DependencyError
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 __all__ = [
     'data2xlsx',
@@ -27,8 +30,9 @@ def _pandas():
         raise DependencyError('pandas', extra='data') from e
 
 
-def data2xlsx(data: Union[dict, "pd.DataFrame"], xlsx_dir, sheet_name: str,
-              index: bool = False, fit_column: bool = True):
+def data2xlsx(data: Union[dict, pd.DataFrame], xlsx_dir: Union[str, Path],
+              sheet_name: str, index: bool = False,
+              fit_column: bool = True) -> Optional[str]:
     """Write a dict or DataFrame to a sheet of an ``.xlsx`` file.
 
     If the file already exists, the sheet is replaced; other sheets are kept.
@@ -64,11 +68,15 @@ def data2xlsx(data: Union[dict, "pd.DataFrame"], xlsx_dir, sheet_name: str,
     return None
 
 
-def lowercase(lst) -> List[str]:
+def lowercase(lst: Iterable) -> List[str]:
+    """The strings in *lst*, lower-cased. Anything that is not a string is
+    left out."""
     return [_.lower() for _ in lst if isinstance(_, str)]
 
 
-def uppercase(lst) -> List[str]:
+def uppercase(lst: Iterable) -> List[str]:
+    """The strings in *lst*, upper-cased. Anything that is not a string is
+    left out."""
     return [_.upper() for _ in lst if isinstance(_, str)]
 
 

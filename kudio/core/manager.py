@@ -6,11 +6,13 @@ import logging
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import KeysView, List, Optional, Union, ValuesView
+
+import numpy as np
 
 from kudio._samples import to_float
 from kudio.core.feature import wave_separate
-from kudio.core.io import file_load, save_wave
+from kudio.core.io import PathLike, file_load, save_wave
 from kudio.core.stream import play_audio
 
 __all__ = ['AudioDataManager']
@@ -54,21 +56,21 @@ class AudioDataManager:
     def __len__(self) -> int:
         return len(self.audios_)
 
-    def get_item(self, name: str):
+    def get_item(self, name: str) -> Optional[dict]:
         item = self.audios_.get(name)
         if item is None:
             log.warning("Manager: audio %r not found", name)
         return item
 
-    def get_wave(self, name: str):
+    def get_wave(self, name: str) -> Optional[List[np.ndarray]]:
         item = self.get_item(name)
         return item['wave'] if item is not None else None
 
-    def get_sample(self, name: str):
+    def get_sample(self, name: str) -> Optional[int]:
         item = self.get_item(name)
         return item['sr'] if item is not None else None
 
-    def add_local_file(self, dir, name: Optional[str] = None) -> None:
+    def add_local_file(self, dir: PathLike, name: Optional[str] = None) -> None:
         """Load *dir* into the manager as a mono downmix (``ch`` 1), whatever
         :meth:`set_params` says, so :meth:`save_all` writes it back as mono.
         Any format soundfile reads is fine."""
@@ -86,7 +88,8 @@ class AudioDataManager:
         self.audios_[name]["sr"] = rate_
         self.audios_[name]["ch"] = 1
 
-    def add_new_file(self, name: Optional[str] = None, dir=None, wave=None,
+    def add_new_file(self, name: Optional[str] = None, dir: Optional[PathLike] = None,
+                     wave: Optional[List[np.ndarray]] = None,
                      sr: Optional[int] = None, ch: Optional[int] = None,
                      override: bool = False) -> None:
         if name is None:
@@ -119,7 +122,7 @@ class AudioDataManager:
     def add_dir(self, name: str, dir: str) -> None:
         self.audios_[name]["dir"] = dir
 
-    def add_wave(self, name: str, wave) -> None:
+    def add_wave(self, name: str, wave: np.ndarray) -> None:
         self.audios_[name]["wave"].append(wave)
 
     def add_sr(self, name: str, sr: int) -> None:
@@ -131,17 +134,17 @@ class AudioDataManager:
     def del_element(self, name: str) -> None:
         self.audios_.pop(name, None)
 
-    def del_from_path(self, pth, key: Optional[str] = None) -> None:
+    def del_from_path(self, pth: PathLike, key: Optional[str] = None) -> None:
         pth = Path(pth)
         files = pth.glob(key if key else f"*{self.suffix}")
         for f in files:
             if f.is_file():
                 f.unlink(missing_ok=True)
 
-    def get_names(self):
+    def get_names(self) -> KeysView[str]:
         return self.audios_.keys()
 
-    def get_values(self):
+    def get_values(self) -> ValuesView[dict]:
         return self.audios_.values()
 
     def _file_name(self, name: str) -> str:
@@ -159,7 +162,8 @@ class AudioDataManager:
             return name
         return name + self.suffix
 
-    def _targets(self, name: str, item, dst_path=None) -> List[Path]:
+    def _targets(self, name: str, item: dict,
+                 dst_path: Optional[PathLike] = None) -> List[Path]:
         """Every file :meth:`save_` would write for the clip *name*.
 
         Empty when the clip has no destination at all: it was never loaded
@@ -179,7 +183,8 @@ class AudioDataManager:
                     for i in range(len(item['wave']))]
         return [dir_]
 
-    def save_(self, name: str, dst_path=None, down_sample=None) -> bool:
+    def save_(self, name: str, dst_path: Optional[PathLike] = None,
+              down_sample: Optional[int] = None) -> bool:
         if not len(self):
             log.warning("Manager: nothing to save")
             return False
@@ -198,7 +203,8 @@ class AudioDataManager:
             save_wave(d, w, item['sr'], d_sample=down_sample)
         return True
 
-    def save_all(self, dst_path=None, down_sample=None) -> bool:
+    def save_all(self, dst_path: Optional[PathLike] = None,
+                 down_sample: Optional[int] = None) -> bool:
         if not len(self):
             log.warning("Manager: nothing to save")
             return False

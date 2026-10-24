@@ -81,7 +81,7 @@ and `[all]` leaves them out as well. Four of the others have a catch:
 
 [`check_metrics_install`][kudio.core.evaluator.check_metrics_install] says
 which metric back-ends a machine has; [Measuring quality](guide/metrics.md)
-shows it.
+has what it returns.
 
 ## A first session
 

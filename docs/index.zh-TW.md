@@ -240,13 +240,13 @@ pip install "kudio[eval,viz]"    # extras go in brackets, by name
 clone 下來安裝。
 
 [KudioStudio](https://github.com/recklight/KudioStudio)
-:   以 PySide6 寫成、建立在 kudio 上的桌面工作台。打開一段片段，看它、編輯它、降噪、
+:   以 PySide6 寫成、建立在 kudio 上的桌面工作台。打開一個片段，看它、編輯它、降噪、
     量測，並用它建立資料集，都不必先寫腳本。每個控制項都對應一個 kudio 函式，
     每個面板下方的說明會顯示它實際會呼叫的那一行，所以在那裡調好的設定可以直接搬到程式碼裡。
 
 [KudioEnhance](https://github.com/recklight/KudioEnhance)（`kudio-enhance`）
-:   在對數功率頻譜圖上訓練降噪模型，使用 Keras 3 搭配 TensorFlow 2.16 以上：
-    一個全連接降噪自編碼器、一個雙向 LSTM，以及一個擴張摺積自編碼器。它的訓練資料由
+:   用 PyTorch 在對數功率頻譜圖上訓練降噪模型：全連接降噪自編碼器、雙向 LSTM、
+    擴張摺積自編碼器、因果的摺積遞迴網路，以及二維 U-Net。它的訓練資料由
     [`Synthesizer`][kudio.core.synth.Synthesizer] 混成，訓練好的模型可以放進
     [`compare_enhancers`][kudio.enhance.spectral.compare_enhancers]，和統計方法並列，
     用同一個參考訊號評分。

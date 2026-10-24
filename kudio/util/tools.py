@@ -7,6 +7,7 @@ import threading
 import time
 from collections import Counter
 from functools import wraps
+from typing import Callable, Dict, Hashable, Iterable
 
 __all__ = [
     'timer',
@@ -17,7 +18,7 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
-def timer(func):
+def timer(func: Callable) -> Callable:
     """Decorator: log the wall-clock run time of *func*."""
 
     @wraps(func)
@@ -56,7 +57,7 @@ class Timer:
         return wrapper
 
 
-def find_duplicate(file_list):
+def find_duplicate(file_list: Iterable[Hashable]) -> Dict[Hashable, int]:
     """Return the ``Counter`` dict of *file_list*, logging duplicated entries."""
     counts = dict(Counter(file_list))
     duplicates = {key: value for key, value in counts.items() if value > 1}

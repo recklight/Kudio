@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence, Tuple, Union
 
 import librosa
 import numpy as np
@@ -34,7 +34,8 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
-def history_plot(history, metrics: str = 'loss', save_fig: Optional[str] = None):
+def history_plot(history: Any, metrics: str = 'loss',
+                 save_fig: Optional[str] = None) -> None:
     """Plot every history curve whose key contains *metrics* (Keras History)."""
     for_legend = []
     color = ['r', 'g', 'b', 'c', 'm', 'y', 'k', 'b--', 'r:', 'c:', 'm:', 'k:', 'g--', 'y--']
@@ -110,7 +111,7 @@ class Common:
     def show(self) -> None:
         self.fig.show()
 
-    def save(self, dir) -> None:
+    def save(self, dir: Union[str, Path]) -> None:
         if self.is_save:
             self.plt.savefig(dir)
 
@@ -118,7 +119,8 @@ class Common:
         self.plt.close()
 
     @staticmethod
-    def plot_stft_w_2mfe(f, n_mels: int = 40, sub_mfe_fq: int = 48000) -> None:
+    def plot_stft_w_2mfe(f: Union[str, Path], n_mels: int = 40,
+                         sub_mfe_fq: int = 48000) -> None:
         """Waveform + two mel spectrograms (full band vs. ``sub_mfe_fq``)."""
         f = Path(f)
         y, sr = librosa.load(str(f), sr=None, mono=True)
@@ -150,7 +152,8 @@ class Common:
 class WaveVisualizer(Common):
     """Plot waveform + spectrogram side by side for one or more files."""
 
-    def __init__(self, fig_size=(7, 5), dpi: int = 200, subplots: Optional[int] = None):
+    def __init__(self, fig_size: Tuple[float, float] = (7, 5), dpi: int = 200,
+                 subplots: Optional[int] = None):
         super().__init__()
         self.plt = plt
         self.row_len = None
@@ -188,14 +191,14 @@ class WaveVisualizer(Common):
             self.ax[idx, 0].set_xlabel("")
             self.ax[idx, 1].set_xlabel("")
 
-    def save(self, path) -> None:
+    def save(self, path: Union[str, Path]) -> None:
         path = Path(path)
         if path.exists():
             log.warning("File or path already exists: %s", path)
             return
         self.plt.savefig(path)
 
-    def copy_wave(self, path, wave_list) -> None:
+    def copy_wave(self, path: Union[str, Path], wave_list: Any) -> None:
         copy_waves(path, wave_list)
 
 

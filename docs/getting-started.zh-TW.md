@@ -69,13 +69,13 @@ pip install "kudio[eval,viz]"
     呼叫端也沒有什麼要改的。
 
 [`check_metrics_install`][kudio.core.evaluator.check_metrics_install] 會告訴你這台電腦
-有哪些指標後端；[品質評估](guide/metrics.md)有示範。
+有哪些指標後端；它回傳什麼，[品質評估](guide/metrics.md)有說明。
 
 ## 第一次使用 {#a-first-session}
 
 這一段把一段含雜訊的錄音走過一般的流程：看檔案、載入、檢查、降噪、拿結果跟乾淨訊號
 比對評分，然後存檔。除了核心安裝之外什麼都不需要，另外需要兩個你可以自己產生的檔案：
-一段前後有停頓、含兩段有聲片段的乾淨訊號，以及同一段訊號以 2 dB SNR 混入白雜訊的版本。
+一段前後有停頓、含兩段有聲段落的乾淨訊號，以及同一段訊號以 2 dB SNR 混入白雜訊的版本。
 
 這兩個檔案和首頁導覽用的不是同一組，只是檔名相同。請在空資料夾裡執行下面的區塊，
 否則下面的數字都對不上。
@@ -146,7 +146,7 @@ for problem in report.problems():
 estimated SNR around 9 dB — the noise floor is close to the content
 ```
 
-[`audio_report`][kudio.core.report.audio_report] 不需要乾淨的參考訊號。它量電平、響度、
+[`audio_report`][kudio.core.report.audio_report] 不需要乾淨的參考訊號。它量準位、響度、
 削峰、直流偏移、靜音、雜訊底，以及內容實際用到多少頻帶，
 [`problems`][kudio.core.report.AudioReport.problems] 則把值得處理的地方寫成句子。
 清單是空的，代表它量得到的東西都沒問題。響度是依 ITU-R BS.1770 計算的閘控整合響度，
@@ -154,7 +154,7 @@ estimated SNR around 9 dB — the noise floor is close to the content
 這是峰值看不出來的。其他響度工具在[檢查錄音](guide/inspection.md)。
 
 檔案是用 2 dB 混的，報告卻說 9 dB。兩者都對，只是講的是不同的事。混音 SNR 是把語音對
-整個檔案平均，包含停頓；報告則把檔案切成 30 ms 的音框，拿響的音框（電平的第 95 百分位數）
+整個檔案平均，包含停頓；報告則把檔案切成 30 ms 的音框，拿響的音框（準位的第 95 百分位數）
 和安靜的音框（第 10 百分位數）比較。拿它來找出吵的檔案，不要拿來當引用的數字。
 下一步的圖上標出了這兩個百分位數。
 
@@ -172,13 +172,13 @@ True
 [`spectral_enhance`][kudio.enhance.spectral.spectral_enhance] 預設使用 MCRA 雜訊估計
 加上 log-MMSE 增益，回傳的樣本數和輸入完全一樣，所以輸出和輸入逐一對齊。
 
-![noisy.wav 和 denoised.wav 在 4.5 秒內的音框電平，標出 noisy 電平的第 95 和第 10 百分位數，相差 8.8 dB](images/start-levels-light.webp#only-light)
-![noisy.wav 和 denoised.wav 在 4.5 秒內的音框電平，標出 noisy 電平的第 95 和第 10 百分位數，相差 8.8 dB](images/start-levels-dark.webp#only-dark)
+![noisy.wav 和 denoised.wav 在 4.5 秒內的音框準位，標出 noisy 準位的第 95 和第 10 百分位數，相差 8.8 dB](images/start-levels-light.webp#only-light)
+![noisy.wav 和 denoised.wav 在 4.5 秒內的音框準位，標出 noisy 準位的第 95 和第 10 百分位數，相差 8.8 dB](images/start-levels-dark.webp#only-dark)
 
 `noisy.wav` 就是報告量的那個檔案：每個音節的峰值大約 -14.5 dBFS，停頓則在雜訊底
 -23.6 dBFS。`denoised.wav` 是上面那個呼叫的輸出，它的雜訊底低了 19 dB，在 -42.8 dBFS，
-也就是後面兩段停頓所在的位置。音節峰值只掉了大約 1 dB，因為在峰值處，電平主要是語音
-本身。語音底下的雜訊也降了，只是降得比較少：在兩段有聲片段上，與 `clean.wav` 的差異
+也就是後面兩段停頓所在的位置。音節峰值只掉了大約 1 dB，因為在峰值處，準位主要是語音
+本身。語音底下的雜訊也降了，只是降得比較少：在兩段有聲段落上，與 `clean.wav` 的差異
 從 -23.5 降到 -31.4 dBFS。這個方法只能拿掉它分辨得出不是語音的部分。
 
 最前面半秒留下的雜訊比後面的停頓多大約 10 dB。MCRA 是邊處理邊學雜訊，在那裡還在學。
@@ -215,8 +215,8 @@ segsnr   -3.56 ->   1.01 dB
 不需要額外安裝，其他的需要上面的選用套件組。不給清單時，它會跑這台電腦上能跑的所有指標。
 
 這些數字需要乾淨訊號，自己混出來的音檔有，真實的錄音永遠沒有；那正是 `audio_report`
-的用途。它們也是拿第 *i* 個樣本和第 *i* 個樣本比，所以可能有位移的一對，要先用
-[`align`][kudio.core.align.align] 對齊。位移 16 個樣本（1 ms）時，降噪後的片段 SI-SDR
+的用途。它們也是拿第 *i* 個樣本和第 *i* 個樣本比，所以可能錯開的一對，要先用
+[`align`][kudio.core.align.align] 對齊。錯開 16 個樣本（1 ms）時，降噪後的片段 SI-SDR
 會是 -9.43 dB，而不是 11.04。其餘內容在[品質評估](guide/metrics.md)。
 
 ### 存檔 {#save}
