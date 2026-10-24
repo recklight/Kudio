@@ -1,4 +1,4 @@
 # -*- coding: utf-8 -*-
 """Single source of truth for the package version."""
-__version__ = "3.9.0"
+__version__ = "3.9.1"
 __author__ = "RL"
