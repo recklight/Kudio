@@ -271,17 +271,16 @@ seed keeps the one it drew in `.seed`, so that corpus can still be rebuilt.
 
 ## Related projects
 
-Two more of my projects are built on kudio. Neither is on PyPI; each installs
-from a clone of its GitHub repository.
+Two more of my projects are built on kudio, and both are on PyPI.
 
-[KudioStudio](https://github.com/recklight/KudioStudio)
-:   A desktop workbench over kudio, written with PySide6. Open a clip, look at
-    it, edit it, denoise it, measure it and build a dataset from it without
-    writing a script first. Every control maps to one kudio function, and the
-    caption under each panel shows the exact call it will make, so whatever
-    you settle on there carries straight over to code.
+[KudioStudio](https://github.com/recklight/KudioStudio) (`pip install kudiostudio`)
+:   A desktop workbench over kudio, in a window drawn by the system's own web
+    view. Open a clip, look at it, edit it, denoise it, measure it and build a
+    dataset from it without writing a script first. Every control maps to one
+    kudio function, and the caption under each panel shows the exact call it
+    will make, so whatever you settle on there carries straight over to code.
 
-[KudioEnhance](https://github.com/recklight/KudioEnhance) (`kudio-enhance`)
+[KudioEnhance](https://github.com/recklight/KudioEnhance) (`pip install kudioenhance`)
 :   Trains learned denoisers on log-power spectrograms with PyTorch: a dense
     denoising autoencoder, a bidirectional LSTM, a dilated convolutional
     autoencoder, a causal convolutional recurrent network and a 2-D U-Net. Its

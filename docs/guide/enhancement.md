@@ -314,7 +314,7 @@ noise handling, so it runs once even when `noises=` sweeps the built-in ones.
 an object. A model trained with
 [KudioEnhance](https://github.com/recklight/KudioEnhance) goes in the same way,
 as `("model", Enhancer.load(run_dir).enhance)` with `Enhancer` from
-`kudio_enhance.inference`. The reference metrics compare the samples both
+`kudioenhance.inference`. The reference metrics compare the samples both
 signals have, so an output that comes back a little short is fine, and a
 delayed one is not: line it up first, as [Measuring quality](metrics.md) shows.
 

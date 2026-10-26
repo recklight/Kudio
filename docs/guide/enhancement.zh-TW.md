@@ -297,7 +297,7 @@ lowpassed + own      SI-SDR +13.08 dB
 [`CustomEnhancer`][kudio.enhance.spectral.CustomEnhancer] 是同樣的項目，
 只是寫成物件。用 [KudioEnhance](https://github.com/recklight/KudioEnhance)
 訓練的模型也用同樣的方式放進來，寫成 `("model", Enhancer.load(run_dir).enhance)`，
-其中 `Enhancer` 來自 `kudio_enhance.inference`。參考型指標比較的是兩個訊號都有的樣本，
+其中 `Enhancer` 來自 `kudioenhance.inference`。參考型指標比較的是兩個訊號都有的樣本，
 所以輸出稍微短一點沒問題，有延遲的就不行：請先對齊，做法在[品質評估](metrics.md)。
 
 ## 幫不上忙的地方 {#where-it-does-not-help}

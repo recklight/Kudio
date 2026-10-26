@@ -236,15 +236,14 @@ pip install "kudio[eval,viz]"    # extras go in brackets, by name
 
 ## 相關專案 {#related-projects}
 
-我另外還有兩個專案是建立在 kudio 之上的。兩個都不在 PyPI 上，要從 GitHub 儲存庫
-clone 下來安裝。
+我另外還有兩個專案是建立在 kudio 之上的，兩個都在 PyPI 上。
 
-[KudioStudio](https://github.com/recklight/KudioStudio)
-:   以 PySide6 寫成、建立在 kudio 上的桌面工作台。打開一個片段，看它、編輯它、降噪、
-    量測，並用它建立資料集，都不必先寫腳本。每個控制項都對應一個 kudio 函式，
+[KudioStudio](https://github.com/recklight/KudioStudio)（`pip install kudiostudio`）
+:   建立在 kudio 上的桌面工作台，視窗由系統本身的網頁元件畫出。打開一個片段，看它、編輯它、
+    降噪、量測，並用它建立資料集，都不必先寫腳本。每個控制項都對應一個 kudio 函式，
     每個面板下方的說明會顯示它實際會呼叫的那一行，所以在那裡調好的設定可以直接搬到程式碼裡。
 
-[KudioEnhance](https://github.com/recklight/KudioEnhance)（`kudio-enhance`）
+[KudioEnhance](https://github.com/recklight/KudioEnhance)（`pip install kudioenhance`）
 :   用 PyTorch 在對數功率頻譜圖上訓練降噪模型：全連接降噪自編碼器、雙向 LSTM、
     擴張摺積自編碼器、因果的摺積遞迴網路，以及二維 U-Net。它的訓練資料由
     [`Synthesizer`][kudio.core.synth.Synthesizer] 混成，訓練好的模型可以放進
