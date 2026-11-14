@@ -24,12 +24,15 @@ What separates them in practice:
               the cost of muffling the speech at low SNR.
 `mmse_stsa`   Ephraim & Malah (1984): MMSE estimate of the spectral
               *amplitude*, assuming Gaussian coefficients. Keeps more speech
-              than Wiener at the same suppression.
-`logmmse`     Ephraim & Malah (1985): MMSE in the *log* domain, which is
-              closer to how loudness is perceived. The usual default.
+              than Wiener: for the same xi and gamma its gain is never lower,
+              so it also leaves a little more noise.
+`logmmse`     Ephraim & Malah (1985): MMSE of the *log* amplitude, an error
+              measure they found more suitable for speech than the
+              amplitude's own. Its gain is always below MMSE-STSA's, so it
+              leaves less residual noise. The usual default.
 `omlsa`       `logmmse` weighted by a speech-presence probability
-              (Cohen 2001). Suppresses hard where there is probably no
-              speech at all, gently where there might be.
+              (Cohen & Berdugo 2001). Suppresses hard where there is
+              probably no speech at all, gently where there might be.
 `spectral_gate` A threshold mask rather than a statistical estimator: bins
               below (noise mean + n sigma) are attenuated. Not principled,
               very predictable, and good on steady broadband noise.
@@ -140,8 +143,10 @@ _GAIN_FLOOR = Param('gain_floor_db', 'gain floor', -25.0, -80.0, 0.0, 1.0, 1, " 
                          "worse than a quiet noise bed: total suppression is "
                          "what makes the residue audible as warbling.")
 _OVERSUB = Param('over_subtraction', 'over-subtraction', 2.0, 1.0, 8.0, 0.1, 1,
-                 help="Subtract this multiple of the noise estimate. Above ~3 "
-                      "the speech starts going with it.")
+                 help="Subtract this multiple of the noise estimate. Higher "
+                      "takes more of the noise and, past a point, the speech "
+                      "with it; Berouti et al. used 3 to 6 at 0 dB SNR, with "
+                      "the floor tied to the noise power.")
 _FLOOR = Param('spectral_floor', 'spectral floor', 0.002, 0.0, 0.2, 0.001, 3,
                help="What is left where the subtraction went negative, as a "
                     "fraction of the noisy spectrum.")
@@ -163,19 +168,22 @@ METHODS: Dict[str, Method] = {m.name: m for m in (
                   help="Linearly spaced. More bands track colored noise more "
                        "closely and are noisier to estimate."),
             _FLOOR, _GAIN_FLOOR),
-           "Kamath & Loizou 2002"),
+           "Kamath & Loizou 2002; factor rule Berouti et al. 1979"),
     Method('wiener', 'Wiener (decision-directed)',
            "Gain xi/(1+xi). Smooth, so far less musical noise than subtraction "
            "— it muffles the speech at low SNR instead.",
            (_ALPHA, _GAIN_FLOOR)),
     Method('mmse_stsa', 'MMSE-STSA',
            "MMSE estimate of the spectral amplitude under a Gaussian model. "
-           "Keeps more speech than Wiener at the same suppression.",
+           "Keeps more speech than Wiener: for the same SNRs its gain is "
+           "never lower, so it also leaves a little more noise.",
            (_ALPHA, _GAIN_FLOOR),
            "Ephraim & Malah 1984"),
     Method('logmmse', 'log-MMSE',
-           "MMSE in the log-spectral domain, which is closer to how loudness "
-           "is perceived. The usual default, and hard to beat without a model.",
+           "MMSE of the log amplitude, an error measure Ephraim and Malah found "
+           "more suitable for speech. Its gain is always below MMSE-STSA's, so "
+           "it leaves less residual noise. The usual default, and hard to beat "
+           "without a model.",
            (_ALPHA, _GAIN_FLOOR),
            "Ephraim & Malah 1985"),
     Method('omlsa', 'OM-LSA',
@@ -186,7 +194,7 @@ METHODS: Dict[str, Method] = {m.name: m for m in (
             Param('q', 'P(no speech)', 0.30, 0.01, 0.95, 0.05, 2,
                   help="A priori probability that a bin holds no speech. "
                        "Higher suppresses more and risks clipping onsets.")),
-           "Cohen 2001"),
+           "Cohen & Berdugo 2001"),
     Method('spectral_gate', 'Spectral gate',
            "A threshold mask, not a statistical estimator: attenuate every bin "
            "below (noise mean + n sigma), then smooth the mask so the edges do "
@@ -333,6 +341,10 @@ class _MinimumTracker(NoiseTracker):
         return np.min(np.stack(self._history), axis=0) * self.bias
 
 
+_TRACKERS = {'mcra': _MCRATracker, 'initial': _InitialTracker,
+             'minimum': _MinimumTracker}
+
+
 def make_noise_tracker(method: str = 'mcra', **kwargs) -> NoiseTracker:
     """A stateful tracker for *method*.
 
@@ -349,10 +361,26 @@ def make_noise_tracker(method: str = 'mcra', **kwargs) -> NoiseTracker:
             "'quantile' takes a low quantile over the whole file, so it cannot "
             "run on audio that has not finished arriving. Use 'mcra' (adaptive) "
             "or 'initial' (assumes the opening is room tone) for streaming.")
-    cls = {'mcra': _MCRATracker, 'initial': _InitialTracker,
-           'minimum': _MinimumTracker}[method]
+    cls = _TRACKERS[method]
     _check_noise_kwargs(method, kwargs, cls)
     return cls(**kwargs)
+
+
+def _check_noise(method: str, kwargs: dict) -> None:
+    """Everything :func:`estimate_noise_psd` refuses before it looks at the
+    audio: an unknown estimator, a key it does not take, a quantile outside
+    0 to 1. :func:`enhance_folder` calls it once, before the first file."""
+    if method not in NOISE_ESTIMATORS:
+        raise FeatureError(
+            f"unknown noise estimator {method!r}. "
+            f"Choose from {', '.join(sorted(NOISE_ESTIMATORS))}")
+    if method == 'quantile':
+        _check_noise_kwargs(method, kwargs)
+        q = float(kwargs.get('quantile', 0.15))
+        if not 0.0 < q < 1.0:
+            raise FeatureError(f"quantile must be between 0 and 1, got {q}")
+    else:
+        _check_noise_kwargs(method, kwargs, _TRACKERS[method])
 
 
 def _check_noise_kwargs(method: str, kwargs: dict, cls=None) -> None:
@@ -376,16 +404,10 @@ def estimate_noise_psd(power: np.ndarray, method: str = 'mcra',
     lever as the gain rule, because a gain rule can only be as good as the
     noise it is told about.
     """
-    if method not in NOISE_ESTIMATORS:
-        raise FeatureError(
-            f"unknown noise estimator {method!r}. "
-            f"Choose from {', '.join(sorted(NOISE_ESTIMATORS))}")
+    _check_noise(method, kwargs)
     power = np.maximum(np.asarray(power, dtype=np.float64), _EPS)
     if method == 'quantile':
-        _check_noise_kwargs(method, kwargs)
         q = float(kwargs.get('quantile', 0.15))
-        if not 0.0 < q < 1.0:
-            raise FeatureError(f"quantile must be between 0 and 1, got {q}")
         # Steady noise power in a bin is exponentially distributed, so its
         # q-th quantile is -ln(1 - q) times its mean: the 15th percentile sat
         # 7.9 dB under the noise it was meant to describe. Dividing that out
@@ -442,7 +464,8 @@ def _gain_wiener(xi, gamma):
 
 
 def _gain_mmse_stsa(xi, gamma):
-    """Ephraim & Malah 1984, eq. 7.
+    """Ephraim & Malah 1984, eqs. (7) and (14): the amplitude estimate of
+    (7) over R_k, with v from (8).
 
     ``G = (sqrt(pi)/2) * (sqrt(v)/gamma) * exp(-v/2) *
           [(1+v) I0(v/2) + v I1(v/2)]``
@@ -461,7 +484,7 @@ def _gain_mmse_stsa(xi, gamma):
 
 
 def _gain_logmmse(xi, gamma):
-    """Ephraim & Malah 1985: ``G = xi/(1+xi) * exp(0.5 * E1(v))``."""
+    """Ephraim & Malah 1985, eqs. (20)-(21): ``G = xi/(1+xi) * exp(0.5 * E1(v))``."""
     from scipy.special import exp1
     a = xi / (1.0 + xi)
     v = np.maximum(np.minimum(a * gamma, 700.0), _EPS)
@@ -469,7 +492,7 @@ def _gain_logmmse(xi, gamma):
 
 
 def _gain_omlsa_factory(q: float, g_min: float):
-    """log-MMSE weighted by speech presence (Cohen 2001).
+    """log-MMSE weighted by speech presence (Cohen & Berdugo 2001).
 
     ``p = 1 / (1 + q/(1-q) * (1+xi) * exp(-v))`` and
     ``G = G_LSA^p * G_min^(1-p)`` — a geometric mean, so a bin the detector is
@@ -500,6 +523,9 @@ def _band_alpha(snr_db: np.ndarray) -> np.ndarray:
 
     Suppress hard where there is nothing to lose and barely at all where the
     band is mostly speech: 4.75 below -5 dB, sliding to 1.0 above 20 dB.
+    That is Berouti, Schwartz and Makhoul's rule (Proc. ICASSP 1979, eq. 4 and
+    Fig. 2: 4 at 0 dB, 3/20 less per dB, no higher below -5 dB, 1 from 20 dB),
+    applied to each band's SNR rather than the frame's.
     """
     return np.clip(np.where(snr_db < -5.0, 4.75,
                             np.where(snr_db > 20.0, 1.0,
@@ -696,7 +722,7 @@ class CustomEnhancer:
     is the question people have, and answering it by running two tools and
     comparing two printouts is how it goes unanswered.
 
-    >>> from kudio_enhance.inference import Enhancer      # doctest: +SKIP
+    >>> from kudioenhance.inference import Enhancer       # doctest: +SKIP
     >>> model = Enhancer.load("runs/exp1")                # doctest: +SKIP
     >>> kudio.compare_enhancers(y, sr, ['logmmse', ('model', model.enhance)])
     """
@@ -805,13 +831,20 @@ def compare_enhancers(y: np.ndarray, sr: int,
     allows.
 
     A run that raises is reported with `error` set rather than taking the whole
-    comparison down — a comparison exists to find out which ones work.
+    comparison down — a comparison exists to find out which ones work. So is
+    one whose output the length check refuses against *reference*, a custom
+    enhancer that returns a third of the clip for instance: its row carries the
+    refusal, and the other runs are scored.
 
     :param common: passed to every run (`n_fft=`, `alpha=`, ...). Anything a
         given method does not accept is dropped for that method, so one call
         can hold the framing still across all of them.
     :raises FeatureError: on an unknown method or estimator, on passing
         ``noise=`` and ``noises=`` together, or on a clip with NaN or inf in it.
+    :raises ValueError: when *reference* and *y* differ in length by more
+        than :data:`~kudio.core.evaluator.MAX_LENGTH_MISMATCH` allows. That
+        pair is the baseline every `delta_snr_db` is taken from, so it stops
+        the comparison instead of failing one row.
     """
     entries = [_as_enhancer(m) for m in
                (methods if methods is not None else list(METHODS))]
@@ -882,20 +915,29 @@ def compare_enhancers(y: np.ndarray, sr: int,
 
 def _run_one(name, estimator, call, y, sr, reference, baseline, metrics,
              pesq_mode='auto', pesq_scale='lqo') -> EnhanceResult:
-    """Time one run and measure it, reporting a failure rather than raising."""
+    """Time one run and measure it, reporting a failure rather than raising.
+
+    The measuring is inside the try as well. An output the length check
+    refuses, say a custom enhancer that hands back a third of the clip, is that
+    run's failure; raised from here it ended the comparison and took every
+    other row with it.
+    """
     started = time.perf_counter()
+    elapsed = None
     try:
         out = call()
+        elapsed = time.perf_counter() - started
+        return _measure(name, estimator, np.asarray(out, dtype=np.float32), y,
+                        sr, elapsed, reference, baseline, metrics,
+                        pesq_mode, pesq_scale)
     except Exception as e:                                  # noqa: BLE001
         log.warning("%s + %s failed: %s", name, estimator, e)
         return EnhanceResult(
             method=name, noise=estimator, audio=np.zeros(0, dtype=np.float32),
-            seconds=time.perf_counter() - started, lufs=float('nan'),
-            noise_floor_db=float('nan'), error=f"{type(e).__name__}: {e}")
-    elapsed = time.perf_counter() - started
-    return _measure(name, estimator, np.asarray(out, dtype=np.float32), y, sr,
-                    elapsed, reference, baseline, metrics,
-                    pesq_mode, pesq_scale)
+            seconds=(time.perf_counter() - started if elapsed is None
+                     else elapsed),
+            lufs=float('nan'), noise_floor_db=float('nan'),
+            error=f"{type(e).__name__}: {e}")
 
 
 @dataclass(frozen=True)
@@ -948,23 +990,32 @@ def enhance_folder(src: Any, dst: PathLike,
     :param method: a name from :data:`METHODS`, or anything
         :class:`CustomEnhancer` accepts — a callable, or ``(name, callable)``.
         A trained model is the obvious second case.
-    :param n_fft: as in :func:`spectral_enhance`, like the three below. A
-        callable *method* ignores all four.
+    :param noise: as in :func:`spectral_enhance`, like the four below. A
+        callable *method* ignores all five.
+    :param n_fft: as in :func:`spectral_enhance`.
     :param hop_length: as in :func:`spectral_enhance`.
     :param window: as in :func:`spectral_enhance`.
     :param noise_kwargs: as in :func:`spectral_enhance`.
     :param report: also measure each file's noise floor before and after, and
         return them on the result -- worth it when the question is "did this
         help" rather than "run it".
+    :param on_error: ``'collect'`` (default) records a file that fails and
+        carries on; ``'raise'`` stops at the first one. A missing package
+        (:class:`~kudio.exceptions.DependencyError`; the named methods need
+        librosa) is raised either way: it would fail every file the same way.
     :param params: method parameters, defaulted from ``METHODS[method]``. A
         callable takes none — it was configured before it got here.
 
     :returns: an :class:`EnhanceFolderResult`.
+    :raises FeatureError: before the first file is read, for an unknown
+        method or noise estimator, a parameter or *noise_kwargs* key it does
+        not take, or a value outside its range. Met file by file, each of
+        these would fail every file the same way.
     """
     from kudio.core.io import WAVE_SUFFIX, check_file, check_input, \
         file_load, save_wave
     from kudio.core.report import audio_report
-    from kudio.exceptions import AudioIOError
+    from kudio.exceptions import AudioIOError, DependencyError
 
     entry = _as_enhancer(method)
     if on_error not in ('collect', 'raise'):
@@ -988,6 +1039,9 @@ def enhance_folder(src: Any, dst: PathLike,
         settings = METHODS[entry].defaults()
         settings.update(params)
         _check_ranges(entry, settings)
+        # the estimator's name and keys too: noise='mcar' came back as
+        # "0/2 written, 2 failed", the same refusal once per file
+        _check_noise(noise, noise_kwargs or {})
 
         def run(y, rate):
             return spectral_enhance(y, rate, entry, noise=noise, n_fft=n_fft,
@@ -1020,6 +1074,8 @@ def enhance_folder(src: Any, dst: PathLike,
             outputs.append(target)
             if report:
                 floors.append((target, before, after))
+        except DependencyError:
+            raise
         except Exception as e:                              # noqa: BLE001
             if on_error == 'raise':
                 raise
@@ -1071,18 +1127,30 @@ def _measure(name, estimator, out, noisy, sr, elapsed, reference, baseline,
 def _reference_metrics(reference, degraded, sr, metrics,
                        pesq_mode='auto', pesq_scale='lqo'):
     """``(snr, si_sdr, pesq, stoi)``, under the same length check as every
-    other metric: a mismatch warns, and past MAX_LENGTH_MISMATCH it raises."""
-    from kudio.core.evaluator import _align, si_sdr as _si_sdr, snr as _snr
+    other metric: a mismatch warns, and past MAX_LENGTH_MISMATCH it raises.
+    PESQ gets the two whole, since it finds the delay between them itself."""
+    from kudio.core._policy import checked
+    from kudio.core.evaluator import _cut, _sides, si_sdr as _si_sdr, snr as _snr
 
     ref = np.asarray(as_float(reference), dtype=np.float32).squeeze()
     deg = np.asarray(as_float(degraded), dtype=np.float32).squeeze()
     if min(len(ref), len(deg)) == 0:
         return (None, None, None, None)
-    ref, deg = _align(ref, deg, names=('the reference', 'the clip'))
+    has_pesq = has_stoi = False
+    if metrics:
+        from kudio.core.evaluator import check_metrics_install
+        has_pesq, has_stoi, _ = check_metrics_install()
+        has_pesq = has_pesq and int(sr) in (8000, 16000)
+    whole = _sides(ref, deg, names=('the reference', 'the clip'))
+    ref, deg = _cut(*whole, names=('the reference', 'the clip'),
+                    whole_for='PESQ' if has_pesq else None)
 
     try:
-        snr = float(_snr(ref, deg))
-        si_sdr = float(_si_sdr(ref, deg))
+        # the pair has been called faint above if it is; not again by snr
+        # and si_sdr
+        with checked():
+            snr = float(_snr(ref, deg))
+            si_sdr = float(_si_sdr(ref, deg))
     except Exception:                                       # noqa: BLE001
         snr = si_sdr = None
     pesq = stoi = None
@@ -1090,11 +1158,12 @@ def _reference_metrics(reference, degraded, sr, metrics,
         # PESQ and STOI only: eval_metrics would run a full BSS-eval SDR on
         # every run as well, for a number nothing here reports. Each in its own
         # try, so a PESQ that finds no utterance does not take STOI with it.
-        from kudio.core.evaluator import _compute, check_metrics_install
-        has_pesq, has_stoi, _ = check_metrics_install()
-        if has_pesq and int(sr) in (8000, 16000):
+        from kudio.core.evaluator import _compute
+        if has_pesq:
             try:
-                pesq = _compute('pesq', ref, deg, int(sr), pesq_mode, pesq_scale)
+                with checked():
+                    pesq = _compute('pesq', ref, deg, int(sr), pesq_mode,
+                                    pesq_scale, whole)
             except Exception as e:                          # noqa: BLE001
                 log.debug("PESQ could not be computed: %s", e)
         if has_stoi:

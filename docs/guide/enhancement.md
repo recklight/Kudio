@@ -96,7 +96,10 @@ $\hat S(k,l-1)$ is the previous frame's speech estimate. At $\alpha = 0.98$ the
 estimate leans almost entirely on it, which keeps musical noise down and makes
 these four slow to open up at a speech onset. $\gamma$ is clamped at 40 dB,
 since one loud frame would otherwise drag the estimate somewhere it takes
-seconds to leave, and $\xi$ is floored at −25 dB. `specsub`, `multiband` and
+seconds to leave, and $\xi$ is floored at −25 dB. Ephraim and Malah's
+eq. (51) divides the first term by the previous frame's noise power,
+$\lambda_d(k,l-1)$. Their noise estimate was fixed; mine moves from frame to
+frame, and I divide by the current one. `specsub`, `multiband` and
 `spectral_gate` go from the noise estimate straight to a gain.
 
 I keep the estimator and the gain rule apart so one can be held still while
@@ -109,12 +112,12 @@ Which matters more depends on the recording, which is why
 
 | Method | What it does | Why you would pick it | Its own parameters |
 |---|---|---|---|
-| `specsub` | Subtracts a multiple of the noise power: Boll's method[^boll] with Berouti's over-subtraction and floor[^berouti] | Cheapest; the origin of "musical noise" | `over_subtraction` 2.0, `spectral_floor` 0.002 |
-| `multiband` | Subtraction with a factor per band: 4.75 below −5 dB band SNR, sliding to 1.0 above 20 dB[^kamath] | Colored noise is not equally loud everywhere | `bands` 6, `spectral_floor` 0.002 |
+| `specsub` | Subtracts a fixed multiple of the noise power and keeps a floor under what is left: Boll's spectral subtraction[^boll], done on power, with Berouti's over-subtraction.[^berouti] Berouti sets the factor from each frame's SNR and the floor from the noise power; here the factor is fixed and the floor is a share of the noisy power | Cheapest; the origin of "musical noise" | `over_subtraction` 2.0, `spectral_floor` 0.002 |
+| `multiband` | Subtraction with a factor per band, from that band's SNR: 4.75 below −5 dB, sliding to 1.0 above 20 dB. The rule is Berouti's eq. (4),[^berouti] applied band by band; splitting the subtraction into bands is Kamath and Loizou's idea[^kamath] | Colored noise is not equally loud everywhere | `bands` 6, `spectral_floor` 0.002 |
 | `wiener` | Gain $\xi/(1+\xi)$ | Smooth, so little musical noise; muffles at low SNR | `alpha` 0.98 |
 | `mmse_stsa` | MMSE estimate of the amplitude[^em84] | Keeps more speech than Wiener | `alpha` 0.98 |
-| `logmmse` | MMSE in the log-amplitude domain[^em85] | The default; with MCRA it came within 0.05 dB of the best rule on this clip | `alpha` 0.98 |
-| `omlsa` | log-MMSE weighted by a speech-presence probability[^omlsa] | Takes bins it judges speech-free down to the gain floor, so the pauses here come out about 3 dB quieter than log-MMSE's; `q` sets how readily a bin counts as empty | `alpha` 0.98, `q` 0.30 |
+| `logmmse` | MMSE in the log-amplitude domain[^em85] | The default; with MCRA it came 0.05 dB behind the best rule on this clip | `alpha` 0.98 |
+| `omlsa` | log-MMSE weighted by a speech-presence probability[^omlsa] | Takes bins it judges speech-free down to the gain floor, so the pauses here come out about 2.6 dB quieter than log-MMSE's; `q` sets how readily a bin counts as empty | `alpha` 0.98, `q` 0.30 |
 | `spectral_gate` | Keeps bins more than `n_std_thresh` times the noise estimate's spread over time (in dB) above it, through a smoothed mask | A plain threshold, as in noisereduce. On this page's white noise it came last under every estimator and turned the speech down 5 dB along with the noise | `n_std_thresh` 1.5, `prop_decrease` 1.0, `freq_smooth_hz` 500, `time_smooth_ms` 50 |
 
 A noise estimate that holds still has next to no spread over time, `quantile`
@@ -240,10 +243,11 @@ Each row is an [`EnhanceResult`][kudio.enhance.spectral.EnhanceResult] with
 the time, noise floor and loudness. With `reference=` it also has SNR, SI-SDR
 and `delta_snr_db`, and with `metrics=True`, the default, PESQ and STOI from
 `kudio[pesq]` and `kudio[eval]` where installed (PESQ only at 8 and 16 kHz).
-They are most of the time a comparison takes: on my machine the 28 runs above
-took 2.0 s with STOI and 1.0 s without. A run that raises comes back as
-a row with `error` set, its floor and loudness NaN and its scores `None`, so
-filter those out before sorting, as above. The clock starts after a warm-up run, so the first method
+PESQ is most of the time a comparison takes: on my machine the 28 runs above
+took 4.4 s with PESQ and STOI, 1.3 s with STOI alone and 1.0 s with neither. A run that raises, or whose
+output cannot be scored against the reference, comes back as a row with
+`error` set, its floor and loudness NaN and its scores `None`, so filter those
+out before sorting, as above. The clock starts after a warm-up run, so the first method
 is not charged for librosa's JIT compilation.
 
 `delta_snr_db` is the output's SNR minus the untouched input's, both against
@@ -315,8 +319,13 @@ an object. A model trained with
 [KudioEnhance](https://github.com/recklight/KudioEnhance) goes in the same way,
 as `("model", Enhancer.load(run_dir).enhance)` with `Enhancer` from
 `kudioenhance.inference`. The reference metrics compare the samples both
-signals have, so an output that comes back a little short is fine, and a
-delayed one is not: line it up first, as [Measuring quality](metrics.md) shows.
+signals have, so an output that comes back a little short is scored over
+those, with a warning, while a delayed one has to be lined up first, as
+[Measuring quality](metrics.md) shows. One less than half the reference's
+length is past
+[`MAX_LENGTH_MISMATCH`][kudio.core.evaluator.MAX_LENGTH_MISMATCH]: its row
+carries the length check's `ValueError` as `error`, and the other runs are
+scored as usual.
 
 ## Where it does not help
 
@@ -484,9 +493,12 @@ enhanced/day2/take1.wav: floor -34.4 -> -53.3 dBFS
 
 The result is an [`EnhanceFolderResult`][kudio.enhance.spectral.EnhanceFolderResult]:
 a [`ConvertResult`][kudio.core.io.ConvertResult], false in an `if` when
-anything failed, plus the `floors` that `report=True` measures. Parameters are
-checked once, before the first file, so a typo is one error and not one
-failure per file. `noise=`, `n_fft=`, `hop_length=`, `window=` and
+anything failed, plus the `floors` that `report=True` measures. The method's
+parameters are checked once, before the first file, so a typo in one is one
+error and not one failure per file. `noise=` and `noise_kwargs=` are checked
+the same way: `noise="mcar"` is a `FeatureError` that lists the four
+estimators, raised before any file is read.
+`noise=`, `n_fft=`, `hop_length=`, `window=` and
 `noise_kwargs=` go to [`spectral_enhance`][kudio.enhance.spectral.spectral_enhance]
 as they would in a single call, and the method can also be anything
 `compare_enhancers` accepts, a trained model included. A list or a `.txt` list
@@ -500,10 +512,10 @@ run into the same folder keeps what is there and writes the new
 ## Two fixed recipes
 
 [`trad_enhance`][kudio.enhance.traditional.trad_enhance] is one fixed recipe
-from Loizou's *Speech Enhancement: Theory and Practice*: 512-sample Hamming
-frames at 50 % overlap, an MCRA noise estimate, power spectral subtraction
-with an over-subtraction factor set from each frame's SNR, then a Wiener-style
-gain. There is nothing to tune or sweep, and it does well on this clip:
+put together from methods in Loizou's *Speech Enhancement: Theory and
+Practice* (2nd ed.): 512-sample Hamming frames at 50 % overlap, an MCRA noise
+estimate (Sec. 9.4.3.2), power spectral subtraction with an over-subtraction
+factor set from each frame's SNR (Sec. 5.4), then a Wiener-style gain. There is nothing to tune or sweep, and it does well on this clip:
 
 ```python
 out = kudio.trad_enhance(noisy, sr)
@@ -547,10 +559,10 @@ kudio compare in.wav --reference clean.wav --noises all   # the full grid
 
 [Command line](../cli.md) lists every option.
 
-[^boll]: S. F. Boll, "Suppression of acoustic noise in speech using spectral subtraction", IEEE Trans. Acoust., Speech, Signal Process. 27(2), 1979.
-[^berouti]: M. Berouti, R. Schwartz and J. Makhoul, "Enhancement of speech corrupted by acoustic noise", ICASSP 1979.
-[^kamath]: S. Kamath and P. Loizou, "A multi-band spectral subtraction method for enhancing speech corrupted by colored noise", ICASSP 2002.
-[^em84]: Y. Ephraim and D. Malah, "Speech enhancement using a minimum mean-square error short-time spectral amplitude estimator", IEEE Trans. Acoust., Speech, Signal Process. 32(6), 1984.
-[^em85]: Y. Ephraim and D. Malah, "Speech enhancement using a minimum mean-square error log-spectral amplitude estimator", IEEE Trans. Acoust., Speech, Signal Process. 33(2), 1985.
-[^omlsa]: I. Cohen and B. Berdugo, "Speech enhancement for non-stationary noise environments", Signal Processing 81(11), 2001.
-[^mcra]: I. Cohen and B. Berdugo, "Noise estimation by minima controlled recursive averaging for robust speech enhancement", IEEE Signal Process. Lett. 9(1), 2002.
+[^boll]: S. F. Boll, "Suppression of acoustic noise in speech using spectral subtraction", IEEE Trans. Acoust., Speech, Signal Process. 27(2), pp. 113-120, 1979, doi:10.1109/TASSP.1979.1163209.
+[^berouti]: M. Berouti, R. Schwartz and J. Makhoul, "Enhancement of speech corrupted by acoustic noise", Proc. ICASSP 1979, vol. 4, pp. 208-211, doi:10.1109/ICASSP.1979.1170788.
+[^kamath]: S. Kamath and P. Loizou, "A multi-band spectral subtraction method for enhancing speech corrupted by colored noise", Proc. ICASSP 2002, p. IV-4164, doi:10.1109/ICASSP.2002.5745591. The proceedings print the abstract only.
+[^em84]: Y. Ephraim and D. Malah, "Speech enhancement using a minimum mean-square error short-time spectral amplitude estimator", IEEE Trans. Acoust., Speech, Signal Process. 32(6), pp. 1109-1121, 1984, doi:10.1109/TASSP.1984.1164453.
+[^em85]: Y. Ephraim and D. Malah, "Speech enhancement using a minimum mean-square error log-spectral amplitude estimator", IEEE Trans. Acoust., Speech, Signal Process. 33(2), pp. 443-445, 1985, doi:10.1109/TASSP.1985.1164550.
+[^omlsa]: I. Cohen and B. Berdugo, "Speech enhancement for non-stationary noise environments", Signal Processing 81(11), pp. 2403-2418, 2001, doi:10.1016/S0165-1684(01)00128-1.
+[^mcra]: I. Cohen and B. Berdugo, "Noise estimation by minima controlled recursive averaging for robust speech enhancement", IEEE Signal Process. Lett. 9(1), pp. 12-15, 2002, doi:10.1109/97.988717.

@@ -44,8 +44,8 @@ def test_segmental_snr_bounds():
 
 
 def test_metrics_align_lengths():
-    a = np.ones(1000)
-    b = np.ones(800)
+    a = np.random.default_rng(1).standard_normal(1000)
+    b = a[:800] + 0.1
     # should not raise despite length mismatch -- 20% short is framing slop,
     # not a different recording. It is still said out loud, so catch the
     # warning here rather than leaving it in the suite's output: one nobody

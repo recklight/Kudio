@@ -27,11 +27,11 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
-import librosa
 import numpy as np
-from tqdm import tqdm
 
+from kudio import _optional
 from kudio._deprecation import alias
+from kudio._progress import tqdm
 from kudio._samples import as_float
 from kudio.core.io import PathLike, file_load, save_wave
 from kudio.exceptions import FeatureError
@@ -107,6 +107,7 @@ def waveform_to_spectrogram(y: np.ndarray,
     y = _mono(y, "waveform_to_spectrogram()")
     if desired_length and desired_length < len(y):
         y = y[:desired_length]
+    librosa = _optional.librosa()
     D = librosa.stft(y, n_fft=n_fft, hop_length=hop_length,
                      win_length=win_length, window=window)
     D = D + _EPS
@@ -148,6 +149,7 @@ def spectrogram_to_waveform(y: np.ndarray, enhanced_spec: np.ndarray,
     """
     if sequence:
         enhanced_spec = enhanced_spec.squeeze()
+    librosa = _optional.librosa()
     D = librosa.stft(np.asarray(y, dtype=np.float32), hop_length=hop_length,
                      n_fft=n_fft, win_length=win_length, window=window)
     D = D + _EPS
@@ -195,7 +197,7 @@ def save_spectrogram_as_wave(wave_out_dir: PathLike, noisy_file: PathLike,
                              window: str = 'hamming') -> None:
     """Reconstruct a waveform from *enhanced_spec* (phase from *noisy_file*)
     and write it to *wave_out_dir* as 16-bit PCM, clipped at full scale."""
-    y, rate = librosa.load(str(noisy_file), sr=None)
+    y, rate = _optional.librosa().load(str(noisy_file), sr=None)
     y_out = spectrogram_to_waveform(y, enhanced_spec, squeeze, hop_length,
                                     n_fft, win_length, window)
     save_wave(wave_out_dir, y_out, rate)
@@ -204,6 +206,7 @@ def save_spectrogram_as_wave(wave_out_dir: PathLike, noisy_file: PathLike,
 def mfcc(y: np.ndarray, sr: int, n_mfcc: int = 40) -> np.ndarray:
     """Waveform -> MFCC, shaped ``(1, n_frames, n_mfcc)``. *y* is mono."""
     y = _mono(y, "mfcc()")
+    librosa = _optional.librosa()
     return librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc).T.reshape(1, -1, n_mfcc)
 
 
@@ -216,6 +219,7 @@ def mfcc_from_files(wav_list: Sequence, n_mfcc: int = 40,
     :param desired_length: cut each file to this many **seconds** (the
         spectrogram functions' ``desired_length`` counts samples).
     """
+    librosa = _optional.librosa()
     mfcc_list = []
     for wav_dir in tqdm(wav_list, desc="[kudio] MFCC"):
         y, sr = file_load(wav_dir)
@@ -273,6 +277,7 @@ def melspectrogram(source: Union[PathLike, np.ndarray], n_mels: int = 64,
         if sr is None:
             raise FeatureError("melspectrogram() needs sr= when given a waveform")
         y = np.asarray(_mono(source, "melspectrogram()"), dtype=np.float32)
+    librosa = _optional.librosa()
     mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft,
                                          hop_length=hop_length, n_mels=n_mels,
                                          power=power)
@@ -300,6 +305,7 @@ def denoise_wav2spec(waveform: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     if not peak > 0:
         raise FeatureError("denoise_wav2spec() got a silent clip; there is no "
                            "peak to normalise by")
+    librosa = _optional.librosa()
     D = librosa.stft(waveform / peak,
                      n_fft=512, hop_length=256, win_length=512, window='hann')
     D += np.finfo(float).eps
@@ -314,6 +320,7 @@ def denoise_wav2spec(waveform: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 def denoise_spec2wav(spec: np.ndarray, phase: np.ndarray) -> np.ndarray:
     """Inverse of :func:`denoise_wav2spec`; output peak-normalized."""
     spec = np.squeeze(spec).T
+    librosa = _optional.librosa()
     pred_wav = librosa.istft(np.multiply(spec, np.exp(1j * phase)),
                              hop_length=256, win_length=512, window='hann')
     peak = float(np.max(np.abs(pred_wav))) if pred_wav.size else 0.0
@@ -548,7 +555,7 @@ class Standardizer:
 def wave_slicing(y: np.ndarray, frame_length: int = 2048,
                  hop_length: int = 512, is_reshape: bool = True) -> np.ndarray:
     """Slice a waveform into overlapping frames (flattened if *is_reshape*)."""
-    frame_stack = librosa.util.frame(y, frame_length=frame_length,
+    frame_stack = _optional.librosa().util.frame(y, frame_length=frame_length,
                                      hop_length=hop_length)
     if is_reshape:
         frame_stack = frame_stack.T.reshape(-1)

@@ -183,8 +183,8 @@ for this reason ([Building a noisy dataset](synthesis.md)).
 I clip every integer subtype in `save_wave`, and round 16-bit output myself,
 instead of leaving either to libsndfile. With its clipping off, libsndfile
 wraps 1.2 round to -0.8, and a tone a little too hot turns into a train of
-clicks (the dashed line below); soundfile 0.14 switches clipping on, but I
-would rather not depend on the release. With clipping on, the conversion
+clicks (the dashed line below); soundfile 0.13.1 and 0.14 switch clipping on,
+but I would rather not depend on the release. With clipping on, the conversion
 floors: through `soundfile.write`, 20,000 uniform random samples came back
 0.494 of a 16-bit step low on average, with errors up to a full step; through
 `save_wave` the mean error is 0.000 and none is past half a step. Every other

@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from kudio import _optional
 from kudio._samples import as_float
 from kudio.exceptions import FeatureError
 
@@ -116,7 +117,7 @@ class SpectrogramStream:
 
         self._mel_fb = None
         if self.n_mels:
-            import librosa
+            librosa = _optional.librosa()
             self._mel_fb = np.asarray(librosa.filters.mel(
                 sr=self.sr, n_fft=self.n_fft, n_mels=self.n_mels,
                 fmin=self.fmin, fmax=self.fmax), dtype=np.float64)

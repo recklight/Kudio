@@ -269,7 +269,7 @@ background = np.median(spec[~speech], axis=0)  # per bin, over what vad turned d
 
 ## 用 f0 追蹤音高 {#pitch-with-f0}
 
-[`f0`][kudio.core.pitch.f0] 透過 librosa 執行 pYIN（Mauch & Dixon 2014），
+[`f0`][kudio.core.pitch.f0] 透過 librosa 執行 pYIN（Mauch & Dixon 2014）[^pyin]，
 回傳一個 [`PitchTrack`][kudio.core.pitch.PitchTrack]。它比 `vad` 花的時間多得多：
 在我的電腦上，一分鐘 16 kHz 的音訊，`f0` 要 1.3 到 2.6 秒，`vad` 只要 0.04 到 0.07 秒，
 所以如果只是想知道檔案裡到底有沒有人聲，
@@ -402,3 +402,5 @@ kudio.save_labels("fan.voiced.txt", kudio.f0(y, sr).to_labels())
 
 `kudio pitch fan.wav --segments --labels fan.voiced.txt` 一步完成音高的部分：
 印出摘要行和有聲區段，寫出標籤軌，完全沒有有聲的音框時以 1 結束；見[命令列](../cli.md)。
+
+[^pyin]: M. Mauch and S. Dixon, "pYIN: A fundamental frequency estimator using probabilistic threshold distributions", Proc. ICASSP 2014, pp. 659-663, doi:10.1109/ICASSP.2014.6853678.

@@ -613,6 +613,20 @@ def test_a_missing_file_is_one_line_not_a_traceback(tmp_path, capsys):
     assert err.startswith("kudio info:") and "Traceback" not in err
 
 
+def test_a_refusal_from_librosa_is_one_line(tmp_path, capsys, monkeypatch):
+    """main() finds librosa's error class among the imported modules when
+    something is raised, rather than importing librosa before every command."""
+    librosa = pytest.importorskip("librosa")
+    import kudio.cli
+
+    def refuse(args):
+        raise librosa.util.exceptions.ParameterError("frame_length is too short")
+
+    monkeypatch.setattr(kudio.cli, "_run", refuse)
+    assert main(["pitch", str(tmp_path / "a.wav")]) == 2
+    assert capsys.readouterr().err == "kudio pitch: frame_length is too short\n"
+
+
 def test_loudness_of_a_stereo_file_keeps_its_channels(tmp_path, capsys):
     """Measured on the mono mix, two identical channels read 3 LU low."""
     import kudio

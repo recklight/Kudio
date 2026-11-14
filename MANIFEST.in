@@ -10,6 +10,7 @@ graft tests
 
 # Worth reading next to the code, and not picked up by default.
 include CHANGELOG.md
+include CITATION.cff
 
 # Compiled leftovers, which `graft tests` picks up from a tree the suite has
 # been run in. On a clean tree there is nothing to drop and the build says so

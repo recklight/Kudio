@@ -25,11 +25,27 @@ audio while the take runs. Most of it is small functions over a numpy array
 and a sample rate, so they combine in an ordinary script with nothing to set
 up first.
 
+The [metrics](guide/metrics.md) are the ones speech papers report: PESQ,
+STOI, SI-SDR, Hu and Loizou's measures, MCD and the log-spectral distance for
+enhancement; NCM, CSII and SIIB for intelligibility; SI-SDRi, PIT and BSS Eval
+for separation; DNSMOS P.835 and P.808, SRMR and WADA-SNR with no reference;
+and error rates for [recognizers, speaker verifiers, diarization and pitch
+trackers](guide/task-metrics.md), calibration included. Each was compared with
+the implementation its published numbers come from, or with its definition
+worked out a second way, and [How the metrics are checked](validation.md) says
+with what and how closely they agree.
+[`score_dataset`][kudio.core.dataset_score.score_dataset], or `kudio score`
+from a shell, takes a whole test set to the table under a paper: means with
+bootstrap confidence intervals, a sign-flip test against a baseline, a
+[signature](guide/metrics.md#signing-a-result) that says how the numbers were
+computed, and the BibTeX of every work behind them, as
+[`cite`][kudio.core.registry.cite] writes it.
+
 I wrote it for preparing speech corpora and for training and judging
 denoisers, and it is as much for a folder of field recordings where you need
 to know which takes are usable before anybody listens to all of them. The
-common jobs are also `kudio` [subcommands](cli.md), fifteen of them, from
-`kudio report` to `kudio synth`. The ones that check something exit 1 when
+common jobs are also `kudio` [subcommands](cli.md), sixteen of them, from
+`kudio report` to `kudio score`. The ones that check something exit 1 when
 they find a problem, so they work as tests in a shell script.
 
 ## Install
@@ -213,13 +229,24 @@ kudio warns or refuses instead of handing one back:
   [`AudioEvaluate`][kudio.core.evaluator.AudioEvaluate] and the metric
   functions that need nothing installed warn when two signals differ in
   length, and raise a `ValueError` once more than half of the longer one would
-  go unmeasured ([`MAX_LENGTH_MISMATCH`][kudio.core.evaluator.MAX_LENGTH_MISMATCH]).
-  [`compare_enhancers`][kudio.enhance.spectral.compare_enhancers] and `pesq`
-  check a reference the same way, and every metric refuses a stereo pair
-  rather than score both channels as one signal.
+  go unmeasured ([`MAX_LENGTH_MISMATCH`][kudio.core.evaluator.MAX_LENGTH_MISMATCH]),
+  except where PESQ is all they are asked for.
+  [`compare_enhancers`][kudio.enhance.spectral.compare_enhancers] checks a
+  reference the same way, and every metric refuses a stereo pair rather than
+  score both channels as one signal. Of what `score` and `AudioEvaluate` run,
+  PESQ alone gets the two whole, as the ITU program reads two files, since it
+  finds the delay between them itself.
 - [`pesq`][kudio.core.evaluator.pesq] raises a `ValueError` for any rate but 8
-  and 16 kHz rather than resample behind your back, and for a combination the
-  standards do not define, such as a raw wideband score.
+  and 16 kHz rather than resample behind your back, and for a combination
+  PESQ cannot give, such as a raw wideband score.
+- Every metric refuses what it cannot read as a signal with a `ValueError`
+  that starts with its name: NaN or inf samples, int64 samples, on whose full
+  scale 16-bit audio sits 288 dB down, or a rate that is not one positive
+  number. Input that is well formed but leaves nothing to score, an empty pair
+  or a reference of digital silence, scores nan with one `UserWarning` saying
+  why, never a number made by a guard against dividing by zero.
+  [Input a metric cannot score](guide/metrics.md#input-a-metric-cannot-score)
+  has the whole rule.
 - [`save_wave`][kudio.core.io.save_wave] refuses a waveform holding NaN or inf
   with an [`AudioIOError`][kudio.exceptions.AudioIOError], in every format.
   Written as `FLOAT`, a NaN would reach every program that reads the file; in

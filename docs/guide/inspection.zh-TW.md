@@ -10,6 +10,8 @@
 | 這是什麼檔案？ | [`audio_info`][kudio.core.io.audio_info] | 核心安裝 |
 | 技術上有沒有問題？ | [`audio_report`][kudio.core.report.audio_report] | 核心安裝 |
 | 聽起來有多大聲，音量在哪裡變了？ | [`loudness`][kudio.core.loudness.loudness] 和它旁邊的函式 | 核心安裝 |
+| 殘響有多重？ | [`srmr`][kudio.core.srmr.srmr] | 核心安裝 |
+| 語音比它的雜訊高出多少？ | [`wada_snr`][kudio.core.wada.wada_snr] | 核心安裝 |
 | 聽的人會怎麼評價它？ | [`dnsmos`][kudio.core.dnsmos.dnsmos] | `kudio[dnsmos]`，以及 kudio 沒有附帶的模型權重 |
 
 這一頁的範例共用同一段合成錄音，所以在哪裡都能跑：一個 140 Hz、
@@ -101,7 +103,7 @@ peaks at +5.5 dBFS, past full scale — it will clip the moment it is written to
 
 這條連續樣本的規則有兩個盲點。峰值尖銳的人聲被推過滿刻度時，
 每個音高週期只會削掉一兩個樣本：把這段錄音正規化到 -14 LUFS 再寫成 `PCM_16`，
-會這樣失去 2618 個樣本，而對那個檔案產生的報告只會說它的峰值在 -0.0 dBFS。
+會這樣失去 2618 個樣本，而對那個檔案產生的報告只會說它的峰值在 0.0 dBFS、緊貼上限。
 削峰的錄音事後再調小，即使只調 1 dB，平台也會落到 0.999 以下，完全不會被回報。
 請在寫檔之前執行報告，趁超過 1.0 的樣本還看得到；第二種情況則要自己看波形。
 
@@ -229,8 +231,8 @@ no hiss    SNR~inf dB
 
 ### 一次一整個資料夾 {#a-folder-at-a-time}
 
-soundfile 打不開的檔案會引發 [`AudioIOError`][kudio.exceptions.AudioIOError]，
-空檔案則會引發 `FeatureError`。兩個都要攔，否則掃到第一個壞檔就會停下來：
+soundfile 打不開的檔案，`file_load` 會引發 [`AudioIOError`][kudio.exceptions.AudioIOError]；
+空檔案則是 `audio_report` 會引發 `FeatureError`。兩個都要攔，否則掃到第一個壞檔就會停下來：
 
 ```python
 from pathlib import Path
@@ -249,7 +251,7 @@ for path in sorted(Path("corpus").rglob("*.wav")):
 
 峰值幾乎說不出一個片段聽起來有多大聲，因為一個突兀的喀聲就能決定它
 （[編輯與效果](editing.md)示範了它造成的傷害）。
-[`loudness`][kudio.core.loudness.loudness] 依 ITU-R BS.1770-4 量測聽的人實際聽到的音量，
+[`loudness`][kudio.core.loudness.loudness] 依 ITU-R BS.1770-4[^bs1770] 量測聽的人實際聽到的音量，
 以 LUFS 為單位的閘控整合響度表示：
 
 1. 對訊號做 K 加權：一個大約 5 kHz 以上提升 +4 dB 的高頻棚架濾波器，
@@ -295,7 +297,7 @@ kudio 的測試會要求它在 8、16、44.1 和 48 kHz 都和那個獨立的響
 ### 正規化到目標響度 {#normalising-to-a-target}
 
 [`normalize_lufs`][kudio.core.loudness.normalize_lufs] 套用一個能把片段帶到目標響度的增益，
-預設是 -23 LUFS（EBU R 128），靜音則原樣回傳。除此之外它什麼都不做。
+預設是 -23 LUFS（EBU R 128[^ebu]），靜音則原樣回傳。除此之外它什麼都不做。
 被增益推過滿刻度的樣本，回傳時就是超過 1.0，不會被限制，
 因為限制它們會改變你剛剛要求的響度：
 
@@ -367,7 +369,7 @@ print(curve.spans_below(curve.max - 6, min_seconds=1.0))
 視窗預設是 `SHORT_TERM`（3 秒），反映的是一個段落有多大聲；
 [`MOMENTARY`][kudio.core.loudness.MOMENTARY]（400 ms）則跟著音節走。
 這是 EBU Tech 3341 的兩種響度計，其他以秒為單位的長度也都可以；
-它們一律每 100 ms 前進一步（[`CURVE_HOP`][kudio.core.loudness.CURVE_HOP]）。
+除非用 `hop=` 另外指定，否則都和響度計一樣每 100 ms 前進一步（[`CURVE_HOP`][kudio.core.loudness.CURVE_HOP]）。
 短期曲線會跨過停頓，但邊緣比較模糊，把從 8 到 13 秒的下降標在 9.1 到 11.9 秒。
 瞬時曲線則每個停頓都會往下掉：在它上面，`spans_below(max - 6)` 會找到那段下降，
 外加十個 0.3 到 0.4 秒的凹陷，而比凹陷長的 `min_seconds=0.5` 只會留下那段下降，
@@ -445,32 +447,119 @@ for target in (-23.0, -17.0):
 
 在 -17 LUFS 時，每個樣本都在滿刻度以下，不會發出任何警告，這段錄音卻仍然超過上限。
 
+## 殘響有多重：SRMR {#how-reverberant-srmr}
+
+房間會讓每個頻率在激發它的聲音停了之後繼續響，把音節之間的低谷填起來。
+[`srmr`][kudio.core.srmr.srmr] 在沒有乾淨錄音可比的情況下，量這件事發生了多少：
+它是 Falk、Zheng 和 Chan 提出的語音對殘響調變能量比。[^srmr] 它追蹤 23 個聽覺
+頻帶的包絡，把慢速調變的能量（4 到 18 Hz，音節就在這裡）除以房間加上去的那些
+較快調變的能量。越高表示越乾。kudio 一步一步照著作者的 MATLAB 工具箱做，在工具箱
+自己的測試錄音上，算出的四個比值和工具箱存的數字，相對差異都在 1e-12 以內
+（[指標的驗證方式](../validation.md#srmr)）。它只需要 numpy 和 scipy，而且只能在
+8 和 16 kHz 下跑。
+
+上面那段錄音沒有音節，只有一個每 1.4 s 開關一次的音，SRMR 在裡面找不到東西可量：
+乾聲是 1.29，在 0.3 到 1 s 的房間裡是 1.29 到 1.34。給它每秒四個音節，房間就分得
+出來了：
+
+```python
+syllables = 0.5 + 0.5 * np.sin(2 * np.pi * 4 * t)      # four a second
+hiss = 0.002 * np.random.default_rng(1).standard_normal(t.size)
+talk = 0.05 * voice * words * syllables + hiss
+print(f"dry         SRMR {kudio.srmr(talk, sr):.2f}")
+for rt60 in (0.3, 0.6, 1.0):
+    wet = kudio.apply_rir(talk, kudio.rir(sr, rt60=rt60, seed=0))
+    print(f"RT60 {rt60:.1f} s  SRMR {kudio.srmr(wet, sr):.2f}")
+```
+
+```text
+dry         SRMR 9.80
+RT60 0.3 s  SRMR 10.09
+RT60 0.6 s  SRMR 9.42
+RT60 1.0 s  SRMR 8.12
+```
+
+從 0.3 s 起，房間越大它越低，但乾聲的分數反而比 0.3 s 的房間低：在這個人聲上，
+SRMR 分不出乾聲和短殘響的房間。它是一個比值，不是意見分數，也沒有固定的範圍，
+所以我只拿一段錄音和同一段錄音在別處的版本比，例如換一個房間，或去殘響前後，
+從不拿兩個說話者互相比。雜訊也會讓它變低，因為雜訊底的起伏很快；`norm=True`
+是後來為雜訊和殘響同時存在而設計的版本。靜音怎麼切除、快速模式，以及 SRMRpy
+為什麼對同一個檔案給出不同的數字，都寫在 [API 參考](../reference/inspection.md)裡。
+
+## 雜訊有多大：WADA-SNR {#how-noisy-wada-snr}
+
+[`wada_snr`][kudio.core.wada.wada_snr] 只靠錄音本身，從樣本值有多集中在零附近，
+估計語音比它的雜訊高出多少。Kim 和 Stern[^wada] 把乾淨語音（停頓也算在內）視為
+gamma 分布，雜訊視為高斯分布。加進雜訊會讓樣本沒那麼集中，變化的程度只取決於
+SNR，kudio 就從這條曲線讀出 SNR；曲線是從模型算出來的，而不是照抄隨這個方法流傳的
+蒙地卡羅表。它只需要 numpy 和 scipy，取樣率只用來以秒為單位量片段的長度。
+
+```python
+speech = 0.05 * voice * words * syllables
+noise = np.random.default_rng(2).standard_normal(t.size)
+for snr_db in (0, 5, 10, 20, 30):
+    noisy = kudio.add_noise_snr(speech, noise, snr_db=snr_db, seed=0)
+    print(f"{snr_db:2d} dB  WADA-SNR {kudio.wada_snr(noisy, sr):6.2f}")
+```
+
+```text
+ 0 dB  WADA-SNR   0.55
+ 5 dB  WADA-SNR   5.14
+10 dB  WADA-SNR  10.57
+20 dB  WADA-SNR  25.48
+30 dB  WADA-SNR  73.34
+```
+
+在這裡，10 dB 以下的誤差都在 0.6 dB 以內。大約 20 dB 以上，決定結果的是語音本身
+的形狀，而不是雜訊，而這個人聲並不是模型裡的那種語音：20 dB 讀成 25.5，30 dB
+讀成 73。所以我用它來排序和篩選錄音，30 dB 以上一律當成「乾淨」，不當成一個數字來
+讀。雜訊也必須接近高斯分布；背景裡的另一個說話者，會被當成更多的語音。
+
+估計值來自停頓，因為只有在那裡雜訊是單獨存在的，所以停頓是數位靜音的片段，
+沒有東西可讀。單獨的 `speech` 會得到 NaN，並警告它有 40% 是數位靜音；做過噪音
+閘或剪輯過的錄音也一樣。短於 1 s 的片段，或落在曲線涵蓋的 -20 到 100 dB 之外的
+片段，也會得到 NaN 並附上警告，而不是給出範圍端點的那個數字。
+
 ## DNSMOS：聽的人會怎麼說 {#dnsmos-what-a-listener-would-say}
 
 一段錄音好不好聽是主觀判斷；沒有參考訊號、也沒有聽評小組時，
-唯一能給出判斷的，是用聽評小組的評分訓練出來的模型。
-[`dnsmos`][kudio.core.dnsmos.dnsmos] 執行 DNSMOS，以 1 到 5 的 MOS 尺度
-預測 ITU-T P.835 的三個分數，回傳一個 [`DnsmosScore`][kudio.core.dnsmos.DnsmosScore]：
-SIG 是語音，BAK 是背景有多不干擾，OVRL 是整體。降噪時 SIG 和 BAK 會分開走，
-因為過度的抑制會連同雜訊把語音也吃掉，只用一個數字就會把這件事藏起來。
+唯一能給出判斷的，是用聽評小組的評分訓練出來的模型。Microsoft 的
+[DNS-Challenge](https://github.com/microsoft/DNS-Challenge) 發布了三個這樣的模型，
+kudio 都照該挑戰賽的 `dnsmos_local.py` 的做法來跑。
 
-權重屬於 Microsoft 的 [DNS-Challenge](https://github.com/microsoft/DNS-Challenge)，
-由那邊發布；kudio 除此之外全是原始碼，我不想在裡面夾帶別人的二進位檔。
-所以這裡需要兩樣這一頁其他地方都不需要的東西：用 `pip install kudio[dnsmos]`
-裝 onnxruntime，以及從那個儲存庫 clone 下來的一份副本。
+- [`dnsmos`][kudio.core.dnsmos.dnsmos] 執行 DNSMOS P.835[^dnsmos]，以 ITU-T P.835
+  各自的 1 到 5 分尺度預測三個分數，回傳一個
+  [`DnsmosScore`][kudio.core.dnsmos.DnsmosScore]：SIG 是語音，BAK 是背景有多不干擾，
+  OVRL 是整體。降噪時 SIG 和 BAK 會分開走，因為過度的抑制會連同雜訊把語音也吃掉，
+  只用一個數字就會把這件事藏起來。
+- `dnsmos(..., personalized=True)` 執行個人化的 P.835 模型，它對第二個說話者也會扣分。
+  這個模型隨 ICASSP 2023 挑戰賽發布[^dns2023]，換算到 MOS 尺度的多項式在
+  `dnsmos_local.py` 裡；它怎麼訓練、怎麼測試，我沒找到任何論文說明。
+- [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808] 執行 P.808 模型[^p808]，
+  只給一個整體分數，看的是對數梅爾頻譜，而不是波形。
+
+權重屬於 Microsoft，隨 DNS-Challenge 發布；kudio 除此之外全是原始碼，
+我不想在裡面夾帶別人的二進位檔。所以這裡需要兩樣這一頁其他地方都不需要的東西：
+用 `pip install kudio[dnsmos]` 裝 onnxruntime，以及從那個儲存庫 clone 下來的一份副本。
 
 ```python
 score = kudio.dnsmos(take, sr, model_dir="DNS-Challenge/DNSMOS")
 print(score.sig, score.bak, score.ovrl)
 print(score.summary())
+print(kudio.dnsmos_p808(take, sr, model_dir="DNS-Challenge/DNSMOS"))
 ```
 
 [`find_dnsmos_model`][kudio.core.dnsmos.find_dnsmos_model] 先找 `model_dir`，
 再找 `KUDIO_DNSMOS_DIR`；兩者都可以直接指定檔案，或指定一個要搜尋的資料夾，
-子資料夾也會一起搜尋。副本裡有不只一個 `sig_bak_ovr.onnx` 時，
-依路徑排序的第一個會被選中，所以在乎跑的是哪一個時，請直接指定檔案。接著：
+子資料夾也會一起搜尋。兩個 P.835 模型的檔名相同，所以搜尋時 `dnsmos` 會把
+`pDNSMOS/` 裡的那個排在最後，`personalized=True` 則排在最前。
+用到另一個資料夾的模型時照樣評分，但會發出警告，因為套用的多項式是為另一個模型擬合的。
+同名的檔案不只一個時，依路徑排序的第一個會被選中，所以在乎跑的是哪一個時，
+請直接指定檔案。接著：
 
-- 音訊會重新取樣到 16 kHz，也就是模型訓練時的取樣率。
+- 音訊會重新取樣到 16 kHz，也就是模型訓練時的取樣率。kudio 和新版 librosa 一樣用
+  soxr 重新取樣，腳本所用的 librosa 0.8.1 則用 resampy，
+  所以[指標的驗證方式](../validation.md#dnsmos)量到的一致程度只適用於 16 kHz 的音訊。
 - 音訊切成 9.01 秒的視窗，位移 1 秒，這是模型預期的長度，各視窗的分數再取平均；
   `score.segments` 會告訴你平均了幾個。視窗的排法和 DNS-Challenge 的
   `dnsmos_local.py` 一樣，所以這裡的分數和用那個腳本發表的分數一致：
@@ -484,20 +573,30 @@ print(score.summary())
   結果裡的每個視窗都會評分：2 秒的片段會變成 16 秒、七個視窗。
   靜音會被評成毀損的語音，在兩秒的片段後面接上七秒靜音，
   會回報一個片段本身沒有的問題。
-- 每個視窗的原始輸出會先透過 [`POLYFIT`][kudio.core.dnsmos.POLYFIT]
-  換算到 MOS 尺度再取平均，這是針對非個人化模型公布的多項式，
-  先換算再平均的順序和 DNS-Challenge 的 `dnsmos_local.py` 相同。
-  模型旁邊的 `polyfit.json` 會取代這些多項式，其他模型都需要這個檔案；
-  `polyfit=False` 則保留原始輸出。
+- 每個視窗的 P.835 原始輸出會先透過 [`POLYFIT`][kudio.core.dnsmos.POLYFIT]
+  （個人化模型用 [`POLYFIT_PERSONALIZED`][kudio.core.dnsmos.POLYFIT_PERSONALIZED]）
+  換算到 MOS 尺度再取平均。這兩組是 `dnsmos_local.py` 裡的多項式，
+  先換算再平均的順序也和那個腳本相同。模型旁邊的 `polyfit.json` 會取代這些多項式，
+  其他模型都需要這個檔案；`polyfit=False` 則保留原始輸出。
+- P.808 模型拿到的是每個視窗的對數梅爾頻譜，算法和腳本用 librosa 算的一樣，
+  而腳本的 requirements.txt 釘的是 librosa 0.8.1。librosa 0.9 在兩個地方改了這個頻譜：
+  訊號兩端改成補零，0.8.1 則是鏡射；腳本用 321 點的 FFT，0.9 把頻率格點放在真正的頻率上，
+  間隔 49.84 Hz，0.8.1 則是每 50 Hz 一格，使得 120 個梅爾頻帶裡最低的那個是空的。
+  在新版 librosa 下跑那個腳本，或用 torchmetrics，得到的都是新的頻譜；
+  在驗證用的片段上，兩者的分數最多差 0.19。`dnsmos_p808` 照釘的版本算；
+  `librosa="0.9"` 則給另一種，算出的就是 torchmetrics 1.9.0 的分數。
+
+輸入和其他指標遵守同一套規則：格式不對的輸入會丟出 `ValueError`，
+空的片段評為 nan 並發出警告（見[無法評分的輸入](metrics.md#input-a-metric-cannot-score)）。
 
 [`summary()`][kudio.core.dnsmos.DnsmosScore.summary] 把 OVRL 4.0 以上稱為 clean，
 3.0 以上稱為 usable，2.0 以上稱為 poor，再低就是 bad。SIG 和 BAK 相差超過 0.7 時，
 它會說出是哪一邊比較高：SIG 2.6、BAK 4.1、OVRL 2.9 會得到
 「poor (OVRL 2.90) — the background is cleaner than the speech, which is what over-aggressive denoising looks like」。
 
-處理整個資料夾時，模型只開一次，再把 session 交給每一次呼叫。
-這樣就完全不會去查模型資料夾，所以那裡的 `polyfit.json` 也不會被讀取，
-套用的是公布的係數：
+處理整個資料夾時，模型只開一次，再把 session 交給每一次呼叫；
+`dnsmos_p808` 也用同樣的方式接收 session。這樣就完全不會去查模型資料夾，
+所以那裡的 `polyfit.json` 也不會被讀取，套用的是 `dnsmos_local.py` 裡的多項式：
 
 ```python
 from pathlib import Path
@@ -510,9 +609,13 @@ for path in sorted(Path("corpus").rglob("*.wav")):
     try:
         y, sr = kudio.file_load(path)
         print(path.as_posix(), kudio.dnsmos(y, sr, session=session).summary())
-    except (kudio.AudioIOError, kudio.FeatureError) as e:
+    except (kudio.AudioIOError, kudio.FeatureError, ValueError) as e:
         print(path.as_posix(), f"not measured: {e}")
 ```
+
+要得到整個測試集 SRMR、WADA-SNR 或 DNSMOS 的平均和信賴區間，
+[`score_dataset`][kudio.core.dataset_score.score_dataset] 不需要參考訊號就能對一個資料夾跑這些指標，
+在 shell 裡用 `kudio score` 也一樣（[命令列](../cli.md#score)）。
 
 ## 從命令列 {#from-the-command-line}
 
@@ -528,3 +631,11 @@ kudio loudness take.wav --target -23       # exit 1 when over 1 LU off
 `kudio loudness` 則保留各聲道，因為 BS.1770 會把各聲道加權後相加，立體聲檔案的
 單聲道混音會低 3 LU。
 旗標在[命令列](../cli.md)，這裡每個函式的所有參數都在 [API 參考](../reference/inspection.md)。
+
+[^srmr]: T. H. Falk, C. Zheng and W.-Y. Chan, "A non-intrusive quality and intelligibility measure of reverberant and dereverberated speech", IEEE Trans. Audio, Speech, Lang. Process. 18(7), pp. 1766-1774, 2010, doi:10.1109/TASL.2010.2052247. The normalised variant: J. F. Santos, M. Senoussaoui and T. H. Falk, "An improved non-intrusive intelligibility metric for noisy and reverberant speech", Proc. IWAENC 2014, pp. 55-59, doi:10.1109/IWAENC.2014.6953337.
+[^bs1770]: Recommendation ITU-R BS.1770-4 (10/2015), "Algorithms to measure audio programme loudness and true-peak audio level". Annex 1 is the loudness measurement and Annex 2 the true-peak meter.
+[^ebu]: EBU R 128 (2023), "Loudness normalisation and permitted maximum level of audio signals"; EBU Tech 3341 (November 2023), "Loudness metering: 'EBU Mode' metering to supplement EBU R 128 loudness normalization"; EBU Tech 3342 (November 2023), "Loudness range: a measure to supplement EBU R 128 loudness normalization".
+[^dnsmos]: C. K. A. Reddy, V. Gopal and R. Cutler, "DNSMOS P.835: A non-intrusive perceptual objective speech quality metric to evaluate noise suppressors", Proc. ICASSP 2022, pp. 886-890, doi:10.1109/ICASSP43922.2022.9746108. It was trained on ratings collected to ITU-T Recommendation P.835 (11/2003), "Subjective test methodology for evaluating speech communication systems that include noise suppression algorithm".
+[^wada]: C. Kim and R. M. Stern, "Robust signal-to-noise ratio estimation based on waveform amplitude distribution analysis", Proc. Interspeech 2008, pp. 2598-2601, doi:10.21437/Interspeech.2008-644.
+[^p808]: C. K. A. Reddy, V. Gopal and R. Cutler, "DNSMOS: A non-intrusive perceptual objective speech quality metric to evaluate noise suppressors", Proc. ICASSP 2021, pp. 6493-6497, doi:10.1109/ICASSP39728.2021.9414878. It was trained on ratings collected with the crowdsourcing method of ITU-T Recommendation P.808 (06/2018), "Subjective evaluation of speech quality with a crowdsourcing approach".
+[^dns2023]: H. Dubey, A. Aazami, V. Gopal, B. Naderi, S. Braun, R. Cutler, A. Ju, M. Zohourian, M. Tang, M. Golestaneh and R. Aichner, "ICASSP 2023 Deep Noise Suppression Challenge", IEEE Open Journal of Signal Processing 5, pp. 725-737, 2024, doi:10.1109/OJSP.2024.3378602; first posted as arXiv:2303.11510, 2023.

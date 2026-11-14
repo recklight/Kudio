@@ -41,10 +41,10 @@ from multiprocessing import Pool
 from pathlib import Path, PurePath
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
-import librosa
 import numpy as np
-from tqdm import tqdm, trange
 
+from kudio import _optional
+from kudio._progress import tqdm, trange
 from kudio.core.dataset import Pair
 from kudio.core.io import (PathLike, _abspath, _is_fixed_point, _relative, _source_root,
                            check_input, save_wave)
@@ -101,7 +101,9 @@ def _file_seed(base: int, out, root) -> int:
 def _load(path, sr: Optional[int], what: str) -> Tuple[np.ndarray, int]:
     """One input file, or a SynthesisError that names it. librosa's own errors
     -- an unreadable file, NaN or inf in the samples -- do not say which of
-    the thousands of inputs they came from."""
+    the thousands of inputs they came from. A missing librosa is not a bad
+    file, so it is raised before the try."""
+    librosa = _optional.librosa()
     try:
         return librosa.load(str(path), sr=sr)
     except Exception as e:                              # noqa: BLE001

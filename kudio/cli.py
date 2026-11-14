@@ -10,6 +10,7 @@
     kudio vad   file.wav                # where the speech is
     kudio pitch file.wav                # f0 contour summary (pYIN)
     kudio align ref.wav deg.wav         # how far apart are these two?
+    kudio score enhanced/ --reference clean/   # a test set, and its table
     kudio room ir.wav                   # T30 / EDT / C50 / DRR of a room
     kudio room --make room.wav --rt60 0.6   # ...or synthesise one
     kudio channel in.wav out.wav --telephone   # what the line did to it
@@ -140,8 +141,56 @@ def build_parser() -> argparse.ArgumentParser:
     s_align.add_argument("--metrics", action="store_true",
                          help="score deg against ref, before and after")
 
+    s_score = sub.add_parser(
+        "score", help="score a whole test set (kudio.score_dataset): every "
+                      "utterance, then a table of means with confidence "
+                      "intervals, the signature and the references; exits 1 "
+                      "when some utterance has no score in some column")
+    s_score.add_argument("deg", help="the files to score: a folder, a list of "
+                                     "`id path` lines, or a .csv with id and "
+                                     "path columns")
+    s_score.add_argument("--reference", default=None, metavar="REF",
+                         help="the clean references, in the same forms; ids "
+                              "pair the files up")
+    s_score.add_argument("--baseline", default=None, metavar="BASE",
+                         help="a third side, the noisy inputs say, scored "
+                              "against the same references; the table then "
+                              "tests the difference")
+    s_score.add_argument("--metrics", nargs="+", default=None, metavar="NAME",
+                         help="names as kudio.score takes them, and dnsmos, "
+                              "dnsmos_p808, srmr and wada_snr, which need no "
+                              "reference (default: kudio.score's set, or srmr "
+                              "and wada_snr without --reference)")
+    s_score.add_argument("--pesq-mode", default="auto", choices=["auto", "nb", "wb"])
+    s_score.add_argument("--pesq-scale", default="lqo", choices=["lqo", "raw"])
+    s_score.add_argument("--sr", type=int, default=None,
+                         help="resample every file to this rate as it is read")
+    s_score.add_argument("--align", action="store_true",
+                         help="line each pair up with kudio.align first")
+    s_score.add_argument("--groups", default=None, metavar="FILE|REGEX",
+                         help="the speaker of each utterance, for the intervals "
+                              "and the test: a file of id and speaker (CSV, or "
+                              "`id speaker` lines), or a regular expression "
+                              "whose first group takes it from the id")
+    s_score.add_argument("--jobs", type=int, default=1,
+                         help="utterances scored at once, one process each")
+    s_score.add_argument("--per-item", default=None, metavar="PATH",
+                         help="write one row per utterance, .csv or .jsonl")
+    s_score.add_argument("--format", default="markdown",
+                         choices=["markdown", "latex", "json"])
+    s_score.add_argument("--bib", default=None, metavar="PATH",
+                         help="write the BibTeX for kudio and the metrics here")
+    s_score.add_argument("--confidence", type=float, default=0.95)
+    s_score.add_argument("--resamples", type=int, default=10000,
+                         help="bootstrap resamples, and sign patterns drawn")
+    s_score.add_argument("--seed", type=int, default=0)
+    s_score.add_argument("--dnsmos-dir", default=None, metavar="DIR",
+                         help="where the DNSMOS models are "
+                              "(default: $KUDIO_DNSMOS_DIR)")
+
     s_room = sub.add_parser(
-        "room", help="measure a room from its impulse response (ISO 3382-1), "
+        "room", help="measure a room from its impulse response (ISO 3382-1's "
+                     "evaluation ranges, whole band), "
                      "or synthesise one; exits 1 when the decay does not look "
                      "like an impulse response")
     s_room.add_argument("file", nargs="?", default=None,
@@ -279,21 +328,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         logger.addHandler(_HANDLER)
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
-    from librosa.util.exceptions import LibrosaError
-
-    from kudio.exceptions import KudioError
     with warnings.catch_warnings():
         if not args.verbose:
             warnings.showwarning = _show_warning
         try:
             return _run(args)
-        # librosa's own refusals are not ValueErrors, and a corrupt file
-        # reaching one printed a traceback with the exit code of a finding
-        except (KudioError, ValueError, OSError, LibrosaError) as e:
+        # the tuple is built when something is raised, not before the command
+        # runs, so a command that never touches librosa does not import it
+        except _refusals() as e:
             if args.verbose:
                 raise
             print(f"kudio {args.command}: {e}", file=sys.stderr)
             return 2
+
+
+def _refusals() -> tuple:
+    """What main() reports as one line rather than a traceback. librosa's own
+    refusals are not ValueErrors, and a corrupt file reaching one printed a
+    traceback with the exit code of a finding. A LibrosaError can only have
+    been raised by a librosa that is already imported, so it is looked up
+    there rather than imported."""
+    from kudio.exceptions import KudioError
+    refusals = (KudioError, ValueError, OSError)
+    librosa_errors = sys.modules.get('librosa.util.exceptions')
+    if librosa_errors is not None:
+        refusals += (librosa_errors.LibrosaError,)
+    return refusals
 
 
 def _show_warning(message, category, filename, lineno, file=None, line=None):
@@ -307,6 +367,48 @@ def _fail(message: str) -> int:
     """A refusal goes to stderr, so a redirected result stays clean."""
     print(message, file=sys.stderr)
     return 2
+
+
+def _cmd_score(kudio, args) -> int:
+    """``kudio score``. Standard output carries the table alone, in the format
+    asked for, so that ``> table.tex`` or ``--format json > summary.json``
+    gives a file that is only that; what was written where goes to stderr."""
+    import re
+
+    if args.per_item and Path(args.per_item).suffix.lower() not in (".csv", ".jsonl"):
+        # said before the run rather than after it
+        return _fail(f"--per-item writes a .csv or a .jsonl file, not "
+                     f"{Path(args.per_item).name}")
+    groups = args.groups
+    if groups is not None and not Path(groups).is_file():
+        try:
+            groups = re.compile(groups)
+        except re.error as e:
+            return _fail(f"--groups {args.groups!r} is not a file, and as a regular "
+                         f"expression it does not compile: {e}")
+        if groups.groups < 1:
+            # most likely a file name with a typo in it
+            return _fail(f"--groups {args.groups!r} is not a file, and as a regular "
+                         f"expression it has no group in parentheses to take the "
+                         f"speaker from")
+    result = kudio.score_dataset(
+        args.deg, reference=args.reference, baseline=args.baseline,
+        metrics=args.metrics, sr=args.sr, pesq_mode=args.pesq_mode,
+        pesq_scale=args.pesq_scale, align=args.align, groups=groups, jobs=args.jobs,
+        confidence=args.confidence, n_resamples=args.resamples, seed=args.seed,
+        dnsmos_dir=args.dnsmos_dir)
+    table = {"markdown": result.to_markdown, "latex": result.to_latex,
+             "json": result.to_json}[args.format]()
+    print(table)
+    if args.per_item:
+        path = result.save_rows(args.per_item)
+        print(f"wrote {len(result.rows)} row(s) to {path}", file=sys.stderr)
+    if args.bib:
+        bib = Path(args.bib)
+        bib.parent.mkdir(parents=True, exist_ok=True)
+        bib.write_text(result.cite(), encoding="utf-8")
+        print(f"wrote {len(result.references)} BibTeX entries to {bib}", file=sys.stderr)
+    return 1 if result.unscored else 0
 
 
 def _run(args) -> int:
@@ -590,6 +692,9 @@ def _run(args) -> int:
             for name, wave in ((Path(args.ref).stem, a), (Path(args.deg).stem, b)):
                 kudio.save_wave(out_dir / f"{name}_aligned.wav", wave, sr)
             print(f"\nwrote 2 file(s) to {out_dir}")
+
+    elif args.command == "score":
+        return _cmd_score(kudio, args)
 
     elif args.command == "room":
         if args.make and args.file:

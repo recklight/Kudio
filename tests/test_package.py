@@ -26,11 +26,41 @@ TOP_LEVEL_NAMES = [
     'add_noise_snr', 'spec_augment',
     # v3 metrics + exceptions
     'si_sdr', 'snr', 'segmental_snr', 'KudioError', 'AudioIOError',
+    # quality measures, with a reference and without
+    'lsd', 'llr', 'itakura_saito', 'cepstral_distance', 'wss',
+    'fw_segmental_snr', 'composite', 'CompositeScore', 'srmr', 'wada_snr',
+    # intelligibility, and what a recognizer, a speaker verifier or a pitch
+    # tracker got wrong
+    'ncm', 'csii', 'CsiiScore', 'siib', 'siib_gauss',
+    'wer', 'cer', 'word_errors', 'char_errors',
+    'ErrorCounts', 'eer', 'min_dcf', 'det_curve', 'DetCurve',
+    'gross_pitch_error', 'voicing_decision_error',
+    'f0_frame_error', 'fine_pitch_error', 'f0_rmse', 'f0_errors', 'F0Errors',
+    # separation
+    'si_sdr_improvement', 'sdr_improvement', 'pit_si_sdr', 'PitScore',
+    'bss_eval', 'BssEval',
+    # calibration of a verifier's scores
+    'cllr', 'min_cllr', 'act_dcf', 'c_primary',
+    # mel-cepstral distortion
+    'mcd',
+    # who spoke when
+    'der', 'diarization_errors', 'jer', 'detection_error_rate', 'load_rttm',
+    # a listener's opinion, predicted
+    'dnsmos', 'dnsmos_p808', 'DnsmosScore', 'find_dnsmos_model',
+    # what each metric is, and what to cite for it
+    'METRIC_INFO', 'MetricInfo', 'metric_info', 'BIBTEX', 'cite',
+    # how a result was computed, in one line beside it
+    'signature', 'parse_signature',
+    # how far a result over a test set could move, and whether a gap is real
+    'bootstrap_ci', 'paired_ci', 'rate_ci', 'paired_rate_ci', 'ConfidenceInterval',
+    'permutation_test', 'PermutationResult', 'holm',
+    # a whole test set, from the files to the table under a paper
+    'score_dataset', 'DatasetScore', 'MetricSummary', 'REFERENCE_FREE',
 ]
 
 
-def test_version_is_v3():
-    assert kudio.__version__.startswith("3.")
+def test_version_is_v4():
+    assert kudio.__version__.startswith("4.")
 
 
 def test_top_level_names_present():
@@ -44,7 +74,10 @@ def test_all_is_curated():
 
 
 def test_import_is_lightweight():
-    """`import kudio` must not drag in matplotlib / pandas.
+    """`import kudio` must not drag in matplotlib / pandas, or librosa, which
+    no metric needs. Nor scipy.signal and pywt: 0.48 s of importing between
+    them, left to the functions that use them. Nor tqdm, 50 ms on its own,
+    which only the batch helpers' progress bars need.
 
     Uses a subprocess so other test modules (which import pandas at collection
     time) don't pollute the check.
@@ -53,7 +86,11 @@ def test_import_is_lightweight():
     import sys
     code = ("import kudio, sys; "
             "assert 'matplotlib' not in sys.modules, 'matplotlib leaked'; "
-            "assert 'pandas' not in sys.modules, 'pandas leaked'")
+            "assert 'pandas' not in sys.modules, 'pandas leaked'; "
+            "assert 'librosa' not in sys.modules, 'librosa leaked'; "
+            "assert 'scipy.signal' not in sys.modules, 'scipy.signal leaked'; "
+            "assert 'pywt' not in sys.modules, 'pywt leaked'; "
+            "assert 'tqdm' not in sys.modules, 'tqdm leaked'")
     subprocess.check_call([sys.executable, "-c", code])
 
 
@@ -77,6 +114,20 @@ def test_optional_dep_error_is_typed():
     assert not hasattr(kudio, 'data2xlsx')
     from kudio.exceptions import DependencyError
     assert issubclass(DependencyError, kudio.KudioError)
+
+
+@pytest.mark.parametrize("args", [('librosa',), ('pesq', 'pesq')])
+def test_a_dependency_error_crosses_a_process_boundary_intact(args):
+    """A pool worker hands its exception back pickled, and the first call to
+    librosa can happen in a Synthesizer worker."""
+    import pickle
+
+    from kudio.exceptions import DependencyError
+    raised = DependencyError(*args)
+    back = pickle.loads(pickle.dumps(raised))
+    assert type(back) is DependencyError
+    assert (str(back), back.package, back.extra) == (str(raised), raised.package,
+                                                     raised.extra)
 
 
 # =========================================================== packaging

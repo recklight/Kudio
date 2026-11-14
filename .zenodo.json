@@ -1,0 +1,18 @@
+{
+    "title": "Kudio",
+    "description": "Audio toolkit, speech most of all: I/O, recording, features, noisy-data synthesis, enhancement and evaluation.",
+    "upload_type": "software",
+    "creators": [
+        {
+            "name": "RL"
+        }
+    ],
+    "license": "mit",
+    "access_right": "open",
+    "keywords": [
+        "audio",
+        "acoustic",
+        "signal-processing",
+        "speech-enhancement"
+    ]
+}

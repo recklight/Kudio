@@ -18,7 +18,12 @@ is in the [API reference](../reference/index.md).
 | make degraded/clean training pairs from a folder of speech and one of noise | [Building a noisy dataset](synthesis.md) |
 | take noise out, or choose between denoisers | [Denoising](enhancement.md) |
 | score processed audio against a clean reference | [Measuring quality](metrics.md) |
+| report a whole test set, with confidence intervals, a test against the baseline and what to cite | [A whole test set](metrics.md#a-whole-test-set) |
+| score a transcript, a speaker-verification trial list or a pitch track against its reference | [Recognizers, verifiers and pitch trackers](task-metrics.md) |
 | record, monitor or draw audio while it is still arriving | [Recording and live views](live-audio.md) |
+
+What each metric was compared with, and how closely it agrees, is on
+[How the metrics are checked](../validation.md).
 
 ## The order a recording is damaged in
 

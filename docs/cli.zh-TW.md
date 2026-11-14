@@ -27,6 +27,7 @@ python -m kudio.cli info take.wav   # when the kudio script is not on PATH
 | 降噪 | [`enhance`](#enhance) | 對一個檔案降噪 | [`spectral_enhance`][kudio.enhance.spectral.spectral_enhance] |
 | | [`compare`](#compare) | 哪種降噪方法適合這個檔案？ | [`compare_enhancers`][kudio.enhance.spectral.compare_enhancers] |
 | 對齊兩段錄音 | [`align`](#align) | 兩個版本差多遠，又因此損失多少？ | [`find_delay`][kudio.core.align.find_delay] |
+| 為測試集評分 | [`score`](#score) | 一個系統在整個測試集上表現如何，有沒有勝過基準？ | [`score_dataset`][kudio.core.dataset_score.score_dataset] |
 | 音訊裝置 | [`devices`](#devices) | 有哪些音訊裝置？ | [`list_devices`][kudio.util.check.list_devices] |
 
 ## 所有指令的共同點 {#what-every-command-has-in-common}
@@ -58,7 +59,8 @@ python -m kudio.cli info take.wav   # when the kudio script is not on PATH
 環境音。`hot.wav` 是同一段錄音放大五倍並削峰，`excerpt.wav` 是從 4.2 秒開始的四秒，
 `silence.wav` 是三秒的零。`noisy.wav` 以 5 dB SNR 加入白雜訊，`processed.wav` 是
 `noisy.wav` 降噪後再延遲 128 個樣本。`raw/` 在兩個子資料夾裡放了三段 44.1 kHz 立體聲
-24-bit 錄音，`corpus/` 則有三位說話者的乾淨錄音和兩種雜訊。
+24-bit 錄音，`corpus/` 則有三位說話者的乾淨錄音和兩種雜訊。`testset/` 是 12 位說話者
+各兩句、共 24 句，`p01_001.wav` 到 `p12_002.wav`，有乾淨的，也有以 5 dB SNR 加入白雜訊的。
 
 ??? example "產生範例檔案"
 
@@ -119,6 +121,18 @@ python -m kudio.cli info take.wav   # when the kudio script is not on PATH
     hum = 0.1 * sum(np.sin(2 * np.pi * 50 * k * t) / k for k in (1, 2, 3))
     kudio.save_wave("corpus/noise/fan.wav", fan, sr)
     kudio.save_wave("corpus/noise/hum.wav", hum, sr)
+
+    for k in range(12):                    # testset/: 12 talkers, two sentences each
+        for n in (1, 2):
+            rng = np.random.default_rng(100 * k + n)
+            low = 95 + 9 * k
+            voice = np.concatenate([phrase(1.2, low, low + 20 * n), np.zeros(sr // 4),
+                                    phrase(1.0, low + 25, low)])
+            clean = 0.5 * voice + 0.003 * rng.standard_normal(voice.size)
+            noisy = kudio.add_noise_snr(clean, rng.standard_normal(clean.size),
+                                        snr_db=5, seed=0)
+            kudio.save_wave(f"testset/clean/p{k + 1:02d}_{n:03d}.wav", clean, sr)
+            kudio.save_wave(f"testset/noisy/p{k + 1:02d}_{n:03d}.wav", noisy, sr)
     ```
 
 ## 檢查錄音 {#inspecting-a-recording}
@@ -127,7 +141,7 @@ python -m kudio.cli info take.wav   # when the kudio script is not on PATH
 腳本裡的原因；完整清單在[最後一節](#exit-codes-and-shell-tests)。數字代表的意義，請看
 [檢查錄音](guide/inspection.md)和[語音活動與音高](guide/speech.md)。
 
-### info
+### info {#info}
 
 檔頭的資訊，加上絕對值最大的樣本。這是唯一一個不動聲道的指令。
 
@@ -144,7 +158,7 @@ encoding  : WAV / PCM_24
 peak      : 0.2922
 ```
 
-### report
+### report {#report}
 
 不需要乾淨參考訊號的健康檢查：準位、削峰、直流偏移、靜音、雜訊底、估計的 SNR，以及內容
 佔滿的頻寬。它先印出 [`AudioReport`][kudio.core.report.AudioReport] 的一行摘要，再印出
@@ -166,7 +180,7 @@ kudio report hot.wav
 是 0。最後一行無論如何都會印，因為報告沒問題，不代表錄音聽起來沒問題；那要靠
 [`dnsmos`][kudio.core.dnsmos.dnsmos]，它沒有自己的指令。
 
-### loudness
+### loudness {#loudness}
 
 依 BS.1770 的整合響度、依 EBU Tech 3342 的響度範圍、最大聲和最小聲的 3 秒視窗以及它們
 的中心時間，還有真峰值，讀取前至少超取樣到 192 kHz。最小聲的視窗會略過數位靜音，
@@ -241,7 +255,7 @@ true peak       0.34 dBTP
 它會以 1 結束。檔案裡沒有任何樣本超過滿刻度，真峰值卻在 0 dBTP 以上：削峰後的波形在
 樣本之間衝過頭了。
 
-### vad
+### vad {#vad}
 
 [`vad`][kudio.core.vad.vad] 找到的語音區段，以秒為單位。門檻是從檔案本身的雜訊底往上算，
 所以同一個值在安靜的檔案和有嘶聲的檔案上都適用。`--threshold-db`（預設 8）是音框必須
@@ -263,7 +277,7 @@ kudio vad take.wav
 在 `noisy.wav` 上它找到三段，不是四段。第三段語句比其他的小 12 dB，在 5 dB SNR 下就落到
 雜訊底下了。沒有語音的檔案會印出 `no speech detected` 並以 1 結束。
 
-### pitch
+### pitch {#pitch}
 
 [`f0`][kudio.core.pitch.f0] 曲線的摘要：中位數、以 Hz 和半音表示的第 5 到第 95 百分位數
 範圍，以及檔案有多少比例是有聲的。用百分位數而不是極值，是因為一次八度誤判就能單獨決定
@@ -299,7 +313,7 @@ wrote 4 label(s) to voiced.txt
 用 Python 讀寫和轉換檔案，請看[音訊檔案](guide/audio-files.md)；裁切和音量則在
 [編輯與效果](guide/editing.md)。
 
-### convert
+### convert {#convert}
 
 重新取樣和重新編碼。沒有 `--rate` 時檔案維持原本的取樣率，`--subtype` 接受任何 soundfile
 支援的 subtype，預設是 `PCM_16`。
@@ -329,7 +343,7 @@ kudio convert raw/ 16k/ --rate 16000 --recursive --lufs -23
 什麼都不會被取代：`16k/day1/mic_a.wav` 保留，新的輸出寫成 `16k/day1/mic_a2.wav`，
 標準錯誤上的記錄會說明這件事。如果目的是重做一遍，請先清空資料夾。
 
-### normalize
+### normalize {#normalize}
 
 把檔案調整到指定的響度 `--lufs`（不給時是 -23），或指定的峰值 `--peak`，兩者不能同時用。
 峰值是線性振幅，大於 0、最多 1，例如 0.99，不是 dBFS；其他的值會以錯誤結束，數位靜音的
@@ -361,7 +375,7 @@ warning: normalize_lufs: -6.0 LUFS puts the peak at 2.09 (6.4 dBFS over); the si
 之後執行 `kudio report loud.wav` 會發現 12164 個削峰樣本，佔檔案的 7.60%。我讓增益維持
 精確，而不是加上限制器，因為限制器會改變你要求的響度。
 
-### trim
+### trim {#trim}
 
 用 [`trim_silence`][kudio.effects.silence.trim_silence] 切掉開頭和結尾的靜音。
 `--top-db`（預設 30）是從最大聲的音框往下算，不是從滿刻度。
@@ -385,9 +399,9 @@ trimmed [9216:153088] -> take_trim.wav (143872 samples)
 兩種不是加成性雜訊的劣化。房間是摺積；電話線路或有損傳輸則會量化並遺失封包。
 [房間與通道](guide/degradation.md)兩者都有說明。
 
-### room
+### room {#room}
 
-只給檔案、不加其他選項時，`room` 會把它當成脈衝響應，依 ISO 3382-1 量測。`--make` 則是
+只給檔案、不加其他選項時，`room` 會把它當成脈衝響應，用 ISO 3382-1 的評估範圍量整個頻帶。`--make` 則是
 建立一個合成房間，並印出它所建立房間的量測結果，也就是下面的前兩行；量測那個檔案會再印出
 同樣的摘要，以及背後的六個數值。`--apply` 把檔案放進房間裡。`--make` 同時又給檔案會被拒絕，
 因為它不讀任何檔案。
@@ -444,7 +458,7 @@ C80           -14.74 dB
 DRR           -24.50 dB
 ```
 
-### channel
+### channel {#channel}
 
 照傳輸鏈結的順序劣化一個檔案：先限頻和壓擴，再重新量化，最後是封包遺失。輸出的取樣率和
 長度跟輸入一樣，摘要會比較兩者。
@@ -507,7 +521,7 @@ si_sdr      +23.84 dB against the original
 
 ## 建立含雜訊資料集 {#building-a-noisy-dataset}
 
-### synth
+### synth {#synth}
 
 透過 [`Synthesizer`][kudio.core.synth.Synthesizer]，把每個乾淨檔案以指定的 SNR 混入雜訊。
 這個類別在[建立含雜訊資料集](guide/synthesis.md)有說明；這裡是同一件事的 shell 版本。
@@ -584,7 +598,7 @@ manifest -> corpus/rooms.json
 每種增益規則和雜訊估計器的假設，以及如何在它們之間選擇，在[降噪](guide/enhancement.md)有
 說明；`compare` 則是在你自己的檔案上做選擇的方法。
 
-### enhance
+### enhance {#enhance}
 
 用 [`spectral_enhance`][kudio.enhance.spectral.spectral_enhance] 對一個檔案降噪。預設是
 MCRA 雜訊估計加上 log-MMSE，沒有理由選別的時候，我會從這組開始。
@@ -633,7 +647,7 @@ kudio enhance corpus/mixed corpus/denoised --recursive
 
 只要有任何檔案失敗，它就會以 1 結束，並列出前十個失敗的檔案和原因。
 
-### compare
+### compare {#compare}
 
 對一個檔案跑過每一種方法，把結果放在同一張表。沒有參考訊號時，表上只有 `ms` 和雜訊底兩欄，
 下方的說明會提醒這些是殘留雜訊的讀數，不是品質分數。以乾淨訊號作為 `--reference` 時，
@@ -657,7 +671,8 @@ spectral_gate + mcra             44       -41.4      6.14    0.28      —   0.5
 ```
 
 輸入是合成的，所以請看這張表的樣子，不要當成這些方法在語音上的排名。雜訊底最低的
-`wiener` 在這裡排第四。
+`wiener` 在這裡排第四。這台電腦裝了 `kudio[eval]`，沒裝 `kudio[pesq]`，所以 STOI 欄有
+數字，PESQ 欄沒有。
 
 雜訊估計器的影響和增益規則一樣大，所以 `--noises` 也會掃過它；`all` 代表全部四種。
 `--noise` 則固定用一種，預設是 `mcra`，兩個同時給會被拒絕並以 2 結束。
@@ -692,8 +707,8 @@ wiener + minimum                 64       -51.3      5.23    0.75      —   0.5
 | `--no-metrics` | 關 | 即使有安裝也略過 PESQ 和 STOI |
 
 `compare` 檢查兩者長度的方式和 [`si_sdr`][kudio.core.evaluator.si_sdr] 一樣：長度差一點時，
-以較短的那個評分並發出警告；3 秒的參考訊號對上 10 秒的 `noisy.wav`，有 70% 量不到，
-會被拒絕。`align --write-to` 會寫出等長的一對。
+SNR、SI-SDR 和 STOI 以較短的那個評分並發出警告，PESQ 拿到完整的兩段；3 秒的參考訊號
+對上 10 秒的 `noisy.wav`，有 70% 量不到，會被拒絕。`align --write-to` 會寫出等長的一對。
 
 `ms` 是每次執行的實際經過時間，在暖機之後才量，這樣第一個方法就不會被算進 librosa 一次性
 的編譯時間。STOI 需要 `kudio[eval]`，PESQ 需要 `kudio[pesq]`（各組裝了什麼，請看
@@ -704,7 +719,7 @@ PESQ 欄用的是 kudio 預設的 MOS-LQO：16 kHz 是寬頻、8 kHz 是窄頻�
 
 ## 對齊兩段錄音 {#lining-up-two-recordings}
 
-### align
+### align {#align}
 
 用 [`find_delay`][kudio.core.align.find_delay] 量一段錄音落後另一段多少。每個參考型指標都是
 拿第 *i* 個樣本和第 *i* 個樣本比，兩個檔案錯開時，沒有一個指標能察覺，只會給出很差的分數。
@@ -748,9 +763,184 @@ these do not look like the same recording — the delay above does not mean anyt
 仍可能通過 0.5 的檢查：`kudio align take.wav processed.wav --max-seconds 0.005`（80 個
 樣本，小於實際的 128）會回報延遲 2 個樣本、相關係數 0.621，並以 0 結束。
 
+## 為測試集評分 {#scoring-a-test-set}
+
+### score {#score}
+
+用 [`score_dataset`][kudio.core.dataset_score.score_dataset] 替測試集的每段語句評分，
+再印出論文需要的那張表：每個指標在所有語句上的平均和 95% 信賴區間、平均是對多少段語句
+算的、說明數字怎麼算出來的[簽章](guide/metrics.md#signing-a-result)，以及要引用什麼。
+這裡先把 `testset/` 裡含雜訊的檔案降噪，再拿乾淨的檔案當參考訊號評分，含雜訊的檔案
+則作為基準：
+
+```bash
+kudio enhance testset/noisy testset/enhanced --recursive
+kudio score testset/enhanced --reference testset/clean --baseline testset/noisy \
+    --metrics pesq stoi si_sdr --groups "^(p\d+)_" --per-item scores.csv --bib refs.bib
+```
+
+```text title="輸出"
+24/24 file(s) -> testset/enhanced
+  noise floor down 9.7 dB on average
+| Metric | Better | Baseline [95% CI] | Mean [95% CI] | Difference [95% CI] | p | p (Holm) | n | Not scored |
+|---|---|---|---|---|---|---|---|---|
+| PESQ (WB MOS-LQO) | higher | 1.26 [1.24, 1.27] | 1.66 [1.60, 1.72] | +0.40 [+0.34, +0.47] | 0.0005 | 0.0015 | 24 | 0 |
+| STOI | higher | 0.720 [0.694, 0.740] | 0.732 [0.700, 0.758] | +0.012 [+0.005, +0.022] | 0.0181 | 0.0181 | 24 | 0 |
+| SI-SDR (dB) | higher | 5.00 [4.99, 5.01] | 12.00 [11.90, 12.10] | +7.00 [+6.90, +7.10] | 0.0005 | 0.0015 | 24 | 0 |
+
+Signature for the means and the baselines: kudio:4.0.0|sr:16000|pair:aligned=no,cut=shorter,limit=0.5,whole=pesq|si_sdr|pesq:mode=wb,scale=lqo|stoi|pkg:pesq=0.0.4,pystoi=0.4.1|n:24|ci:kind=bootstrap_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,groups=12
+Signature for the differences: kudio:4.0.0|sr:16000|pair:aligned=no,cut=shorter,limit=0.5,whole=pesq|si_sdr|pesq:mode=wb,scale=lqo|stoi|pkg:pesq=0.0.4,pystoi=0.4.1|n:24|ci:kind=paired_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,groups=12
+References: kudio, itut2001p862, itut2003p8621, itut2007p8622, itut2005p862amd2, taal2011stoi, leroux2019sdr, luo2019convtasnet
+```
+
+這次執行裝了 pesq 0.0.4 和 pystoi 0.4.1，簽章裡也寫出了這兩個套件；上面 `compare` 的
+表只裝了 pystoi，其他範例兩個都沒裝。輸入是合成的，所以請看這張表的樣子就好。
+
+各邊靠 id 配對。在資料夾裡，檔案的 id 是它在資料夾底下的路徑去掉副檔名，所以
+`testset/clean/p01_001.wav` 和 `testset/enhanced/p01_001.wav` 都是 `p01_001`，子資料夾
+也是 id 的一部分（`p232/001`）。每個子資料夾裡，只要是 soundfile 讀得了的格式，依副檔名
+判斷（`.wav`、`.flac`、`.ogg`、`.mp3`、`.aiff`，以及 `soundfile.available_formats()` 裡
+其餘的格式，原始 PCM 除外），都會讀進來。其他檔案只要檔名不是這個資料夾裡的某個 id，
+就會在警告裡列出來，免得有語句悄悄離開測試集；`p01_001.wav` 旁邊的逐字稿
+`p01_001.txt` 不會被列出。兩個以上聲道的檔案會平均成一個聲道，和其他指令讀音訊的方式
+一樣，它那一列的 `note` 也會寫明。一邊也可以是清單而不是資料夾：每行一個 `id path`，和 Kaldi 的 `wav.scp` 一樣，或是有 `id` 和
+`path` 兩欄的 `.csv` 檔。清單裡的相對路徑從工作目錄讀起。有 id 在某一邊找不到、同一個
+id 出現兩次、兩個檔案對到同一個 id（`001.wav` 和 `001.flac`），或清單裡的檔案不存在，
+指令都會在評分之前以 2 結束，列出前五個 id，其餘的只算數量。只拿剛好配得起來的那些
+評分，等於用這張表的名字報了另一個測試集。
+
+`Mean` 是被評分語句的平均，`Baseline` 是同一個指標在基準檔案上的平均，`Difference`
+是平均減去基準。有基準時，三者都只算兩邊都有分數的語句，所以差距剛好就是兩個平均相減。
+每個區間都是 10,000 次重抽樣、種子為 0 的 BCa 區間，理由寫在
+[信賴區間與檢定](guide/metrics.md#confidence-intervals-and-tests)。`--groups` 給出每段
+語句的說話者，這裡是用正規表示式的第一個群組從 id 取出來，重抽樣時以整位說話者為單位。
+`p` 是差距的雙尾符號翻轉檢定，同一位說話者的語句一起翻轉，`p (Holm)` 則是這個 p 值在
+整張表各列之間做 Holm 調整後的結果。我對各列一起調整，是因為整張表會被當成一個結論來讀，
+也就是系統和基準有差別，而只要有任何一列這麼說，這個結論就成立：要維持在 5% 以內的，是
+某一列顯示出其實不存在的差距的機率。差距是變好還是變壞，看它的正負號和 `Better` 那一欄。
+各列在同一批語句上評分，會一起變動，而 Holm 的程序不論它們之間怎麼相依都成立。沒有
+p 值的列，也就是某個指標在兩邊都沒有評到任何語句，不算在這一族裡，表格下方會有一行寫出
+是哪些。多個系統各自和同一個基準比較、每個系統跑一次時，構成的是更大的一族檢定；請用
+[`holm`][kudio.core.stats.holm] 把它們的 p 值一起調整。p 值印到小數第四位，四位會把它
+四捨五入成 0.05、0.01 或 0.001、但它其實不是時，就多印幾位：後面不用參考訊號的那次執行
+裡，經 Holm 調整的 p 值是 4/4096，印成 0.00098。
+
+表格下方是簽章，每一行都寫明它涵蓋什麼：這裡一行是平均和基準（`kind=bootstrap_ci`），
+一行是差距（`kind=paired_ci`）。某個指標有些語句沒有分數時，它會自己一行，因為它的 `n`
+和其他指標不同；BCa 改用百分位數區間的那個區間也一樣。不存在的區間，也就是只有一段語句
+時，簽章裡不寫 `ci`。每一行都說明這次執行怎麼處理各對，所以只有 PESQ 的那一行，在其他
+指標截短了各對時，仍然寫著 `cut=shorter,limit=0.5`。`References` 列出 kudio 和各指標的
+BibTeX 鍵，`--bib` 把條目寫出來，內容和 [`cite`][kudio.core.registry.cite] 給的一樣。
+
+`--per-item` 每段語句寫一列，`.csv` 寫成 CSV，`.jsonl` 寫成 JSON lines，基準的分數
+放在 `baseline_` 開頭的欄位：
+
+```bash
+head -3 scores.csv
+```
+
+```text title="輸出"
+id,group,pesq,stoi,si_sdr,baseline_pesq,baseline_stoi,baseline_si_sdr,reason,note,baseline_reason,baseline_note
+p01_001,p01,1.4695559740066528,0.6275048324562252,11.680727575582601,1.310567021369934,0.640674455569799,4.971942205323741,,,,
+p01_002,p01,1.6462552547454834,0.6418690459730046,12.199555794752698,1.2882053852081299,0.6593455739888636,5.004082450104905,,,,
+```
+
+某個指標無法評分的語句，例如 PESQ 遇到不到 0.25 秒的片段，或參考訊號是靜音，那一格是
+空的（JSON lines 裡是 null），`reason` 則逐字寫著 [`score`][kudio.core.evaluator.score]
+對這一對發出的警告，只是基準那一邊會稱為 `baseline`。整對完全無法
+評分時，例如檔案讀不了，或比參考訊號短太多，那裡寫的是錯誤訊息。`note` 保留仍有評分的
+語句所收到的警告，例如被截掉的長度差。這樣的語句不會算進它沒有分數的那些欄的平均，
+表格把它算在 `Not scored`，標準錯誤上的警告列出前五個，指令則以 1 結束。
+
+整個測試集用同一個取樣率評分，也就是參考訊號的取樣率，在評分之前從檔頭讀出來。參考
+訊號有兩種取樣率時會被拒絕，指標在這個取樣率下沒有定義時也一樣，例如 44.1 kHz 的
+PESQ，兩者都以 2 結束。被評分的檔案和它的參考訊號取樣率不同時，不會在你不知情的情況下
+被重新取樣：那段語句沒有分數，原因會寫出來。`--sr` 會在讀檔時把每個檔案重新取樣成同一個
+取樣率，這時就不會因為取樣率而拒絕任何東西，簽章也會寫出重新取樣的方法
+（`resample:soxr_hq`，`pkg` 裡附上 librosa 和 soxr）。
+
+沒有 `--reference` 時，只能跑不需要參考訊號的指標：dnsmos、dnsmos_p808、srmr 和
+wada_snr。沒給 `--metrics` 時，8 和 16 kHz 跑 srmr 和 wada_snr，其他取樣率只跑
+wada_snr，因為 SRMR 只定義在這兩個取樣率。
+
+```bash
+kudio score testset/enhanced --baseline testset/noisy --groups "^(p\d+)_"
+```
+
+```text title="輸出"
+| Metric | Better | Baseline [95% CI] | Mean [95% CI] | Difference [95% CI] | p | p (Holm) | n | Not scored |
+|---|---|---|---|---|---|---|---|---|
+| SRMR | higher | 5.91 [5.52, 6.27] | 31.91 [29.59, 34.15] | +25.99 [+23.69, +28.07] | 0.0005 | 0.00098 | 24 | 0 |
+| WADA-SNR (dB) | higher | 1.63 [1.51, 1.75] | 12.45 [12.13, 12.84] | +10.82 [+10.44, +11.21] | 0.0005 | 0.00098 | 24 | 0 |
+
+Signature for the means and the baselines: kudio:4.0.0|sr:16000|srmr:fast=no,norm=no,min_cf=4.0,max_cf=128.0,drop_silence=yes|wada_snr|n:24|ci:kind=bootstrap_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,groups=12
+Signature for the differences: kudio:4.0.0|sr:16000|srmr:fast=no,norm=no,min_cf=4.0,max_cf=128.0,drop_silence=yes|wada_snr|n:24|ci:kind=paired_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,groups=12
+References: kudio, falk2010srmr, santos2014srmrnorm, kim2008wada
+```
+
+這些合成檔案的 SRMR 遠高於 SRMRToolbox 自己的測試錄音給出的 6.12；這個範例只是示範
+指令的寫法。兩類指標可以混用：`--metrics pesq srmr` 會對整對算 PESQ，SRMR 則只算被
+評分的檔案、整段來算，不論有沒有 `--align`，所以參考訊號讀不了時，失去分數的是 PESQ，
+不是 SRMR。dnsmos 有 SIG、BAK 和 OVRL 三欄，需要 DNS-Challenge 的模型，透過
+`--dnsmos-dir` 或 `$KUDIO_DNSMOS_DIR`，照 [`find_dnsmos_model`][kudio.core.dnsmos.find_dnsmos_model]
+的方式找到。每個模型在評分之前先開啟一次，所以吃的是另一個模型輸入的模型，例如給
+dnsmos_p808 的是 `sig_bak_ovr.onnx`，會讓指令以 2 結束；`pDNSMOS/` 裡的個人化模型被
+dnsmos 用另一個模型的多項式對應時，會收到 [`dnsmos`][kudio.core.dnsmos.dnsmos] 對它發出
+的那則警告。
+
+`--align` 會先用 [`align`][kudio.core.align.align] 對齊每一對，簽章裡寫 `aligned=yes`；
+被它判定為兩段不同錄音的一對（相關係數低於 0.5）沒有分數，並寫出原因。含有 NaN 或 inf
+的一對會在對齊之前就以這個原因被拒絕。`--jobs N` 一次評 N 段語句，每段在自己的行程裡跑，
+給出的列和順序都和單一行程相同。每個行程分到同樣多的 CPU 執行緒給 BLAS 用，除非已經設了
+`OPENBLAS_NUM_THREADS`、`OMP_NUM_THREADS` 或 `MKL_NUM_THREADS`。如果不這樣分，20 個
+執行緒的 CPU 上四個行程會各自開 20 個：替 `testset/` 的 24 個檔案算 SDR 花了 95 秒，單一行程
+只要 2.6 秒，四個行程各 5 個執行緒則是 1.9 秒。BLAS 執行緒數
+相同時，數字到最後一個位元都相同；執行緒數不同時，SI-SDR 和 SDR 可能差到 1e-14 左右。
+
+`--format latex` 把表格印成有 booktabs 線條的 LaTeX `tabular`（`\usepackage{booktabs}`），
+簽章和這些鍵的 `\cite` 以註解的形式放在下面。第一個 `score` 指令加上 `--format latex`、
+不加 `--baseline` 時印出：
+
+```text title="輸出"
+\begin{tabular}{lrr}
+\toprule
+Metric & Mean [95\% CI] & $n$ \\
+\midrule
+PESQ (WB MOS-LQO) $\uparrow$ & 1.66 [1.60, 1.72] & 24 \\
+STOI $\uparrow$ & 0.732 [0.700, 0.758] & 24 \\
+SI-SDR (dB) $\uparrow$ & 12.00 [11.90, 12.10] & 24 \\
+\bottomrule
+\end{tabular}
+% signature: kudio:4.0.0|sr:16000|pair:aligned=no,cut=shorter,limit=0.5,whole=pesq|si_sdr|pesq:mode=wb,scale=lqo|stoi|pkg:pesq=0.0.4,pystoi=0.4.1|n:24|ci:kind=bootstrap_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,groups=12
+% \cite{kudio,itut2001p862,itut2003p8621,itut2007p8622,itut2005p862amd2,taal2011stoi,leroux2019sdr,luo2019convtasnet}
+```
+
+STOI 印到小數第三位，其他上限為 1 的指標和 SDI 也是；其餘都是兩位。不存在的區間在兩種
+格式裡都印成 `[n/a]`。`--format json` 給出同樣的摘要，但不四捨五入，附上每個區間的設定、
+Holm 調整涵蓋了哪些欄，不存在的數字寫成 null。關於區間的警告，例如說話者太少，會寫出它
+針對的是哪些欄、哪一邊。不論哪種格式，
+標準輸出都只有表格，所以 `> table.tex` 不會混進別的東西；`wrote` 那幾行和進度條、警告
+一起輸出到標準錯誤。
+
+| 選項 | 預設 | 作用 |
+|---|---|---|
+| `--reference REF` | 無 | 乾淨的參考訊號：資料夾、`id path` 清單或 CSV |
+| `--baseline BASE` | 無 | 第三邊，對同樣的參考訊號評分；加上差距和它的檢定 |
+| `--metrics` | `score` 的預設組合，或 srmr 和 wada_snr | [`score`][kudio.core.evaluator.score] 接受的名稱，以及 dnsmos、dnsmos_p808、srmr 和 wada_snr |
+| `--pesq-mode`、`--pesq-scale` | `auto`、`lqo` | 和 [`pesq`][kudio.core.evaluator.pesq] 的用法相同 |
+| `--sr` | 檔案本身的取樣率 | 讀檔時把每個檔案重新取樣成這個取樣率 |
+| `--align` | 關 | 先對齊每一對 |
+| `--groups` | 無 | 說話者：有 `id` 和 `speaker` 兩欄的 CSV、像 Kaldi `utt2spk` 那樣每行 `id speaker` 的檔案，或從 id 取出第一個群組的正規表示式 |
+| `--jobs N` | 1 | 同時評分的語句數，每段一個行程 |
+| `--per-item PATH` | 無 | 每段語句一列，`.csv` 或 `.jsonl` |
+| `--format` | `markdown` | `markdown`、`latex` 或 `json` |
+| `--bib PATH` | 無 | 寫出 BibTeX 條目 |
+| `--confidence`、`--resamples`、`--seed` | 0.95、10000、0 | 區間的信賴水準、重抽樣次數和種子；檢定無法跑完全部的符號組合時，也抽這麼多種 |
+| `--dnsmos-dir DIR` | `$KUDIO_DNSMOS_DIR` | DNSMOS 模型所在的位置 |
+
 ## 音訊裝置 {#audio-devices}
 
-### devices
+### devices {#devices}
 
 列出輸入和輸出裝置，需要 `kudio[audio]`，一律以 0 結束。兩套音訊後端的裝置編號各自獨立，
 所以它會印出兩份清單，並標明哪些函式用哪一份的編號：sounddevice 的編號給
@@ -785,10 +975,13 @@ PyAudio indices — use with kudio.Recorder / stream readers
 | `align` | 相關係數低於 0.5：不是同一段錄音 |
 | `room FILE` | 衰減看起來不像脈衝響應 |
 | `convert --recursive`、`enhance --recursive` | 有任何檔案失敗 |
+| `score` | 有語句在某一欄沒有分數，不論是哪一邊 |
 
 結束代碼 2 代表錯誤，會在標準錯誤上以一行回報。包括用法錯誤（未知的選項、型別錯誤的值、
 缺少參數、`enhance --set` 沒有 `=`、`compare` 同時給了 `--noise` 和 `--noises`、`channel`
-沒有事可做）、讀不了的檔案，以及函式庫拒絕的參數。`-v` 會改為顯示 traceback。其餘情況
+沒有事可做、`score` 的各邊配不起來）、讀不了的檔案，以及函式庫拒絕的參數。對 `score`
+來說，讀不了的音訊檔是一段沒有分數的語句，照上面的表以 1 結束；讀不了的清單或說話者檔案
+才以 2 結束。`-v` 會改為顯示 traceback。其餘情況
 指令都以 0 結束，就算 `compare` 發現沒有方法勝過輸入，或 `normalize` 寫出了削峰的檔案也一樣。
 
 所以每項檢查在 shell 腳本裡都只要一行。`phone.wav` 是 [`channel`](#channel) 那一節寫出的

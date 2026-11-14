@@ -290,7 +290,7 @@ depends on its width, and a full-scale sine reads well below 0 dB:
 | 4 kHz | 0.0 dB | -24.1 dB |
 
 The 80 dB clamp comes after the filters, so it costs the mel view those 18 to
-24 dB of range: with 64 bands a 1 kHz tone at -70 dBFS already sits on the
+24 dB of range: with 64 bands a 1 kHz tone at -62 dBFS already sits on the
 floor. For a mel view, set `vmax` to about -15 or raise `top_db`. The row labels in
 `freqs` are the filters' centres, not `fmin` and `fmax`: 46 to 7626 Hz with
 64 bands at 16 kHz. Read levels off the linear axis, and use the mel one to see

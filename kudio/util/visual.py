@@ -2,26 +2,24 @@
 """Plotting helpers: waveforms, spectrograms, training histories."""
 from __future__ import annotations
 
+import importlib
 import logging
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Optional, Sequence, Tuple, Union
 
-import librosa
 import numpy as np
-from scipy import signal
 
+from kudio import _optional
 from kudio.core.io import copy_waves, file_load
 from kudio.exceptions import DependencyError
 
 # Every helper in here draws something, so matplotlib is needed to import the
-# module at all rather than only to call it. librosa.display imports
-# matplotlib itself, so it belongs inside the guard too: pulled in above it,
-# its own ModuleNotFoundError escapes first and never mentions the extra that
-# cures it.
+# module at all rather than only to call it. librosa is left to the helpers
+# that draw with it, so a missing librosa is reported as librosa and not as
+# the [viz] extra, which does not install it.
 try:
     import matplotlib.pyplot as plt
-
-    import librosa.display
 except ImportError as _e:  # pragma: no cover - exercised only without [viz]
     raise DependencyError('matplotlib', extra='viz') from _e
 
@@ -32,6 +30,14 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+
+
+def _librosa() -> ModuleType:
+    """librosa with its display module loaded, which needs the matplotlib
+    imported above."""
+    librosa = _optional.librosa()
+    importlib.import_module('librosa.display')
+    return librosa
 
 
 def history_plot(history: Any, metrics: str = 'loss',
@@ -123,6 +129,7 @@ class Common:
                          sub_mfe_fq: int = 48000) -> None:
         """Waveform + two mel spectrograms (full band vs. ``sub_mfe_fq``)."""
         f = Path(f)
+        librosa = _librosa()
         y, sr = librosa.load(str(f), sr=None, mono=True)
 
         plt.figure(figsize=(12, 10), dpi=200)
@@ -166,6 +173,7 @@ class WaveVisualizer(Common):
         self.plt.subplots_adjust(wspace=0.3, hspace=0.3)
 
     def plot(self, wave_list: Sequence, title: Optional[Sequence[str]] = None) -> None:
+        librosa = _librosa()
         self.wave_length = len(wave_list)
         log.info("Plotting %d wave(s)", self.wave_length)
         if title is None or len(title) != self.wave_length:
@@ -204,6 +212,7 @@ class WaveVisualizer(Common):
 
 def basic_analyze(file, show: bool = False, save_dir=None) -> None:
     """Waveform / STFT / zero-crossing-rate overview of a file."""
+    librosa = _librosa()
     x, sr = file_load(file)
 
     plt.figure(figsize=(10, 8), dpi=200)
@@ -235,6 +244,7 @@ def basic_analyze(file, show: bool = False, save_dir=None) -> None:
 
 def plot_4_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> None:
     """Waveform + spectral centroid/rolloff/ZCR and power spectral density."""
+    librosa = _librosa()
     x, sr = file_load(file)
 
     fig, ax = plt.subplots(2, 1, figsize=(10, 10), dpi=dpi)
@@ -259,6 +269,7 @@ def plot_4_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> 
 
 def plot_3_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> None:
     """Waveform + spectral centroid/rolloff/ZCR."""
+    librosa = _librosa()
     x, sr = file_load(file)
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
@@ -305,7 +316,7 @@ def normalize(x, axis: int = 0):
 
 
 def plot_spectral_centroid(ax, y, sr, color='r', label=None) -> None:
-    spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
+    spectral_centroids = _librosa().feature.spectral_centroid(y=y, sr=sr)[0]
     t = np.linspace(0, int(len(y) / sr), len(spectral_centroids))
     ax.plot(t, normalize(spectral_centroids), color=color, label=label)
     ax.set_title('Spectral Centroid')
@@ -314,7 +325,7 @@ def plot_spectral_centroid(ax, y, sr, color='r', label=None) -> None:
 
 
 def plot_spectral_rolloff(ax, y, sr, color='r', label=None) -> None:
-    spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)[0]
+    spectral_rolloff = _librosa().feature.spectral_rolloff(y=y, sr=sr)[0]
     t = np.linspace(0, int(len(y) / sr), len(spectral_rolloff))
     ax.plot(t, normalize(spectral_rolloff), color=color, label=label)
     ax.set_title('Spectral Rolloff')
@@ -323,7 +334,8 @@ def plot_spectral_rolloff(ax, y, sr, color='r', label=None) -> None:
 
 
 def plot_power_spectral_density(ax, y, sr, color='b', label=None) -> None:
-    freqs, psd = signal.welch(y, sr, nfft=1024)
+    from scipy.signal import welch
+    freqs, psd = welch(y, sr, nfft=1024)
     ax.semilogx(freqs, psd, color=color, label=label)
     ax.set_title('Power Spectral Density')
     ax.set_xlabel('Frequency[Hz]')
@@ -335,7 +347,7 @@ def plot_power_spectral_density(ax, y, sr, color='b', label=None) -> None:
 
 def plot_zcr(ax, y, sr, color='r', label=None) -> None:
     ax.set_title('ZCR')
-    zcrs = librosa.feature.zero_crossing_rate(y + 0.0001)
+    zcrs = _librosa().feature.zero_crossing_rate(y + 0.0001)
     time2 = np.linspace(0, int(len(y) / sr), len(zcrs[0]))
     ax.plot(time2, zcrs[0], color=color, label=label)
     if label is not None:

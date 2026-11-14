@@ -3,11 +3,12 @@
 
 The SNR family in kudio -- :func:`kudio.si_sdr`, :func:`kudio.snr`,
 :func:`kudio.segmental_snr`, :func:`kudio.sdi` -- compares sample *i* of one
-signal with sample *i* of the other. Every reference metric trims to the
-shorter of the two; the SNR family also assumes the rest lines up, which is
+signal with sample *i* of the other. Every reference metric but PESQ, and
+:func:`kudio.mcd` with ``match_gain=False``, trims to the shorter of the two;
+the SNR family also assumes the rest lines up, which is
 right for a process that returns what it was given and wrong for anything that
-introduces a delay. PESQ runs its own time alignment and STOI shrugs off a few
-milliseconds, so the damage below is the SNR family's. A trim large enough to matter
+introduces a delay. PESQ runs its own time alignment and STOI forgives about a
+millisecond, so the damage below is the SNR family's. A trim large enough to matter
 is warned about, and past :data:`kudio.core.evaluator.MAX_LENGTH_MISMATCH`
 refused -- but a delay that leaves the lengths equal is invisible to that
 check, and this is the module for it.

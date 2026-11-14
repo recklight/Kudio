@@ -15,9 +15,12 @@ module adds.
 
 This is the augmentation that matters for anything that will meet a telephone
 line or a conferencing codec, and it is well established for exactly that
-(Audio Codec Simulation based Data Augmentation for Telephony Speech
-Recognition, APSIPA 2019; packet-loss augmentation for contact-centre ASR,
-Applied Sciences 2022).
+(T.-L. Vu, Z. Zeng, H. Xu and E.-S. Chng, "Audio codec simulation based data
+augmentation for telephony speech recognition", Proc. APSIPA ASC 2019,
+pp. 198-203, doi:10.1109/APSIPAASC47483.2019.9023257; M. P.
+Fernández-Gallego and D. T. Toledano, "A study of data augmentation for ASR
+robustness in low bit rate contact center recordings including packet
+losses", Applied Sciences 12(3), 1580, 2022, doi:10.3390/app12031580).
 
 **Companding is the interesting one.** :func:`mu_law` spends its 8 bits
 logarithmically, so the quantisation noise follows the signal down instead of
@@ -26,13 +29,16 @@ sitting at a fixed floor: on this repo's fixture it holds ~37 dB of SNR over a
 That is the whole reason telephony uses it, and it is what the tests check.
 
 **These are models, not bit-exact codecs.** :func:`mu_law` and :func:`a_law`
-implement the G.711 companding *curves* quantised to 8 bits, not the
-standard's piecewise-linear segment layout. Measured against Python's own
-``audioop`` -- the reference, and removed in 3.13, which is why it cannot be a
-dependency -- the round-trip SNR comes out within about 0.9 dB of it over a
-24 dB range of levels, and single samples within a few hundredths of full
-scale. For augmentation that is the same thing; for a bit-exact decoder it is
-not, and this does not claim to be one.
+implement the continuous mu-law and A-law *curves* quantised to 8 bits, not
+the piecewise-linear segment tables G.711 defines them by. Measured against
+Python's own ``audioop``, which implements those tables (and was removed in
+Python 3.13, so it cannot be a dependency), the round-trip SNR comes out
+0.26 to 0.97 dB higher than audioop's over a 24 dB range of levels, and
+single samples differ by a few hundredths of full scale at most. Those are
+the clip and levels of the companding table in the degradation guide, with
+the samples rounded to int16 before audioop, as :func:`kudio.save_wave`
+rounds them. For augmentation that is the same thing; for a bit-exact
+decoder it is not, and this does not claim to be one.
 """
 from __future__ import annotations
 
@@ -51,9 +57,11 @@ __all__ = ['mu_law', 'a_law', 'bit_depth', 'dropouts', 'telephone',
 
 log = logging.getLogger(__name__)
 
-#: G.711's mu for the North American / Japanese law.
+#: mu of the continuous mu-law curve, the law of North America and Japan.
+#: G.711 defines the law by an 8-segment table that approximates it.
 MU_LAW_MU = 255.0
-#: G.711's A for the European law.
+#: A of the continuous A-law curve, the law of Europe; G.711's segment table
+#: approximates it.
 A_LAW_A = 87.6
 
 #: Default packet length, in milliseconds. 20 ms is what G.711 over RTP uses,
@@ -90,8 +98,11 @@ def _burst_runs(packets: int, n_lost: int, burst: float,
                 rng: np.random.Generator) -> np.ndarray:
     """Which packets go, lost in runs averaging *burst* packets.
 
-    Gilbert's two-state chain is the standard model and it fixes the *rate*,
-    not the count -- ask it for 5% and a given file carries 4.1% or 6.3%.
+    Gilbert's two-state chain (E. N. Gilbert, "Capacity of a burst-noise
+    channel", Bell Syst. Tech. J. 39(5), pp. 1253-1265, 1960,
+    doi:10.1002/j.1538-7305.1960.tb03959.x), with every packet in its bad
+    state lost, is the standard model and it fixes the *rate*, not the count
+    -- ask it for 5% and a given file carries 4.1% or 6.3%.
     :func:`dropouts` promises the count, because a corpus labelled 5% should
     be 5%, so what is taken from Gilbert is the part that matters: the run
     lengths are geometric with mean *burst*, exactly as its bad state gives,
@@ -152,9 +163,11 @@ def _mono(name: str, y: np.ndarray) -> np.ndarray:
 def _quantise(values: np.ndarray, bits: int) -> np.ndarray:
     """Round *values* in ``[-1, 1]`` onto a sign-and-magnitude grid.
 
-    Sign kept separately, magnitude quantised to ``2**(bits-1) - 1`` steps.
-    That is G.711's own layout, and it is the version with a code exactly at
-    zero: spreading ``2**bits`` levels evenly across ``[-1, 1]`` leaves none
+    Sign kept separately, magnitude quantised to ``2**(bits-1) - 1`` steps
+    above zero. At 8 bits that is how G.711's mu-law is laid out, magnitudes
+    0 to 127 with 0 decoding to exactly zero; G.711's A-law has no zero code,
+    its smallest output being half its first step. The code at zero matters
+    here: spreading ``2**bits`` levels evenly across ``[-1, 1]`` leaves none
     there, so digital silence would come back as a small DC offset and the
     curve would stop being odd.
     """
@@ -192,8 +205,10 @@ def mu_law(y: np.ndarray, *, bits: int = 8) -> np.ndarray:
 def a_law(y: np.ndarray, *, bits: int = 8) -> np.ndarray:
     """The same, through the A-law curve -- G.711 as Europe specifies it.
 
-    A-law is slightly finer near silence and slightly coarser at the top than
-    mu-law. The difference is audible only on very quiet material; it is here
+    A-law is coarser than mu-law near silence, its first step twice mu-law's
+    in G.711's tables and 2.8 times on these curves (4.9e-4 of full scale
+    against 1.75e-4), and very slightly finer at the top (4.22% against
+    4.29%). The difference is audible only on very quiet material; it is here
     because a corpus recorded off a European line went through this one.
     """
     y = _mono("a_law()", y)

@@ -254,7 +254,7 @@ y = rec.stop()
 | 4 kHz | 0.0 dB | -24.1 dB |
 
 80 dB 的下限是在濾波器之後才套用，所以梅爾檢視會因此少掉那 18 到 24 dB 的範圍：
-用 64 個頻帶時，-70 dBFS 的 1 kHz 純音就已經貼在下限了。梅爾檢視請把 `vmax`
+用 64 個頻帶時，-62 dBFS 的 1 kHz 純音就已經貼在下限了。梅爾檢視請把 `vmax`
 設在大約 -15，或調高 `top_db`。`freqs` 裡的列標籤是各濾波器的中心，
 不是 `fmin` 和 `fmax`：在 16 kHz 用 64 個頻帶時是 46 到 7626 Hz。讀準位請看線性軸，梅爾軸則拿來看說了什麼。
 
@@ -335,7 +335,7 @@ sounddevice 時，陣列會交給它，它在背景播放並立刻回傳，所�
 下面這些元件，是給它的選擇不合用的時候：要 int16 而不是 float32、要把區塊交給
 你自己的程式碼，或音訊是從網路進來的。
 
-### Recorder
+### Recorder {#recorder}
 
 [`Recorder`][kudio.core.stream.Recorder] 是建立在 PyAudio 上、會阻塞的固定長度
 錄音器，回傳的是 int16 而不是 float32：
@@ -366,7 +366,7 @@ y8 = kudio.resample(x, orig_sr=16000, target_sr=8000)
 kudio.save_wave("take-8k.wav", y8, 8000)
 ```
 
-### LocalStreamReader
+### LocalStreamReader {#localstreamreader}
 
 [`LocalStreamReader`][kudio.core.stream.LocalStreamReader] 透過 PyAudio 開啟輸入，
 把每個區塊交給 `AudioBuffer`、交給 `on_frame` 回呼函式，或兩者都給：
@@ -422,7 +422,7 @@ PyAudio 會印出 traceback 並中止串流，一個出錯的區塊就會讓整�
 在自己的執行緒上做同樣的等待，每個 `FetchBuffer` 一次，引發例外的方式也相同；
 緩衝區之後可以馬上再用。
 
-### RemoteStreamReader
+### RemoteStreamReader {#remotestreamreader}
 
 [`RemoteStreamReader`][kudio.core.stream.RemoteStreamReader] 透過 TCP 連到
 串流原始 PCM 的裝置，例如區域網路上一塊接了麥克風的板子。它以 daemon

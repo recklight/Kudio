@@ -92,6 +92,8 @@ $\hat S(k,l-1)$ 是前一個音框的語音估計。在 $\alpha = 0.98$ 時，
 但也讓這四種方法在語音剛出現時，增益放開得比較慢。
 $\gamma$ 的上限是 40 dB，否則一個很大聲的音框，
 就能把估計拖到一個要好幾秒才離得開的地方；$\xi$ 的下限則是 −25 dB。
+Ephraim 和 Malah 的式 (51) 第一項除的是前一個音框的雜訊功率 $\lambda_d(k,l-1)$。
+他們的雜訊估計是固定的，我的會逐音框變動，所以除以目前音框的。
 `specsub`、`multiband` 和 `spectral_gate` 則是從雜訊估計直接算出增益。
 
 我把估計器和增益規則分開，這樣就能固定其中一個，只改變另一個。
@@ -103,12 +105,12 @@ $\gamma$ 的上限是 40 dB，否則一個很大聲的音框，
 
 | 方法 | 做法 | 選它的理由 | 它自己的參數 |
 |---|---|---|---|
-| `specsub` | 減去雜訊功率的某個倍數：Boll 的方法[^boll]，加上 Berouti 的過減和下限[^berouti] | 最省運算；「音樂雜訊」這個說法就是從它來的 | `over_subtraction` 2.0、`spectral_floor` 0.002 |
-| `multiband` | 每個頻帶各用一個減法因子：頻帶 SNR 低於 −5 dB 時是 4.75，逐漸降到 20 dB 以上時的 1.0[^kamath] | 有色雜訊不是在每個頻帶都一樣大聲 | `bands` 6、`spectral_floor` 0.002 |
+| `specsub` | 減去雜訊功率的固定倍數，剩下的部分保留一個下限：Boll 的頻譜相減[^boll]，改在功率上做，加上 Berouti 的過減[^berouti]。Berouti 依每個音框的 SNR 設定過減因子，下限取雜訊功率的比例；這裡的因子固定，下限取含噪功率的比例 | 最省運算；「音樂雜訊」這個說法就是從它來的 | `over_subtraction` 2.0、`spectral_floor` 0.002 |
+| `multiband` | 每個頻帶各用一個減法因子，依該頻帶的 SNR 決定：低於 −5 dB 時是 4.75，逐漸降到 20 dB 以上時的 1.0。規則是 Berouti 的式 (4)[^berouti]，逐頻帶套用；把相減分頻帶做，是 Kamath 和 Loizou 的想法[^kamath] | 有色雜訊不是在每個頻帶都一樣大聲 | `bands` 6、`spectral_floor` 0.002 |
 | `wiener` | 增益 $\xi/(1+\xi)$ | 平滑，所以音樂雜訊少；低 SNR 時聲音會變悶 | `alpha` 0.98 |
 | `mmse_stsa` | 振幅的 MMSE 估計[^em84] | 比 Wiener 保留更多語音 | `alpha` 0.98 |
-| `logmmse` | 在對數振幅域做 MMSE[^em85] | 它是預設；在這段片段上搭配 MCRA，和最好的規則相差在 0.05 dB 以內 | `alpha` 0.98 |
-| `omlsa` | 以語音存在機率加權的 log-MMSE[^omlsa] | 判定沒有語音的頻率格，會壓到增益下限，所以這裡的停頓比 log-MMSE 的安靜大約 3 dB；`q` 決定一個頻率格多容易被當成空的 | `alpha` 0.98、`q` 0.30 |
+| `logmmse` | 在對數振幅域做 MMSE[^em85] | 它是預設；在這段片段上搭配 MCRA，只比最好的規則低 0.05 dB | `alpha` 0.98 |
+| `omlsa` | 以語音存在機率加權的 log-MMSE[^omlsa] | 判定沒有語音的頻率格，會壓到增益下限，所以這裡的停頓比 log-MMSE 的安靜大約 2.6 dB；`q` 決定一個頻率格多容易被當成空的 | `alpha` 0.98、`q` 0.30 |
 | `spectral_gate` | 頻率格高出雜訊估計的量，超過雜訊估計隨時間的分散程度（以 dB 計）的 `n_std_thresh` 倍，就保留下來，透過平滑過的遮罩套用 | 單純的門檻，和 noisereduce 的做法一樣。在這一頁的白雜訊上，不論搭配哪個估計器都排最後，而且把語音連同雜訊一起調小了 5 dB | `n_std_thresh` 1.5、`prop_decrease` 1.0、`freq_smooth_hz` 500、`time_smooth_ms` 50 |
 
 固定不動的雜訊估計幾乎沒有隨時間的分散程度：`quantile` 完全沒有，
@@ -228,10 +230,10 @@ multiband + quantile SI-SDR +14.52 dB   dSNR +9.65 dB
 包含執行時間、雜訊底和響度。有 `reference=` 時還會有 SNR、SI-SDR 和
 `delta_snr_db`；在預設的 `metrics=True` 下，如果有安裝 `kudio[pesq]` 和
 `kudio[eval]`，還會有 PESQ 和 STOI（PESQ 只在 8 和 16 kHz 時計算）。
-比較所花的時間大多花在這兩個指標上：在我的電腦上，
-上面 28 次執行算 STOI 時花 2.0 秒，不算則是 1.0 秒。
-引發例外的執行會以一列回傳，`error` 有值，雜訊底和響度是 NaN，
-分數是 `None`，所以排序之前要像上面那樣先濾掉。
+比較所花的時間大多花在 PESQ 上：在我的電腦上，上面 28 次執行
+PESQ 和 STOI 都算時花 4.4 秒，只算 STOI 花 1.3 秒，兩個都不算則是 1.0 秒。
+引發例外的執行，或輸出沒辦法和參考訊號比較的執行，會以一列回傳，
+`error` 有值，雜訊底和響度是 NaN，分數是 `None`，所以排序之前要像上面那樣先濾掉。
 計時從一次暖機執行之後才開始，所以第一個方法不會被算進 librosa 的 JIT 編譯時間。
 
 `delta_snr_db` 是輸出的 SNR 減掉未處理輸入的 SNR，兩者都是對參考訊號算的：
@@ -298,7 +300,10 @@ lowpassed + own      SI-SDR +13.08 dB
 只是寫成物件。用 [KudioEnhance](https://github.com/recklight/KudioEnhance)
 訓練的模型也用同樣的方式放進來，寫成 `("model", Enhancer.load(run_dir).enhance)`，
 其中 `Enhancer` 來自 `kudioenhance.inference`。參考型指標比較的是兩個訊號都有的樣本，
-所以輸出稍微短一點沒問題，有延遲的就不行：請先對齊，做法在[品質評估](metrics.md)。
+所以輸出稍微短一點時，會在這些樣本上評分並發出警告；有延遲的則要先對齊，
+做法在[品質評估](metrics.md)。輸出不到參考訊號長度一半時，就超過了
+[`MAX_LENGTH_MISMATCH`][kudio.core.evaluator.MAX_LENGTH_MISMATCH]：
+那一列的 `error` 是長度檢查的 `ValueError`，其他執行照常評分。
 
 ## 幫不上忙的地方 {#where-it-does-not-help}
 
@@ -462,8 +467,10 @@ enhanced/day2/take1.wav: floor -34.4 -> -53.3 dBFS
 回傳的是 [`EnhanceFolderResult`][kudio.enhance.spectral.EnhanceFolderResult]：
 一個 [`ConvertResult`][kudio.core.io.ConvertResult]（只要有任何檔案失敗，
 放在 `if` 裡就是 false），再加上 `report=True` 量到的 `floors`。
-參數只在處理第一個檔案之前檢查一次，所以打錯字只會得到一個錯誤，
-而不是每個檔案各失敗一次。`noise=`、`n_fft=`、`hop_length=`、`window=` 和
+方法的參數只在處理第一個檔案之前檢查一次，所以參數打錯字只會得到一個錯誤，
+而不是每個檔案各失敗一次。`noise=` 和 `noise_kwargs=` 也是這樣檢查：
+`noise="mcar"` 會在讀任何檔案之前就以 `FeatureError` 拒絕，訊息裡列出四種估計器。
+`noise=`、`n_fft=`、`hop_length=`、`window=` 和
 `noise_kwargs=` 會像單次呼叫時那樣傳給
 [`spectral_enhance`][kudio.enhance.spectral.spectral_enhance]，
 方法也可以是 `compare_enhancers` 接受的任何東西，包括訓練好的模型。
@@ -476,10 +483,10 @@ enhanced/day2/take1.wav: floor -34.4 -> -53.3 dBFS
 
 ## 兩個固定做法 {#two-fixed-recipes}
 
-[`trad_enhance`][kudio.enhance.traditional.trad_enhance] 是一套固定做法，取自
-Loizou 的 *Speech Enhancement: Theory and Practice*：
-512 個樣本、套 Hamming 窗的音框，50% 重疊，MCRA 雜訊估計，
-功率頻譜相減，過減因子依每個音框的 SNR 設定，最後是 Wiener 式的增益。
+[`trad_enhance`][kudio.enhance.traditional.trad_enhance] 是一套固定做法，用
+Loizou 的 *Speech Enhancement: Theory and Practice*（第 2 版）裡的方法組成：
+512 個樣本、套 Hamming 窗的音框，50% 重疊，MCRA 雜訊估計（9.4.3.2 節），
+功率頻譜相減，過減因子依每個音框的 SNR 設定（5.4 節），最後是 Wiener 式的增益。
 沒有任何東西可以調整或掃過，而在這段片段上表現不錯：
 
 ```python
@@ -521,10 +528,10 @@ kudio compare in.wav --reference clean.wav --noises all   # the full grid
 
 所有選項都列在[命令列](../cli.md)。
 
-[^boll]: S. F. Boll, "Suppression of acoustic noise in speech using spectral subtraction", IEEE Trans. Acoust., Speech, Signal Process. 27(2), 1979.
-[^berouti]: M. Berouti, R. Schwartz and J. Makhoul, "Enhancement of speech corrupted by acoustic noise", ICASSP 1979.
-[^kamath]: S. Kamath and P. Loizou, "A multi-band spectral subtraction method for enhancing speech corrupted by colored noise", ICASSP 2002.
-[^em84]: Y. Ephraim and D. Malah, "Speech enhancement using a minimum mean-square error short-time spectral amplitude estimator", IEEE Trans. Acoust., Speech, Signal Process. 32(6), 1984.
-[^em85]: Y. Ephraim and D. Malah, "Speech enhancement using a minimum mean-square error log-spectral amplitude estimator", IEEE Trans. Acoust., Speech, Signal Process. 33(2), 1985.
-[^omlsa]: I. Cohen and B. Berdugo, "Speech enhancement for non-stationary noise environments", Signal Processing 81(11), 2001.
-[^mcra]: I. Cohen and B. Berdugo, "Noise estimation by minima controlled recursive averaging for robust speech enhancement", IEEE Signal Process. Lett. 9(1), 2002.
+[^boll]: S. F. Boll, "Suppression of acoustic noise in speech using spectral subtraction", IEEE Trans. Acoust., Speech, Signal Process. 27(2), pp. 113-120, 1979, doi:10.1109/TASSP.1979.1163209.
+[^berouti]: M. Berouti, R. Schwartz and J. Makhoul, "Enhancement of speech corrupted by acoustic noise", Proc. ICASSP 1979, vol. 4, pp. 208-211, doi:10.1109/ICASSP.1979.1170788.
+[^kamath]: S. Kamath and P. Loizou, "A multi-band spectral subtraction method for enhancing speech corrupted by colored noise", Proc. ICASSP 2002, p. IV-4164, doi:10.1109/ICASSP.2002.5745591. The proceedings print the abstract only.
+[^em84]: Y. Ephraim and D. Malah, "Speech enhancement using a minimum mean-square error short-time spectral amplitude estimator", IEEE Trans. Acoust., Speech, Signal Process. 32(6), pp. 1109-1121, 1984, doi:10.1109/TASSP.1984.1164453.
+[^em85]: Y. Ephraim and D. Malah, "Speech enhancement using a minimum mean-square error log-spectral amplitude estimator", IEEE Trans. Acoust., Speech, Signal Process. 33(2), pp. 443-445, 1985, doi:10.1109/TASSP.1985.1164550.
+[^omlsa]: I. Cohen and B. Berdugo, "Speech enhancement for non-stationary noise environments", Signal Processing 81(11), pp. 2403-2418, 2001, doi:10.1016/S0165-1684(01)00128-1.
+[^mcra]: I. Cohen and B. Berdugo, "Noise estimation by minima controlled recursive averaging for robust speech enhancement", IEEE Signal Process. Lett. 9(1), pp. 12-15, 2002, doi:10.1109/97.988717.

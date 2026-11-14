@@ -42,6 +42,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from kudio import _optional
 from kudio._samples import as_float
 from kudio.exceptions import FeatureError
 
@@ -242,7 +243,7 @@ def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
         return PitchTrack(empty_f, np.zeros(0, dtype=bool), empty_f, empty_f,
                           sr, float(fmin), float(fmax), hop)
 
-    import librosa
+    librosa = _optional.librosa()
     values, voiced, prob = librosa.pyin(
         y, fmin=float(fmin), fmax=float(fmax), sr=sr,
         frame_length=int(frame_length), hop_length=hop, center=center)

@@ -39,8 +39,8 @@ pip install "kudio[eval,viz]"
 |---|---|---|
 | `audio` | PyAudio, sounddevice | recording and playback: [`record`][kudio.core.stream.record], [`StreamRecorder`][kudio.core.stream.StreamRecorder], [`play_audio`][kudio.core.stream.play_audio], the stream readers, [`list_devices`][kudio.util.check.list_devices] |
 | `eval` | pystoi, mir_eval below 0.9 | STOI, ESTOI and SDR in [`score`][kudio.core.evaluator.score]; STOI and SDR in [`AudioEvaluate`][kudio.core.evaluator.AudioEvaluate] and [`eval_metrics`][kudio.core.evaluator.eval_metrics] |
-| `pesq` | pesq | PESQ, ITU-T P.862 and P.862.2, in [`pesq`][kudio.core.evaluator.pesq], `score` and `AudioEvaluate` |
-| `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos], a predicted P.835 opinion score with no clean reference |
+| `pesq` | pesq | PESQ, ITU-T P.862 and P.862.2, in [`pesq`][kudio.core.evaluator.pesq], `score` and `AudioEvaluate`, and the PESQ inside [`composite`][kudio.core.quality.composite] |
+| `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos] and [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808], predicted P.835 and P.808 opinion scores with no clean reference |
 | `viz` | matplotlib | the plotting helpers in [`kudio.util.visual`][kudio.util.visual] |
 | `data` | pandas, openpyxl | [`AudioEvaluate.get_df`][kudio.core.evaluator.AudioEvaluate.get_df] and [`per_file`][kudio.core.evaluator.AudioEvaluate.per_file], [`data2xlsx`][kudio.util.conv.data2xlsx] |
 | `all` | `audio`, `eval`, `dnsmos`, `viz`, `data` | every runtime extra except `pesq` |
@@ -59,8 +59,8 @@ and `[all]` leaves them out as well. Four of the others have a catch:
     Microsoft's DNS-Challenge and are distributed there, so clone that
     repository and pass its DNSMOS folder as `model_dir=`, or set the
     `KUDIO_DNSMOS_DIR` environment variable to it. When kudio finds no
-    `sig_bak_ovr.onnx` it raises a
-    [`FeatureError`][kudio.exceptions.FeatureError] saying where to get it.
+    model it raises a [`FeatureError`][kudio.exceptions.FeatureError] saying
+    where to get it.
 
 `audio`
 :   Two PortAudio bindings, because kudio uses both: `record` and
@@ -243,9 +243,22 @@ si_sdr    1.99 ->  11.04 dB
 segsnr   -3.56 ->   1.01 dB
 ```
 
-[`score`][kudio.core.evaluator.score] takes metrics by name: `snr`, `si_sdr`,
-`segsnr` and `sdi` need nothing installed, the rest need the extras above.
-With no list it runs every metric that can run on this machine.
+Each of the two calls also prints a `UserWarning` on standard error:
+
+```text
+UserWarning: segmental_snr(): 105 of ref's 280 frames are digital silence; each scores -10 dB, or 0 dB where deg is silent there too
+```
+
+The pauses of the `clean.wav` made above are exact zeros, which no microphone
+records, and segmental SNR has no signal to set the noise against in them, so
+those frames sit at its -10 dB floor. A reference with a noise floor of its
+own gets no such warning.
+
+[`score`][kudio.core.evaluator.score] takes metrics by name. `pesq` and the
+composite's `csig`, `cbak` and `covl` need `[pesq]`, `stoi`, `estoi` and `sdr`
+need `[eval]`, and the rest run on what kudio installs. With no list it runs
+`snr`, `si_sdr`, `segsnr`, `sdi` and whichever of `pesq`, `stoi`, `estoi` and
+`sdr` can run on this machine; the others run when they are named.
 
 These numbers need the clean signal, which a mix you made yourself has and a
 real recording never does; that is what `audio_report` is for. They also
@@ -423,5 +436,7 @@ Two kinds of output do not go through logging at all:
 | a clip to cut, filter or augment | [Editing and effects](guide/editing.md) |
 | clean speech and noise, and want a training set | [Building a noisy dataset](guide/synthesis.md), [Rooms and channels](guide/degradation.md) |
 | noisy recordings to clean up, or a denoiser to judge | [Denoising](guide/enhancement.md), [Measuring quality](guide/metrics.md) |
+| a test set to score for a paper, with intervals and references | [A whole test set](guide/metrics.md#a-whole-test-set), [`kudio score`](cli.md#score) |
+| transcripts, speaker-verification trials, diarization output or pitch tracks to score | [Recognizers, verifiers and pitch trackers](guide/task-metrics.md) |
 | a microphone | [Recording and live views](guide/live-audio.md) |
 | a function, and want every parameter | [API reference](reference/index.md) |

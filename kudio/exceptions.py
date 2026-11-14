@@ -65,8 +65,24 @@ class SynthesisError(KudioError):
 class DependencyError(KudioError, ImportError):
     """An optional dependency is required for this operation but not installed."""
 
-    def __init__(self, package: str, extra: str | None = None):
-        hint = f"pip install kudio[{extra}]" if extra else f"pip install {package}"
-        super().__init__(f"'{package}' is required for this feature. Install it with: {hint}")
+    def __init__(self, package: str, extra: str | None = None,
+                 failed: str | None = None):
+        if failed:
+            # installed, but it will not import: installing it again is not
+            # the cure, what it failed on is
+            message = (f"'{package}' is required for this feature, and importing "
+                       f"it failed: {failed}")
+        else:
+            hint = f"pip install kudio[{extra}]" if extra else f"pip install {package}"
+            message = f"'{package}' is required for this feature. Install it with: {hint}"
+        super().__init__(message)
         self.package = package
         self.extra = extra
+        self.failed = failed
+
+    def __reduce__(self):
+        # Rebuilt from its arguments, so one raised in a worker process
+        # (Synthesizer, map_waves) reaches the parent as it was raised.
+        # Exception's own pickling hands the message back to __init__, which
+        # would take it for the package's name.
+        return type(self), (self.package, self.extra, self.failed)

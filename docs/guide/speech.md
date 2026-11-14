@@ -292,7 +292,7 @@ became part of the vowel's span. With 0.4 s between them, it was dropped.
 
 ## Pitch with f0
 
-[`f0`][kudio.core.pitch.f0] runs pYIN (Mauch & Dixon 2014) through librosa
+[`f0`][kudio.core.pitch.f0] runs pYIN (Mauch & Dixon 2014)[^pyin] through librosa
 and returns a [`PitchTrack`][kudio.core.pitch.PitchTrack]. It costs far more
 than `vad`: on my machine a minute of 16 kHz audio takes 1.3 to 2.6 s through
 `f0` and 0.04 to 0.07 s through `vad`, so to ask whether a file has a voice in
@@ -442,3 +442,5 @@ formats, and reading a corrected track back with
 in one step: it prints the summary line and the voiced spans, writes the
 label track, and exits 1 when nothing is voiced; see
 [Command line](../cli.md).
+
+[^pyin]: M. Mauch and S. Dixon, "pYIN: A fundamental frequency estimator using probabilistic threshold distributions", Proc. ICASSP 2014, pp. 659-663, doi:10.1109/ICASSP.2014.6853678.

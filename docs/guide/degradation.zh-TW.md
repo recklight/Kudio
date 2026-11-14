@@ -122,9 +122,9 @@ wet = kudio.apply_rir(y, measured)
 
 [`rt60`][kudio.core.room.rt60] 回傳一個
 [`Reverberation`][kudio.core.room.Reverberation]。T20、T30 和 EDT 都是從同一條
-反向積分的衰減曲線 [`schroeder_curve`][kudio.core.room.schroeder_curve] 讀出來
+反向積分的衰減曲線[^schroeder] [`schroeder_curve`][kudio.core.room.schroeder_curve] 讀出來
 的：分別是從 −5 降到 −25 dB、從 −5 降到 −35 dB、從 0 降到 −10 dB 所需的時間，
-再外推到 60 dB。這些是 ISO 3382-1 的評估範圍，T30 就是一般當作 RT60 引用的數字。
+再外推到 60 dB。這些是 ISO 3382-1[^iso3382] 的評估範圍，T30 就是一般當作 RT60 引用的數字。
 C50、C80 和 DRR 是直接從響應算出來的能量比：峰值之後最初 50 或 80 ms 對上之後的
 全部，以及峰值前後 ±2.5 ms 對上其餘部分。`fit` 是 T30 擬合直線的 R²。
 
@@ -151,10 +151,12 @@ T30 0.19 s, fit 0.802, reliable: False
 
 [`reliable()`][kudio.core.room.Reverberation.reliable] 問兩個問題。第一個是衰減
 是不是直線，也就是 `fit` 至少 0.9；被截斷的房間在這一關就沒過。含雜訊的語音卻
-過了，所以才有第二個問題：EDT 和 T30 是否一致。離聲源有段距離時，最初的 10 dB
-和 −5 到 −35 dB 這一段描述的是同一條尾巴，所以 EDT 應該在 T30 的
+過了，所以才有第二個問題：EDT 和 T30 是否一致。在擴散的房間裡、離聲源有段距離時，
+最初的 10 dB 和 −5 到 −35 dB 這一段描述的是同一條尾巴，所以 EDT 應該在 T30 的
 [`MAX_EDT_RATIO`][kudio.core.room.MAX_EDT_RATIO]（2）倍以內。這個界線是合理性
-檢查，不是標準裡的數字。0.6 秒、+6 dB 的房間換四十個種子，EDT/T30 都在 0.87 到
+檢查，不是標準裡的數字，不擴散的房間也可能超出它：Schroeder 在音樂廳量到的
+雙斜率衰減[^schroeder]，最初 10 dB 是 0.89 秒，其餘部分是 2.09 秒，換成 EDT/T30
+大約是 0.43。0.6 秒、+6 dB 的房間換四十個種子，EDT/T30 都在 0.87 到
 1.16 之間；含雜訊的語音則是 7。
 
 錄下來的響應在量測前不需要先切。`rt60` 從起始點開始量，也就是第一個和峰值相差
@@ -176,8 +178,9 @@ DRR 是 +0.1 dB。
     衰減曲線降得太慢，到切點才突然掉下去。在 0.45 秒處切，T30 會是 1.23 秒，擬合度
     0.962。怎麼切都救不回來：切點從 0.15 移到 0.45 秒，得到的值從 0.39 一路到
     1.23 秒，切在尾巴碰到雜訊底的地方則是 0.54 秒，而 `reliable()` 每次都說 True。
-    衰減曲線在切點處一定會降過 −35 dB，所以請檢查響應本身：只有在衰減曲線穿過
-    −35 dB 的地方，原始響應還明顯高於雜訊時，T30 才有意義。如果不是，這段錄音裡
+    衰減曲線在切點處一定會降過 −35 dB，所以請檢查響應本身：ISO 3382-1 要求量 T30
+    時響應至少比雜訊高 45 dB（T20 是 35 dB），也就是衰減曲線穿過 −35 dB 的地方，
+    原始響應還要比雜訊高 10 dB。如果不是，這段錄音裡
     就沒有可以引用的 T30，解決辦法是用更大的準位重新量一次。
 
 !!! warning "DRR 略低於 +10 dB 的麥克風，`reliable()` 判斷不了"
@@ -197,7 +200,7 @@ DRR 是 +0.1 dB。
 [`telephone`][kudio.effects.channel.telephone] 照窄頻線路的做法，依同樣的順序
 處理：在原本的取樣率下限頻到 300–3400 Hz
 （[`TELEPHONE_BAND`][kudio.effects.channel.TELEPHONE_BAND]），重新取樣到 8 kHz，
-經過 G.711 mu-law 壓擴，再轉回來。帶通濾波放在最前面，因為重新取樣器的抗混疊
+經過 G.711[^g711] mu-law 壓擴，再轉回來。帶通濾波放在最前面，因為重新取樣器的抗混疊
 濾波器並不是線路的通帶。結果保留輸入時的取樣率和長度，所以在資料集裡可以和
 來源檔案並排放。
 
@@ -220,8 +223,8 @@ content stops at 3766 Hz although the file claims 16000 Hz — it was very likel
 ### 壓擴與位元深度 {#companding-and-bit-depth}
 
 [`mu_law`][kudio.effects.channel.mu_law] 和
-[`a_law`][kudio.effects.channel.a_law] 讓訊號經過 G.711 的壓擴曲線，量化成 8 位元
-的碼字，再展開回來。量化階是對數的，所以量化雜訊會跟著訊號一起變小，而不是停在
+[`a_law`][kudio.effects.channel.a_law] 讓訊號經過 mu-law 或 A-law 的連續壓擴曲線
+（G.711 的分段表近似的那一條），量化成 8 位元的碼字，再展開回來。量化階是對數的，所以量化雜訊會跟著訊號一起變小，而不是停在
 固定的底部。[`bit_depth`][kudio.effects.channel.bit_depth] 把同樣的 8 位元線性地
 分配，[`snr`][kudio.core.evaluator.snr] 則顯示壓擴換來了什麼：
 
@@ -245,13 +248,14 @@ for level in (0, -6, -12, -18, -24):
 準位降了 24 dB，mu-law 的 SNR 只少了 1.3 dB，線性 8 位元則少了 21.7 dB，接近
 「每減半少 6 dB」所預測的 24 dB。
 
-這些是壓擴曲線本身，不是標準裡那種分段線性的區段。和 Python 的 `audioop` 比較
-（它就是 G.711 本身，在 Python 3.13 被移除了，所以不能當相依套件），在表中的各個
-準位下，kudio 來回一趟的 SNR 高出 0.25 到 0.83 dB，單一樣本最多相差滿刻度的
+這些是壓擴曲線本身，不是 G.711 用來定義這兩種律的分段線性表。和 Python 的
+`audioop` 比較（它實作的就是那些表，在 Python 3.13 被移除了，所以不能當相依套件），在表中的各個
+準位下，kudio 來回一趟的 SNR 高出 0.26 到 0.97 dB，單一樣本最多相差滿刻度的
 百分之幾：拿來做資料擴增夠接近了，但它不是位元精確的解碼器。
 
-滿刻度的正弦波經過 `bit_depth`，在 $b$ 位元時量起來是 $6.02\,b + 1.76$ dB：用
-997 Hz 的純音，8 位元是 49.9 dB，16 位元是 98.1 dB。`dither=True` 會在捨入之前
+滿刻度的正弦波經過 `bit_depth`，在 $b$ 位元時量起來是 $6.02\,b + 1.76$ dB，
+8 位元是 49.9 dB，16 位元是 98.1 dB；16 kHz 下 997 Hz 的純音實際量到 50.0 和
+98.0 dB。`dither=True` 會在捨入之前
 加上峰對峰兩個量化階寬的三角分布（TPDF）抖動，在 8 位元下會讓這個純音損失
 4.7 dB：抖動本身的功率是捨入誤差的兩倍，所以雜訊變成三倍，也就是 4.8 dB。換來的
 是不再跟訊號相關的誤差。高度只有四分之一個量化階的正弦波，平均下來能以完整的
@@ -262,7 +266,7 @@ for level in (0, -6, -12, -18, -24):
 
 [`dropouts`][kudio.effects.channel.dropouts] 把片段切成 `packet_ms` 長的封包
 （預設 20 ms，[`PACKET_MS`][kudio.effects.channel.PACKET_MS]，也就是 G.711 透過
-RTP 傳送時用的封包長度），並遺失其中一部分。遺失的數量固定是
+RTP 傳送時用的封包長度[^rtp]），並遺失其中一部分。遺失的數量固定是
 `round(loss * packets)`，而不是逐個封包抽籤決定，而且是每個檔案各自捨入：在 5%
 時，1 秒的片段（50 個封包）會遺失 2 個，也就是 4%，0.2 秒（10 個封包）以下的
 片段則一個都不會遺失。`return_spans=True` 還會回傳每個遺失封包的位置，以秒為單位：
@@ -310,7 +314,7 @@ print(len(gaps), [f"{a:.2f}-{b:.2f} s" for a, b in gaps[:3]])
 ![30 秒內 5% 的封包遺失：獨立遺失，以及平均 6 個一串](../images/degradation-loss-light.webp#only-light)
 ![30 秒內 5% 的封包遺失：獨立遺失，以及平均 6 個一串](../images/degradation-loss-dark.webp#only-dark)
 
-串長度呈幾何分布，就像 Gilbert 雙狀態模型裡的壞狀態；串和串之間至少隔著一個
+串長度呈幾何分布，就像 Gilbert 雙狀態模型[^gilbert]裡的壞狀態；串和串之間至少隔著一個
 沒遺失的封包，所以兩串不會連成一串，你在輸出裡數到的串，就是抽出來的那些串。
 
 `burst=1` 不是預設值換個名字而已。獨立抽取偶爾也會抽到相鄰的封包，所以預設本來
@@ -396,3 +400,9 @@ kudio channel in.wav out.wav --loss 0.05 --burst 6 --conceal hold --seed 0
 
 各個旗標在[命令列](../cli.md)，這裡每個函式的所有參數都在
 [API 參考](../reference/degradation.md)。
+
+[^schroeder]: M. R. Schroeder, "New method of measuring reverberation time", J. Acoust. Soc. Am. 37(3), pp. 409-412, 1965, doi:10.1121/1.1909343.
+[^iso3382]: ISO 3382-1:2009, "Acoustics — Measurement of room acoustic parameters — Part 1: Performance spaces".
+[^g711]: ITU-T Recommendation G.711 (11/1988), "Pulse code modulation (PCM) of voice frequencies".
+[^rtp]: H. Schulzrinne and S. Casner, "RTP profile for audio and video conferences with minimal control", RFC 3551, July 2003, Sec. 4.2, doi:10.17487/RFC3551.
+[^gilbert]: E. N. Gilbert, "Capacity of a burst-noise channel", Bell Syst. Tech. J. 39(5), pp. 1253-1265, 1960, doi:10.1002/j.1538-7305.1960.tb03959.x.

@@ -4,6 +4,228 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2026-11-14
+
+Metrics for enhancement, intelligibility, separation, recognition, speaker
+verification, diarization and pitch tracking, each compared with the
+implementation its published numbers come from or with its definition worked
+out a second way; confidence intervals and tests over a test set, a signature
+that says how a result was computed, BibTeX for every metric, and
+`kudio score`. The metrics 3.9.1 had give the same numbers on the pairs they
+could score, except PESQ on a pair of two lengths, and `score` with no list
+runs the same eight.
+
+### Added
+
+- `llr`, `itakura_saito`, `cepstral_distance`, `wss`, `fw_segmental_snr` and
+  `composite` (CSIG, CBAK, COVL as a `CompositeScore`): Hu and Loizou's
+  measures as Loizou's MATLAB code computes them, at 8 and 16 kHz. The
+  composite's PESQ is wideband MOS-LQO at 16 kHz and raw narrowband P.862 at
+  8 kHz by default; `mode="nb", scale="raw"` is the variant the regression
+  was fitted on.
+- `lsd`, the log-spectral distance, with URGENT 2025's settings by default
+  and NVSR's `ssr_eval` settings as arguments.
+- `mcd`, the mel-cepstral distortion as URGENT 2025 computes it, with SPTK's
+  mel-cepstral analysis and FastDTW restated in numpy, so it needs no
+  compiler or extra package.
+- `ncm` and `csii` (three levels in a `CsiiScore`): the normalized covariance
+  metric and the coherence SII, as Loizou's NCM.m and CSII.m compute them.
+- `siib` and `siib_gauss`: speech intelligibility in bits per second, as the
+  authors' SIIB.m and SIIB_Gauss.m compute it, in numpy and scipy. A pair
+  with less than 5.45 s of speech scores nan, and the noise that breaks ties
+  in SIIB's estimator has a fixed seed, so a pair scores the same every time.
+  At 16 kHz they give pySIIB's numbers, SIIB^Gauss to under 1e-12 of itself
+  and SIIB to 1.4e-5 at most.
+- `srmr` and `wada_snr`: reverberation and SNR estimated from the recording
+  alone.
+- `si_sdr_improvement` and `sdr_improvement`, SI-SDRi and SDRi over the
+  mixture. `pit_si_sdr` (a `PitScore`) matches several estimates to their
+  sources by the highest mean SI-SDR and gives each source's SI-SDR and
+  SI-SDRi; `bss_eval` (a `BssEval`) gives mir_eval's SDR, SIR, SAR and SDRi,
+  with its own permutation or the one `pit_si_sdr` found.
+- `wer`, `cer`, `word_errors` and `char_errors` (an `ErrorCounts`): error
+  rates pooled over a corpus, with the hits, substitutions, deletions and
+  insertions behind them. `cer` leaves whitespace out unless `spaces=True`.
+- `eer`, `min_dcf` and `det_curve` (a `DetCurve`) for speaker verification.
+  The EER interpolates between operating points as the VoxSRC scorer does,
+  or takes BOSARIS's convex hull with `method="rocch"`; `min_dcf` has no
+  default `p_target`.
+- `cllr`, `min_cllr`, `act_dcf` and `c_primary` for scores that are
+  log-likelihood ratios: Brümmer and du Preez's C_llr and its minimum after
+  the best calibration, the actual DCF at the Bayes threshold, and NIST SRE
+  2016's primary cost. min C_llr keeps tied scores together, as PYLLR does.
+- `der`, `diarization_errors` (a `DiarizationErrors`), `jer`,
+  `detection_error_rate` and `load_rttm`: DER as md-eval.pl scores it, the
+  collar per side and the speakers mapped before the collars and the overlap
+  are taken out, and JER with dscore's pairing of the speakers.
+- `dnsmos_p808`, the score of DNS-Challenge's P.808 model. Its log mel
+  spectrogram is by default the one `dnsmos_local.py` computes under the
+  librosa its requirements.txt pins, 0.8.1; `librosa="0.9"` gives the one
+  librosa 0.9 and later compute, as the script under a current librosa and
+  torchmetrics do. The two scores are up to 0.19 apart.
+  `dnsmos(personalized=True)` runs the personalised P.835 model with its own
+  polynomials, `POLYFIT_PERSONALIZED`, and `find_dnsmos_model(model=)` finds
+  any of the three models.
+- `gross_pitch_error`, `voicing_decision_error`, `f0_frame_error`,
+  `fine_pitch_error`, `f0_rmse` and `f0_errors` (an `F0Errors`), for two F0
+  tracks in Hz or two `PitchTrack`s.
+- `score` takes `llr`, `is`, `cep`, `wss`, `fwsegsnr`, `lsd`, `csig`,
+  `cbak`, `covl`, `ncm`, `csii_high`, `csii_mid`, `csii_low`, `siib` and
+  `siib_gauss` by name.
+- `tools/validation/`: one script per group of metrics that runs the
+  comparison with the reference implementations again.
+- `cite` and `metric_info`, with `METRIC_INFO` and `BIBTEX` behind them:
+  every metric kudio computes, under `score`'s name and its function's, with
+  which way is better, its range and unit, the settings that change its
+  number, its section on the validation page and the works it comes from.
+  `kudio.cite(["pesq", "stoi"])` gives the BibTeX for kudio and for those
+  works, each once. `CITATION.cff` for the repository, and `.zenodo.json`
+  with the same description for Zenodo's archive of each release.
+- `bootstrap_ci`, `paired_ci`, `rate_ci` and `paired_rate_ci` (a
+  `ConfidenceInterval`): bootstrap intervals, BCa by default, for the mean of
+  a per-utterance score, the mean difference between two systems on the same
+  utterances, a WER, CER or DER pooled over a corpus, and the difference of
+  two such rates. `permutation_test` (a `PermutationResult`) is the paired
+  sign-flip test of the same differences, exact when every sign pattern can
+  be run, and `holm` adjusts several p-values together. With `groups`, whole
+  speakers are resampled and flipped together: on simulated speakers, 95%
+  intervals then held the true mean 92% of the time at 30 speakers, against
+  about half when utterances are resampled.
+- `signature` and `parse_signature`: one line, after sacreBLEU's, that says
+  how a set of numbers was computed: kudio's version, the rate and any
+  resampling, how the pairs were lined up and cut, each metric's settings as
+  resolved (PESQ's `auto` as `wb` or `nb`, defaults written out), the
+  version of each package that computes one, the DNSMOS model and
+  polynomials by a short hash, and, when given, the number of items and the
+  confidence interval. `parse_signature` reads it back into a dict.
+- `score_dataset` (a `DatasetScore`) and `kudio score` score a whole test
+  set. The sides pair up by id, from folders laid out alike, Kaldi-style
+  `id path` lists or CSV files, and an id missing from a side or given twice
+  is refused before anything is scored. Each pair runs through the same code
+  as `score`; `dnsmos`, `dnsmos_p808`, `srmr` and `wada_snr` score the file
+  alone. The result is one row per utterance, as CSV or JSON lines with
+  `score`'s warning where a metric could not score it, and a table of means
+  with BCa intervals (resampled by speaker when the speakers are given),
+  counts, signatures and BibTeX keys, as Markdown, LaTeX or JSON. With a
+  baseline the table adds the difference, its sign-flip test and p-values
+  adjusted by Holm over its rows. `jobs` scores in several processes and
+  gives the same rows in the same order.
+
+### Changed
+
+- `kudio.enhance.traditional`'s `INIT` and `EST` hold only the MCRA estimate
+  `trad_enhance` runs. The weighted spectral average, continuous minimum
+  tracking and MCRA-2, which nothing in kudio called and no test covered,
+  are gone, and so is `INIT`'s sample rate, which only MCRA-2 read.
+- One rule for input a metric cannot score, in every metric: malformed
+  input, NaN or inf samples included, raises `ValueError` starting
+  `<function>(): `, and input with nothing to score gives nan and one
+  `UserWarning` ending `; scored nan`, pointed at the line that called kudio.
+- `snr`, `si_sdr`, `segmental_snr`, `sdi` and `pesq` follow it too. An empty
+  pair or a silent reference, which gave a number made by the 1e-12 guards
+  (`sdi` of an empty pair was 0.0) or raised the `pesq` package's error,
+  scores nan with a warning, and so, for PESQ, do an empty side, a side under
+  0.25 s, a pair in which the package finds no utterance and a silent
+  output. `si_sdr` of a constant output is still 0 dB, now with a warning,
+  and `segmental_snr` warns how many of the reference's frames are digital
+  silence.
+- Every metric takes the same signals: one channel as a vector, a column
+  `(n, 1)` or a row `(1, n)`, integer samples read on their type's full
+  scale. int64 and uint64 are refused, since on their full scale 16-bit
+  samples sit 288 dB down, where the 1e-12 guards decide the score (`snr` of
+  int16 samples held as int64 was 0 dB); so are complex, boolean and text
+  arrays, masked samples, and a rate that is not one positive number. A
+  signal that peaks under one step of 16-bit audio (-90.3 dBFS), where int16
+  samples held as int32 land, is scored with one warning.
+- `dnsmos` follows the rule as well: malformed input raises `ValueError`
+  where it raised `FeatureError`, NaN and inf samples included, which it
+  passed to the model, and an empty clip scores nan with a warning. A session
+  whose model takes a mel spectrogram, as the P.808 one does, is refused by
+  name rather than by onnxruntime's error. A model from the other P.835
+  folder is warned about only when it is mapped with the polynomials it was
+  not fitted to. `MODEL_NAMES` is now `MODELS`, which maps each model to its
+  folder and file.
+- STOI, ESTOI and SDR through `score`, `eval_metrics` and `AudioEvaluate`
+  score nan with a warning for an empty pair, a pair under 25.6 ms for STOI,
+  and a signal that is digital silence throughout, where they raised numpy's
+  `AxisError` or mir_eval's errors, or ESTOI returned a number that changed
+  from call to call.
+- PESQ gets the two signals whole, whatever their lengths, as the ITU
+  program reads two files: in `pesq`, `score`, `eval_metrics`,
+  `AudioEvaluate`, `compare_enhancers` and `composite`. PESQ finds the delay
+  itself and works over both as they are, so cutting the longer one, as
+  kudio did, moved the score even where the cut dropped only silence: by up
+  to 0.56 on the 40 pairs of ITU's conformance test 2(b), where kudio now
+  gives ITU's scores to the third decimal. Pairs of one length score as
+  before. `pesq`, `score` asked for
+  PESQ alone and `AudioEvaluate.pesq_score` no longer warn about two lengths
+  or refuse a pair past `MAX_LENGTH_MISMATCH`; beside metrics that cut, the
+  length warning says PESQ got both whole.
+- `AudioEvaluate` names, after each pass, the files a metric had no score
+  for and why, in one warning per column.
+- `import kudio` loads librosa, scipy.signal, PyWavelets and tqdm only where
+  a function needs them, which takes it from about 500 ms to 140 ms (Python
+  3.9, numpy 2.0, timed in a fresh interpreter). Every metric above runs
+  without librosa. Without it, a feature built on it raises `DependencyError`
+  naming it, and `convert_folder` and `enhance_folder` stop at the first
+  file. librosa is still installed with kudio.
+
+### Fixed
+
+- `DependencyError` keeps its message when pickled, so one raised in a
+  worker process reaches the parent as it was raised.
+- `score`, `pesq` and `eval_metrics` take a one-sample signal, which they
+  squeezed to a 0-d array and then refused as a shape they could not score.
+- `score`, `pesq` and `eval_metrics` pass the rate on as it is given. They
+  took `int(sr)` first, so 16000.5 scored there and was refused by `llr`
+  called on its own.
+- A pair too loud to square in float64 scores nan with one warning that
+  says so. `snr`, `si_sdr`, `segmental_snr`, `sdi` and `lsd` gave nan with
+  numpy's warnings alone, 790 of them from `segmental_snr` on 3 s; STOI and
+  ESTOI called the pair too short, and SDR gave mir_eval's nan with no
+  reason.
+- `eer`, `min_dcf` and `det_curve` refuse a masked array with trials
+  masked; the hidden values were counted.
+- `AudioEvaluate.pesq_score_exe` scored nan for every pair with version 2.0
+  of the ITU program, which prints the MOS-LQO after the raw score on the
+  same line. It reads the raw score, the first number after the `=`, names
+  in one warning the runs that gave no score, and refuses a rate other than
+  8000 or 16000, at which the program prints its usage text instead.
+- A numba that will not import with the installed numpy raises
+  `DependencyError` with numba's own message at the first feature built on
+  librosa, and `kudio pitch` reports it on one line. It got past
+  `import librosa` and failed inside librosa as a plain `ImportError`.
+- `compare_enhancers` reports a run whose output the length check refuses
+  as a row with `error` set, the check's `ValueError` in it, and scores the
+  other runs. A custom enhancer that returned a third of the clip raised
+  out of the whole comparison.
+- `enhance_folder` checks `noise=` and `noise_kwargs` before the first
+  file, as it checks the method's parameters, and refuses a misspelt
+  estimator or a key it does not take with one `FeatureError`. Each came
+  back as the same failure on every file, "0/2 written, 2 failed" for two.
+
+### Documentation
+
+- A guide page for recognizers, verifiers and pitch trackers; sections on
+  Hu and Loizou's measures, the log-spectral distance, the mel-cepstral
+  distortion, NCM and CSII, SIIB, several sources, SRMR, WADA-SNR, input a
+  metric cannot score, a whole test set, confidence intervals and tests, and
+  reporting and citing a metric; `kudio score` on the command-line page; and
+  a page on how each metric was checked, with what, and how closely it
+  agrees.
+- Every work the guide cites has its full reference: authors, title, venue,
+  year, pages and DOI where there is one.
+- `tools/validation/pesq_conformance.py` checks `pesq` against ITU's
+  conformance test 2(b), from the files ITU gives out. The PESQ section of
+  the guide says what P.862's Annex A requires, what the ITU program prints,
+  and that ITU corrected wideband PESQ in 2018, which the `pesq` package does
+  not include. The migration page no longer says most enhancement papers
+  quote the raw score.
+- `tools/validation/sii_tables.py` checks the ANSI S3.5-1997 numbers in
+  `ncm` and `csii` against two free copies of the standard's tables, and the
+  docstrings name the column of Table B.1 the importance values come from:
+  short passages of easy reading material.
+
 ## [3.9.1] - 2026-10-24
 
 Documentation and type annotations; nothing in the library behaves

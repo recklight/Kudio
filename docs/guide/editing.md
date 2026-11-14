@@ -165,6 +165,13 @@ All four are Butterworth filters, fourth order unless you pass `order=`.
     edges have to sit strictly between 0 and Nyquist, and band edges given
     the wrong way round are refused.
 
+[`band_filter`][kudio.effects.filters.band_filter] is the function behind all
+four, with the kind as `btype=` and `cutoff=` a frequency or a `(low, high)`
+pair, for code that picks the filter at run time:
+`kudio.band_filter(y, sr, (300, 3400), "bandpass")` is `kudio.bandpass(y, sr)`.
+It holds every edge to the rule above, so a low-pass at Nyquist is refused
+there rather than handed back.
+
 ### Zero-phase by default
 
 The filters run forwards over the clip and then backwards (scipy's
@@ -377,8 +384,8 @@ semitones and keeps the length;
 [`time_stretch`][kudio.effects.augment.time_stretch] changes the length by
 `rate` (above 1 is faster) and keeps the pitch. Both come from librosa. On a
 second of a 200 Hz harmonic tone that [`f0`][kudio.core.pitch.f0] reads as
-200.5 Hz, `n_steps=2` gives 225.0 Hz in the same 16000 samples (two semitones
-up is 225.1), and `rate=1.25` gives 12800 samples still at 200.5 Hz.
+200.5 Hz, `n_steps=2` gives 225.0 Hz in the same 16000 samples, two semitones
+up to the hundredth, and `rate=1.25` gives 12800 samples still at 200.5 Hz.
 
 ### Noise at a set SNR
 
@@ -451,8 +458,10 @@ Masking unnormalised log10 power with zero instead would mean a power of 1
 whatever the clip, brighter than nearly everything it covers, so the mean is
 the default; pass `mask_value=` for another value.
 
-[^specaugment]: D. S. Park et al., "SpecAugment: A Simple Data Augmentation
-    Method for Automatic Speech Recognition", Interspeech 2019.
+[^specaugment]: D. S. Park, W. Chan, Y. Zhang, C.-C. Chiu, B. Zoph, E. D. Cubuk
+    and Q. V. Le, "SpecAugment: A simple data augmentation method for
+    automatic speech recognition", Proc. Interspeech 2019, pp. 2613-2617,
+    doi:10.21437/Interspeech.2019-2680, Sec. 2.
 
 ## Where the parameters are
 

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-import librosa
 import numpy as np
 
+from kudio import _optional
 from kudio._samples import as_float
 from kudio.exceptions import FeatureError
 
@@ -44,9 +44,9 @@ def trim_silence(y: np.ndarray, top_db: float = 30.0,
     y = np.asarray(y)
     # found on the float reading, where uint8 silence is 0 rather than 128,
     # and cut from y itself, so the clip comes back in its own type
-    _, index = librosa.effects.trim(
-        _time_last(as_float(y)), top_db=top_db, frame_length=frame_length,
-        hop_length=hop_length)
+    x = _time_last(as_float(y))
+    _, index = _optional.librosa().effects.trim(
+        x, top_db=top_db, frame_length=frame_length, hop_length=hop_length)
     start, end = int(index[0]), int(index[1])
     return y[start:end].copy(), (start, end)
 
@@ -60,7 +60,7 @@ def split_on_silence(y: np.ndarray, top_db: float = 30.0,
     frames.
     """
     y = np.asarray(y)
-    intervals = librosa.effects.split(
-        _time_last(as_float(y)), top_db=top_db, frame_length=frame_length,
-        hop_length=hop_length)
+    x = _time_last(as_float(y))
+    intervals = _optional.librosa().effects.split(
+        x, top_db=top_db, frame_length=frame_length, hop_length=hop_length)
     return [y[start:end].copy() for start, end in intervals]

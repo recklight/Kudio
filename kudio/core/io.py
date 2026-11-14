@@ -14,10 +14,11 @@ from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import soundfile as sf
-from tqdm import tqdm
 
+from kudio import _optional
+from kudio._progress import tqdm
 from kudio._samples import as_float
-from kudio.exceptions import AudioIOError
+from kudio.exceptions import AudioIOError, DependencyError
 
 __all__ = [
     'check_path',
@@ -274,6 +275,9 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
     """
     if sr is not None and sr <= 0:
         raise ValueError(f"sr must be a positive rate or None, got {sr!r}")
+    # a missing librosa is not a file that cannot be read, so it is raised
+    # here rather than turned into an AudioIOError below
+    librosa = None if sr is None else _optional.librosa()
     try:
         if sr is None:
             y, rate = sf.read(str(wav_dir), dtype='float32', always_2d=False)
@@ -283,7 +287,6 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
             _warn_non_finite(y, wav_dir)
             return y, int(rate)
         # resampling path (heavier)
-        import librosa
         y, rate = librosa.load(str(wav_dir), sr=sr, mono=mono)
         if y.ndim > 1:
             # librosa hands back (channels, frames); the rest of kudio -- and
@@ -320,7 +323,7 @@ def resample(y: np.ndarray, orig_sr: int, target_sr: int,
         return y
     if y.ndim > 2:
         raise ValueError(f"expected (frames,) or (frames, channels), got shape {y.shape}")
-    import librosa
+    librosa = _optional.librosa()
     # librosa resamples its last axis by default, which on a channels-last
     # array is the channel axis: a (16000, 2) clip came back (16000, 1)
     out = librosa.resample(y.astype(np.float32), orig_sr=orig_sr,
@@ -645,7 +648,9 @@ def convert_folder(src: Any, dst: PathLike, *,
         replaced (:func:`check_file`).
     :param progress: optional ``callback(done, total, path)``.
     :param on_error: ``'collect'`` (default) records the failure and carries on;
-        ``'raise'`` stops at the first one.
+        ``'raise'`` stops at the first one. A missing package
+        (:class:`~kudio.exceptions.DependencyError`, librosa for *sr* or
+        *trim_db*) is raised either way: it would fail every file the same way.
     :param root: the folder the output layout is measured from. Every input
         has to be inside it.
     """
@@ -692,6 +697,8 @@ def convert_folder(src: Any, dst: PathLike, *,
             target = Path(check_file(target, rename=not overwrite))
             save_wave(target, y, rate, subtype=subtype)
             outputs.append(target)
+        except DependencyError:
+            raise
         except Exception as e:
             if on_error == 'raise':
                 raise

@@ -283,8 +283,8 @@ def audio_report(y: np.ndarray, sr: int) -> AudioReport:
         loud = float(np.percentile(finite, 95))
         floor = float(np.percentile(finite, 10))
         if digital_silence >= 0.1:
-            # pauses of exact zeros: the floor is silence, not the quietest
-            # stretch of speech, which is what the percentile used to land on
+            # pauses of exact zeros: the floor is silence; the 10th
+            # percentile would land on the quietest stretch of speech instead
             floor = float('-inf')
         silence_ratio = float(np.mean((frame_db < loud - _SILENCE_REL_DB)
                                       | zero_frames))

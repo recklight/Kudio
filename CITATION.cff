@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use Kudio in your research, please cite it as below."
+title: "Kudio"
+abstract: "Audio toolkit, speech most of all: I/O, recording, features, noisy-data synthesis, enhancement and evaluation."
+type: software
+authors:
+  - alias: "RL"
+version: "4.0.0"
+date-released: "2026-11-14"
+license: MIT
+repository-code: "https://github.com/recklight/Kudio"
+url: "https://recklight.github.io/Kudio/"
+keywords:
+  - audio
+  - acoustic
+  - signal-processing
+  - speech-enhancement

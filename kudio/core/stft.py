@@ -24,6 +24,8 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
+from kudio import _optional
+
 __all__ = ['STFT']
 
 
@@ -101,8 +103,8 @@ class STFT:
         multiplies the complex spectrum by a real gain and inverts it, so it
         needs the phase kept — see :func:`kudio.spectral_enhance`.
         """
-        import librosa
         from kudio.core.feature import _mono
+        librosa = _optional.librosa()
         spec = librosa.stft(np.asarray(_mono(y, "STFT.analyse()"), dtype=np.float32),
                             n_fft=self.n_fft, hop_length=self.hop_length,
                             win_length=self.win_length, window=self.window)
@@ -116,7 +118,7 @@ class STFT:
         length and the round trip is sample-aligned, which is what an A/B or a
         training target needs.
         """
-        import librosa
+        librosa = _optional.librosa()
         out = librosa.istft(np.asarray(spec).T, hop_length=self.hop_length,
                             win_length=self.win_length, window=self.window,
                             n_fft=self.n_fft, length=length)

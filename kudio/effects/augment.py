@@ -9,10 +9,9 @@ from __future__ import annotations
 import warnings
 from typing import Callable, Optional, Tuple
 
-import librosa
 import numpy as np
-from scipy.signal import fftconvolve
 
+from kudio import _optional
 from kudio._samples import to_float as _to_float
 from kudio.exceptions import FeatureError
 
@@ -56,9 +55,10 @@ def time_stretch(y: np.ndarray, rate: float) -> np.ndarray:
     """
     if rate <= 0:
         raise ValueError(f"rate must be > 0, got {rate}")
+    effects = _optional.librosa().effects
     x, back = _to_float(y)
     return back(_each_channel(
-        x, lambda c: _quietly(librosa.effects.time_stretch, c, rate=rate)))
+        x, lambda c: _quietly(effects.time_stretch, c, rate=rate)))
 
 
 def pitch_shift(y: np.ndarray, sr: int, n_steps: float) -> np.ndarray:
@@ -67,9 +67,10 @@ def pitch_shift(y: np.ndarray, sr: int, n_steps: float) -> np.ndarray:
     A ``(frames, channels)`` array is shifted channel by channel, and integer
     audio comes back in its own type, as :func:`gain` does it.
     """
+    effects = _optional.librosa().effects
     x, back = _to_float(y)
     return back(_each_channel(
-        x, lambda c: _quietly(librosa.effects.pitch_shift, c, sr=sr, n_steps=n_steps)))
+        x, lambda c: _quietly(effects.pitch_shift, c, sr=sr, n_steps=n_steps)))
 
 
 def gain(y: np.ndarray, db: float) -> np.ndarray:
@@ -165,6 +166,8 @@ def reverb(y: np.ndarray, sr: int, decay: float = 0.3,
 
     A ``(frames, channels)`` array gets the same echoes on every channel.
     """
+    from scipy.signal import fftconvolve
+
     delay = max(1, int(sr * delay_ms / 1000.0))
     ir_len = delay * 8
     impulse = np.zeros(ir_len, dtype=np.float32)
@@ -192,9 +195,12 @@ def spec_augment(spec: np.ndarray, n_freq_masks: int = 1, n_time_masks: int = 1,
     in (or squeezable to it). Returns a masked copy.
 
     :param mask_value: what a masked cell becomes. ``None`` (the default) uses
-        the spectrogram's mean, which is SpecAugment's choice: 0 is the mean of
-        a standardised spectrogram, but on kudio's log10 power it is a power of
-        1, louder than most of the cells it would hide.
+        the spectrogram's mean, which is SpecAugment's choice (D. S. Park et
+        al., "SpecAugment: a simple data augmentation method for automatic
+        speech recognition", Proc. Interspeech 2019, pp. 2613-2617, Sec. 2,
+        doi:10.21437/Interspeech.2019-2680): 0 is the mean of a standardised
+        spectrogram, but on kudio's log10 power it is a power of 1, louder
+        than most of the cells it would hide.
     """
     rng = np.random.default_rng(seed)
     out = np.array(spec, copy=True)

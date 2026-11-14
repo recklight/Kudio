@@ -1,4 +1,4 @@
-# Migrating from v2
+# Migrating from v2 and 3.x
 
 kudio 3.0 was a cleanup release. It gave the feature functions descriptive
 names, moved plotting, dataframes and live audio out of the default install,
@@ -10,7 +10,8 @@ install no longer brings; and PESQ, which comes from a different package now.
 
 The later 3.x releases changed a few results for the same call, most of them
 fixes. They are listed at the end, because a v2 project upgrading today gets
-all of them at once.
+all of them at once. Code written for 3.7 or later needs only the
+[last section](#coming-from-3x-to-40).
 
 ## Upgrading
 
@@ -174,8 +175,8 @@ for PESQ by name with `kudio.score(..., ["pesq"])`, which raises.
 
 By default PESQ is MOS-LQO, wideband for 16 kHz audio. Score the v2 outputs
 again with 3.x rather than set new numbers beside an old table, because the
-two need not be on the same scale. The raw narrowband P.862 score most
-enhancement papers quote is two arguments away:
+two need not be on the same scale. The raw narrowband P.862 score is two
+arguments away:
 
 ```python
 ev = kudio.AudioEvaluate(clean_files, noisy_files,
@@ -184,8 +185,8 @@ ev = kudio.AudioEvaluate(clean_files, noisy_files,
 
 [`pesq`][kudio.core.evaluator.pesq] takes the same two choices as `mode=` and
 `scale=`, and [`score`][kudio.core.evaluator.score] and `eval_metrics` as
-`pesq_mode=` and `pesq_scale=`. The ITU `pesq.exe` binary prints that raw
-score too, and
+`pesq_mode=` and `pesq_scale=`. The ITU reference program, `pesq.exe`, prints
+that raw score too, ahead of the MOS-LQO, and
 [`pesq_score_exe`][kudio.core.evaluator.AudioEvaluate.pesq_score_exe] still
 runs it, on Windows and with `[data]`. [Measuring quality](guide/metrics.md)
 covers which scale to report.
@@ -289,3 +290,84 @@ the keyword nor the seed.
   process pool. Keep [`Synthesizer.seed`][kudio.core.synth.Synthesizer.seed]
   after a run and the same corpus can be built again;
   [Building a noisy dataset](guide/synthesis.md) shows how.
+
+## Coming from 3.x to 4.0
+
+4.0 adds metrics, and the ones 3.x had give the same numbers on every pair
+that has something to score, except PESQ on a pair of two lengths.
+
+PESQ gets the two signals whole, the way the ITU program reads two files:
+`pesq`, and the PESQ in `score`, `eval_metrics`, `AudioEvaluate` and
+`compare_enhancers`. 3.9.1 cut the longer one to the shorter's length first.
+PESQ needs no cut, since it finds the delay between the two itself, and it
+works over both as they are, so the cut moved its score even where it dropped
+only silence: by up to 0.56 on the 40 pairs of ITU's conformance test 2(b),
+where kudio now gives ITU's scores to their third decimal. Pairs of one length
+score as before. `pesq`, `score` asked for PESQ alone and
+`AudioEvaluate.pesq_score` no longer warn about two lengths or refuse a pair
+past `MAX_LENGTH_MISMATCH`, and an empty side scores nan.
+
+Otherwise what a 3.x call can see differently is mostly input that has
+nothing to score, or that is not a signal:
+
+- `snr`, `si_sdr`, `segmental_snr` and `sdi` give nan with a warning for an
+  empty pair or a reference that is digital silence throughout, where 3.9.1
+  gave a number made by their 1e-12 guards: `sdi` of an empty pair was 0.0,
+  which reads as a perfect copy. `si_sdr` does the same for any constant
+  reference, and `segmental_snr` for a pair shorter than one frame, which
+  was a nan with no warning. A NaN or inf sample raises `ValueError` where
+  it turned the score into nan or, in `segmental_snr`, into a number that
+  looked fine.
+- `pesq` gives nan with a warning where the `pesq` package raised: an empty
+  side, a silent reference, a side under 0.25 s, no utterance found, an
+  output at or near digital silence. Code that caught those errors to put
+  in a floor of its own now gets nan without an error, and pandas skips nan
+  in a mean, so check for nan where the errors were caught.
+- STOI, ESTOI and SDR, through `score`, `eval_metrics` and `AudioEvaluate`,
+  give nan with a warning for an empty pair, for one where either signal is
+  digital silence throughout, and for STOI and ESTOI a pair under 25.6 ms.
+  Through `score`, 3.9.1 raised numpy's `AxisError` or mir_eval's errors
+  there, and ESTOI of a silent signal came back as nan or as a small number
+  that changed from call to call, since pystoi adds noise from numpy's
+  global generator.
+- `segmental_snr` gives the same number as before, and now warns when frames
+  of the reference are digital silence, which it scores at its -10 dB floor
+  (0 dB where the output is silent there too). A synthetic reference with
+  exact zeros in its pauses gets that warning on every call.
+- int64 and uint64 samples raise `ValueError`: on their full scale 16-bit
+  audio sits 288 dB down, where the 1e-12 guards decide the score, and `snr`
+  of int16 samples held as int64 was 0 dB in 3.9.1. A list of ints through
+  `np.array` and `astype(int)` give int64 everywhere but under numpy 1.x on
+  Windows, so pass the samples as the type they were read as, or as float. Complex, boolean and text arrays,
+  masked samples and a rate that is not one positive number are refused as
+  well, and a signal that peaks under one step of 16-bit audio (-90.3 dBFS)
+  is scored with a warning.
+- [`dnsmos`][kudio.core.dnsmos.dnsmos] raises `ValueError` where it raised
+  `FeatureError` for malformed input, and refuses NaN and inf samples, which
+  it passed to the model; an empty clip scores nan with a warning.
+  `kudio.core.dnsmos.MODEL_NAMES` is now `MODELS`, which maps each model to
+  its folder and file.
+- Every warning of the metrics starts with the function's name, the length
+  warning included:
+
+    ```text
+    UserWarning: stoi(): the pair needs about 0.4 s of speech left once its silent frames are removed, and has less; scored nan
+    ```
+
+    3.9.1 wrote `STOI needs about 0.4 s of speech after silence is removed
+    and got less; scored nan`, and started the length warning with `ref is`,
+    so a warnings filter that matches the old texts needs the new ones.
+- `AudioEvaluate` says after each pass which files a metric had no score
+  for, and why, in one warning per column; 3.9.1 sent each to the `kudio`
+  logger. The tables are the same.
+- [`METRICS`][kudio.core.evaluator.METRICS] lists every name `score` takes,
+  23 where 3.9.1 had 8. `score` with no list runs the same eight as before,
+  but code that passes `METRICS` itself runs the 15 new names as well.
+- `INIT` and `EST` in `kudio.enhance.traditional` keep only the MCRA estimate
+  [`trad_enhance`][kudio.enhance.traditional.trad_enhance] runs, and `INIT`
+  no longer takes the sample rate: `INIT(ns_ps)` where it was
+  `INIT(ns_ps, fs)`. `trad_enhance` gives the same output as before.
+
+`import kudio` loads librosa only when a feature needs it, so the metrics
+run where librosa is missing or will not import; [the changelog](changelog.md)
+has the rest.

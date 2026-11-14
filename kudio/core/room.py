@@ -117,13 +117,15 @@ class Reverberation:
         fits at R² 0.94 and comes back with a 3.9 second "reverberation time".
 
         What gives it away is that its EDT and T30 disagree by a factor of
-        eleven. In a real room the first 10 dB and the 5-to-35 dB span describe
-        the same tail and land within a few per cent of each other, so a large
-        disagreement means the two spans were measuring different things and
-        neither of them was a room. *edt_ratio* is a sanity bound and not a
+        eleven. In a diffuse room the first 10 dB and the 5-to-35 dB span
+        describe the same tail and land close together, so a large
+        disagreement usually means the two spans were measuring different
+        things. A room that is not diffuse can do it too: Schroeder's 1965
+        measurement in a concert hall, a band 38 Hz wide centred at 167 Hz,
+        fell at 0.89 s per 60 dB over its first 10 dB and 2.09 s over the rest,
+        which puts EDT/T30 near 0.43. *edt_ratio* is a sanity bound and not a
         figure from the standard: over 40 seeds of ``rir(16000, 0.6)`` the
-        ratio runs 0.87 to 1.16 at ``drr_db=6`` and 0.95 to 1.09 at 0, and
-        published halls stay well inside 0.8 to 1.3.
+        ratio runs 0.87 to 1.16 at ``drr_db=6`` and 0.95 to 1.09 at 0.
 
         A close microphone has no EDT to compare: the direct sound alone
         carries the first 10 dB of the decay, so the EDT is ``nan``. That says
@@ -259,9 +261,13 @@ def apply_rir(y: np.ndarray, ir: np.ndarray, *,
 def schroeder_curve(ir: np.ndarray) -> np.ndarray:
     """Backward-integrated energy decay of *ir*, in dB, starting at 0.
 
-    Schroeder's method: the decay a room would show if you averaged infinitely
-    many noise bursts, obtained from one impulse by integrating its energy from
-    the end backwards. It is what makes a single measurement readable.
+    Schroeder's method (M. R. Schroeder, "New method of measuring reverberation
+    time", J. Acoust. Soc. Am. 37(3), pp. 409-412, 1965,
+    doi:10.1121/1.1909343): the decay you would get by averaging the decays
+    of infinitely many noise excitations, each switched off once the room has
+    settled, obtained from one impulse response by integrating its squared
+    values from the end backwards (his eq. 6). It is what makes a single
+    measurement readable.
     """
     ir = _mono("schroeder_curve()", ir, "impulse response")
     if ir.size == 0:
@@ -292,7 +298,8 @@ def _mono(where: str, x, what: str) -> np.ndarray:
 
 def _onset(ir: np.ndarray) -> int:
     """Where the response starts: the first sample within 20 dB of its peak,
-    ISO 3382-1's rule for the arrival of the direct sound."""
+    so the time the sound takes to reach the microphone, and any silence
+    before it, is not counted as part of the decay."""
     level = np.abs(ir)
     return int(np.argmax(level >= 0.1 * level.max())) if level.max() > 0 else 0
 
@@ -338,16 +345,21 @@ def _clarity(ir: np.ndarray, sr: int, split_ms: float) -> float:
 
 
 def rt60(ir: np.ndarray, sr: int) -> Reverberation:
-    """Measure a room from its impulse response, to ISO 3382-1.
+    """Measure a room from its impulse response, with ISO 3382-1's
+    evaluation ranges.
 
     T20, T30 and EDT are read off one backward-integrated decay curve
     (:func:`schroeder_curve`); C50, C80 and DRR are energy ratios taken from
-    the response around its peak. The response is measured from its onset,
+    the response around its peak. It measures the whole band it is given:
+    ISO 3382-1 measures in octave or one-third-octave bands (its 5.1), so
+    band-filter the response first for a figure to set beside one measured
+    to the standard. The response is measured from its onset,
     the first sample within 20 dB of the peak, so leading silence -- time of
     flight, converter latency -- is not counted as decay.
 
-    It does not find or remove a noise floor. A recorded response whose tail
-    reaches the floor less than 35 dB down has no honest T30, and
+    It does not find or remove a noise floor. ISO 3382-1 asks for a response
+    at least 45 dB above the background for T30, and 35 dB for T20 (its
+    4.2.1); a recorded response with less has no T30 to quote, and
     :meth:`Reverberation.reliable` cannot tell: check the raw response first.
 
     >>> room = kudio.rt60(ir, 16000)

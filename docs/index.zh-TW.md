@@ -20,9 +20,20 @@ Kudio 是處理音訊的 Python 工具組，主要對象是語音。它能
 [從麥克風錄音](guide/live-audio.md)，邊錄邊畫圖或邊降噪。大部分功能都是吃一個 numpy
 陣列加一個取樣率的小函式，寫在一般的腳本裡就能組合起來用，不需要先設定什麼。
 
+[指標](guide/metrics.md)涵蓋語音論文常報告的那些：增強用 PESQ、STOI、SI-SDR、Hu 與 Loizou
+的指標、MCD 和對數頻譜距離；可懂度用 NCM、CSII 和 SIIB；分離用 SI-SDRi、PIT 和
+BSS Eval；不需參考訊號的有 DNSMOS P.835 和 P.808、SRMR 和 WADA-SNR；另外還有
+[語音辨識、語者驗證、語者分段標記和音高追蹤](guide/task-metrics.md)的錯誤率，校準也包括
+在內。每個指標都拿去和算出文獻數字的那份實作比對過，沒有這種實作的，就用第二種方式把
+定義重算一遍；拿什麼比、吻合到什麼程度，寫在[指標的驗證方式](validation.md)。
+[`score_dataset`][kudio.core.dataset_score.score_dataset]，或在 shell 裡用
+`kudio score`，可以把整個測試集一路算到論文裡的那張表：附 bootstrap 信賴區間的平均、
+對基準的符號翻轉檢定、說明數字怎麼算出來的[簽章](guide/metrics.md#signing-a-result)，
+以及背後每篇文獻的 BibTeX，內容和 [`cite`][kudio.core.registry.cite] 寫出的一樣。
+
 我寫它是為了整理語音語料庫，以及訓練和評估降噪模型；它也同樣適合一整個資料夾的
 現場錄音，在有人逐一聽完之前，先知道哪些能用。常用的工作也做成了 `kudio` 的
-[子指令](cli.md)，從 `kudio report` 到 `kudio synth` 一共十五個。負責檢查的那幾個在
+[子指令](cli.md)，從 `kudio report` 到 `kudio score` 一共十六個。負責檢查的那幾個在
 發現問題時會以 1 結束，所以可以直接當 shell 腳本裡的測試。
 
 ## 安裝 {#install}
@@ -189,13 +200,20 @@ pip install "kudio[eval,viz]"    # extras go in brackets, by name
 - [`score`][kudio.core.evaluator.score]、
   [`AudioEvaluate`][kudio.core.evaluator.AudioEvaluate] 以及不需額外安裝的指標函式，
   在兩個訊號長度不同時會警告；當較長那個有超過一半量不到時，會引發 `ValueError`
-  （[`MAX_LENGTH_MISMATCH`][kudio.core.evaluator.MAX_LENGTH_MISMATCH]）。
-  [`compare_enhancers`][kudio.enhance.spectral.compare_enhancers] 和 `pesq`
-  用同樣的方式檢查參考訊號，而且每個指標都會拒絕立體聲的一對，不會把兩個聲道當成
-  一個訊號來評分。
+  （[`MAX_LENGTH_MISMATCH`][kudio.core.evaluator.MAX_LENGTH_MISMATCH]），只要求 PESQ
+  時除外。
+  [`compare_enhancers`][kudio.enhance.spectral.compare_enhancers] 用同樣的方式
+  檢查參考訊號，而且每個指標都會拒絕立體聲的一對，不會把兩個聲道當成一個訊號來評分。
+  `score` 和 `AudioEvaluate` 執行的指標裡，只有 PESQ 拿到完整的兩段，跟 ITU 程式讀兩個
+  檔案一樣，因為它會自己找出兩者之間的延遲。
 - [`pesq`][kudio.core.evaluator.pesq] 遇到 8 和 16 kHz 以外的取樣率會引發
-  `ValueError`，不會背著你偷偷重新取樣；遇到標準沒有定義的組合，例如原始的寬頻分數，
+  `ValueError`，不會背著你偷偷重新取樣；遇到 PESQ 給不出來的組合，例如原始的寬頻分數，
   也一樣。
+- 每個指標遇到讀不成訊號的輸入，都會引發以函式名稱開頭的 `ValueError`：NaN 或 inf
+  樣本、int64 樣本（以它的滿刻度來看，16-bit 音訊落在 288 dB 以下），或不是單一正數的
+  取樣率。格式正確、卻沒有東西可評的輸入，例如空的一對，或整段數位靜音的參考訊號，會得到
+  nan 和一則說明原因的 `UserWarning`，絕不會給出一個由防止除以零的保護項算出來的數字。
+  完整的規則在[無法評分的輸入](guide/metrics.md#input-a-metric-cannot-score)。
 - [`save_wave`][kudio.core.io.save_wave] 拒絕寫入含 NaN 或 inf 的波形，不論格式，
   都以 [`AudioIOError`][kudio.exceptions.AudioIOError] 拒絕。寫成 `FLOAT` 的話，NaN
   會傳到每個讀這個檔案的程式；寫成整數格式則會變成普通的樣本值，下游沒有人會知道這段

@@ -159,6 +159,13 @@ y = kudio.lowpass(y, sr, cutoff=7000)      # hiss
     交回，但交回的是一份複本。其他濾波器的邊界必須嚴格落在 0 和奈奎斯特頻率之間，
     頻帶邊界前後寫反時會被拒絕。
 
+這四個濾波器背後都是 [`band_filter`][kudio.effects.filters.band_filter]：
+種類用 `btype=` 指定，`cutoff=` 是一個頻率或 `(low, high)`，
+適合要在執行時才決定用哪種濾波器的程式碼：
+`kudio.band_filter(y, sr, (300, 3400), "bandpass")` 就等於 `kudio.bandpass(y, sr)`。
+它的每個邊界都照上面的規則檢查，所以截止頻率在奈奎斯特頻率的低通會被拒絕，
+不會原樣交回。
+
 ### 預設為零相位 {#zero-phase-by-default}
 
 濾波器會先正向跑過片段，再反向跑一次（scipy 的 `sosfiltfilt`）。反向那一次抵銷了
@@ -348,7 +355,7 @@ ITU-R BS.1770-4 量測響度；[檢查錄音](inspection.md)用一段含一聲�
 長度不變；[`time_stretch`][kudio.effects.augment.time_stretch] 依 `rate` 改變
 長度（大於 1 是變快），音高不變。兩者都來自 librosa。拿一秒鐘、
 [`f0`][kudio.core.pitch.f0] 量出來是 200.5 Hz 的 200 Hz 諧波音來試，
-`n_steps=2` 會在同樣的 16000 個樣本裡得到 225.0 Hz（升兩個半音應該是 225.1），
+`n_steps=2` 會在同樣的 16000 個樣本裡得到 225.0 Hz，和升兩個半音的值差不到 0.01 Hz，
 `rate=1.25` 則得到 12800 個樣本，音高仍是 200.5 Hz。
 
 ### 以指定 SNR 加入雜訊 {#noise-at-a-set-snr}
@@ -390,7 +397,7 @@ SNR 是對整段片段量的，包含停頓。一段一半是靜音的片段以 
 [`rir`][kudio.core.room.rir] 和 [`apply_rir`][kudio.core.room.apply_rir]，
 在[房間與通道](degradation.md)。
 
-### SpecAugment
+### SpecAugment {#specaugment}
 
 [`spec_augment`][kudio.effects.augment.spec_augment] 會把頻譜圖上隨機的帶狀區域
 遮掉：最多 `freq_mask_width` 個頻率格（8）和最多 `time_mask_width` 個音框（16），
@@ -413,8 +420,10 @@ masked = kudio.spec_augment(spec, seed=0)                # the default widths
 是什麼片段，都等於功率 1，比它蓋住的幾乎所有東西都亮，所以預設用平均值；要用
 其他值就傳 `mask_value=`。
 
-[^specaugment]: D. S. Park et al., "SpecAugment: A Simple Data Augmentation
-    Method for Automatic Speech Recognition", Interspeech 2019.
+[^specaugment]: D. S. Park, W. Chan, Y. Zhang, C.-C. Chiu, B. Zoph, E. D. Cubuk
+    and Q. V. Le, "SpecAugment: A simple data augmentation method for
+    automatic speech recognition", Proc. Interspeech 2019, pp. 2613-2617,
+    doi:10.21437/Interspeech.2019-2680, Sec. 2.
 
 ## 參數在哪裡 {#where-the-parameters-are}
 

@@ -17,7 +17,6 @@ from __future__ import annotations
 from typing import Sequence, Tuple, Union
 
 import numpy as np
-from scipy.signal import butter, sosfilt, sosfiltfilt
 
 from kudio.exceptions import FeatureError
 
@@ -76,6 +75,10 @@ def band_filter(y: np.ndarray, sr: int, cutoff: Union[float, Sequence[float]],
         raise FeatureError(f"expected (frames,) or (frames, channels), got shape {y.shape}")
     if y.size == 0:
         return y.copy()
+
+    # here and not with the module, which `import kudio` loads: scipy.signal
+    # takes twice as long to import as the rest of kudio together
+    from scipy.signal import butter, sosfilt, sosfiltfilt
 
     # axis=0 throughout: scipy filters the last axis by default, which on a
     # channels-last array is the channel axis

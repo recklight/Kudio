@@ -138,10 +138,10 @@ wet = kudio.apply_rir(y, measured)
 
 [`rt60`][kudio.core.room.rt60] returns a
 [`Reverberation`][kudio.core.room.Reverberation]. T20, T30 and EDT are read
-off one backward-integrated decay curve,
+off one backward-integrated decay curve,[^schroeder]
 [`schroeder_curve`][kudio.core.room.schroeder_curve]: the time it takes to fall
 from −5 to −25 dB, from −5 to −35 dB and from 0 to −10 dB, carried on to 60 dB.
-Those are the evaluation ranges of ISO 3382-1, and T30 is the figure usually
+Those are the evaluation ranges of ISO 3382-1,[^iso3382] and T30 is the figure usually
 quoted as the RT60. C50, C80 and DRR are energy ratios taken straight from the
 response: the first 50 or 80 ms after the peak against everything later, and
 ±2.5 ms around it against the rest. `fit` is the R² of the line fitted for T30.
@@ -172,10 +172,13 @@ T30 0.19 s, fit 0.802, reliable: False
 [`reliable()`][kudio.core.room.Reverberation.reliable] asks two questions. The
 first is whether the decay was straight, a `fit` of at least 0.9; the cut room
 fails it. The noisy speech passes it, which is why there is a second: whether
-EDT and T30 agree. Away from the source the first 10 dB and the −5 to −35 dB
-span describe the same tail, so EDT should be within a factor of
-[`MAX_EDT_RATIO`][kudio.core.room.MAX_EDT_RATIO] (2) of T30. That bound is a
-sanity check, not a figure from the standard. Over forty seeds of the 0.6 s,
+EDT and T30 agree. In a diffuse room, away from the source, the first 10 dB
+and the −5 to −35 dB span describe the same tail, so EDT should be within a
+factor of [`MAX_EDT_RATIO`][kudio.core.room.MAX_EDT_RATIO] (2) of T30. That
+bound is a sanity check, not a figure from the standard, and a room that is
+not diffuse can break it: the double-sloped decay Schroeder measured in a
+concert hall[^schroeder] fell at 0.89 s over its first 10 dB and 2.09 s over
+the rest, about 0.43 as EDT/T30. Over forty seeds of the 0.6 s,
 +6 dB room EDT/T30 stays between 0.87 and 1.16; the noisy speech puts it at 7.
 
 A recorded response does not need cutting before it is measured. `rt60`
@@ -200,8 +203,9 @@ off the result; this +6 dB room measures a DRR of +0.1 dB in the band.
     back as 1.23 s with a fit of 0.962. No cut fixes it: from 0.15 to 0.45 s
     the answer runs from 0.39 to 1.23 s, 0.54 s where the tail meets the floor,
     and `reliable()` says True every time. A decay curve always falls past
-    −35 dB at a cut, so check the response itself: T30 means something only
-    when the raw response is still clear of the noise where the decay curve
+    −35 dB at a cut, so check the response itself: ISO 3382-1 asks for a
+    response at least 45 dB above the noise for T30 (35 dB for T20), which
+    leaves the raw response 10 dB clear of the noise where the decay curve
     crosses −35 dB. If it is not, the recording holds no T30 to quote, and the
     answer is to measure again with more level.
 
@@ -224,7 +228,7 @@ off the result; this +6 dB room measures a DRR of +0.1 dB in the band.
 [`telephone`][kudio.effects.channel.telephone] does what a narrowband line
 does, in the order it does it: band-limit to 300–3400 Hz
 ([`TELEPHONE_BAND`][kudio.effects.channel.TELEPHONE_BAND]) at the original
-rate, resample to 8 kHz, compand through G.711 mu-law, and come back. The
+rate, resample to 8 kHz, compand through G.711[^g711] mu-law, and come back. The
 band-pass comes first because the resampler's anti-alias filter is not the
 line's passband. The result keeps the rate and the length it went in with, so
 it sits beside its source in a dataset.
@@ -248,8 +252,9 @@ stops below 4 kHz, so it names 8 kHz as the rate the file really had.
 ### Companding and bit depth
 
 [`mu_law`][kudio.effects.channel.mu_law] and
-[`a_law`][kudio.effects.channel.a_law] push the signal through a G.711
-companding curve, quantise it to 8-bit code words and expand it back. The
+[`a_law`][kudio.effects.channel.a_law] push the signal through the continuous
+mu-law or A-law curve that G.711's tables approximate, quantise it to 8-bit
+code words and expand it back. The
 steps are logarithmic, so the quantisation noise follows the signal down
 instead of sitting at a fixed floor. [`bit_depth`][kudio.effects.channel.bit_depth]
 spends the same 8 bits linearly, and [`snr`][kudio.core.evaluator.snr] shows
@@ -275,15 +280,16 @@ for level in (0, -6, -12, -18, -24):
 Over 24 dB of level, mu-law gives up 1.3 dB of SNR and linear 8-bit gives up
 21.7 dB, close to the 24 dB that 6 dB per halving predicts.
 
-These are the companding curves themselves, not the standard's
-piecewise-linear segments. Against Python's `audioop`, which is G.711 itself
-(and was removed in Python 3.13, so it cannot be a dependency), kudio's
-round-trip SNR comes out 0.25 to 0.83 dB higher over the levels in the table,
+These are the companding curves themselves, not the piecewise-linear
+segment tables G.711 defines the laws by. Against Python's `audioop`, which
+implements those tables (and was removed in Python 3.13, so it cannot be a dependency), kudio's
+round-trip SNR comes out 0.26 to 0.97 dB higher over the levels in the table,
 and single samples differ by a few hundredths of full scale at most: close
 enough for augmentation, and not a bit-exact decoder.
 
 A full-scale sine through `bit_depth` comes back at $6.02\,b + 1.76$ dB for
-$b$ bits: 49.9 dB at 8 bits and 98.1 dB at 16, on a 997 Hz tone.
+$b$ bits, 49.9 dB at 8 bits and 98.1 dB at 16; a 997 Hz tone at 16 kHz
+measures 50.0 and 98.0 dB.
 `dither=True` adds triangular (TPDF) dither two steps wide, peak to peak,
 before rounding, and costs 4.7 dB on that tone at 8 bits: the dither's own
 power is twice the rounding error's, so the noise triples, which is 4.8 dB.
@@ -296,7 +302,7 @@ every call dithers differently.
 
 [`dropouts`][kudio.effects.channel.dropouts] cuts the clip into packets of
 `packet_ms` (default 20 ms, [`PACKET_MS`][kudio.effects.channel.PACKET_MS], the
-packet G.711 uses over RTP) and loses some of them. The count is fixed at
+packet G.711 uses over RTP[^rtp]) and loses some of them. The count is fixed at
 `round(loss * packets)` rather than drawn packet by packet, and it is rounded
 per file: at 5%, a 1 s clip (50 packets) loses 2, which is 4%, and a clip of
 0.2 s (10 packets) or less loses nothing. `return_spans=True` also returns
@@ -350,7 +356,7 @@ the whole run. `burst=` sets the mean run length in packets:
 ![Thirty seconds of 5% packet loss, independent and in runs of 6](../images/degradation-loss-dark.webp#only-dark)
 
 The run lengths are geometric, as in the bad state of Gilbert's two-state
-model, and runs stay at least one surviving packet apart, so two never join
+model,[^gilbert] and runs stay at least one surviving packet apart, so two never join
 into one and the runs you count in the output are the runs that were drawn.
 
 `burst=1` is not the default under another name. Independent draws land side
@@ -442,3 +448,9 @@ kudio channel in.wav out.wav --loss 0.05 --burst 6 --conceal hold --seed 0
 
 The flags are on [Command line](../cli.md), and every parameter of every
 function here is in the [reference](../reference/degradation.md).
+
+[^schroeder]: M. R. Schroeder, "New method of measuring reverberation time", J. Acoust. Soc. Am. 37(3), pp. 409-412, 1965, doi:10.1121/1.1909343.
+[^iso3382]: ISO 3382-1:2009, "Acoustics — Measurement of room acoustic parameters — Part 1: Performance spaces".
+[^g711]: ITU-T Recommendation G.711 (11/1988), "Pulse code modulation (PCM) of voice frequencies".
+[^rtp]: H. Schulzrinne and S. Casner, "RTP profile for audio and video conferences with minimal control", RFC 3551, July 2003, Sec. 4.2, doi:10.17487/RFC3551.
+[^gilbert]: E. N. Gilbert, "Capacity of a burst-noise channel", Bell Syst. Tech. J. 39(5), pp. 1253-1265, 1960, doi:10.1002/j.1538-7305.1960.tb03959.x.

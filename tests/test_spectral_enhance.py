@@ -477,6 +477,25 @@ def test_enhance_folder_rejects_an_unknown_method(noisy_folder, tmp_path):
         kudio.enhance_folder(noisy_folder, tmp_path / "out", 'magic')
 
 
+@pytest.mark.parametrize("settings, words", [
+    ({'noise': 'mcar'},
+     "unknown noise estimator 'mcar'. Choose from initial, mcra, minimum, quantile"),
+    ({'noise_kwargs': {'windw': 3}},
+     "noise estimator 'mcra' does not take windw. It takes: ass, ad, ap, delta, window"),
+    ({'noise': 'quantile', 'noise_kwargs': {'quantile': 1.5}},
+     "quantile must be between 0 and 1, got 1.5"),
+])
+def test_enhance_folder_checks_the_noise_settings_before_the_first_file(
+        noisy_folder, tmp_path, settings, words):
+    """One error about the typo, where it was "0/3 written, 3 failed" with the
+    same sentence on every file."""
+    out = tmp_path / "out"
+    with pytest.raises(FeatureError) as caught:
+        kudio.enhance_folder(noisy_folder, out, **settings)
+    assert str(caught.value) == words
+    assert not out.exists(), "refused before the output folder was made"
+
+
 def test_enhance_folder_on_an_empty_folder(tmp_path):
     from kudio.exceptions import AudioIOError
     (tmp_path / "empty").mkdir()
@@ -540,6 +559,26 @@ def test_a_custom_enhancer_that_raises_is_a_row(noisy_and_clean):
         noisy, SR, ['wiener', ('bad', lambda y, s: 1 / 0)])
     assert results[1].error and "ZeroDivisionError" in results[1].error
     assert results[0].error is None
+
+
+def test_an_output_the_length_check_refuses_is_a_row(noisy_and_clean):
+    """A third of the clip back is past MAX_LENGTH_MISMATCH against the
+    reference. That is this run's failure, in the check's own words; it
+    raised out of compare_enhancers and the rows either side were lost."""
+    noisy, clean = noisy_and_clean
+    results = kudio.compare_enhancers(
+        noisy, SR, ['wiener', ('third', lambda y, sr: y[:len(y) // 3]), 'logmmse'],
+        reference=clean, metrics=False)
+    assert [r.method for r in results] == ['wiener', 'third', 'logmmse']
+    before, short, after = results
+    assert short.error.startswith("ValueError: the reference is 80000 samples "
+                                  "and the clip 26666")
+    assert "unmeasured" in short.error
+    # the same row a run that raises gives
+    assert short.audio.size == 0 and short.si_sdr_db is None
+    assert np.isnan(short.noise_floor_db) and np.isnan(short.lufs)
+    for scored in (before, after):
+        assert scored.error is None and scored.si_sdr_db is not None
 
 
 def test_a_custom_enhancer_object_can_be_passed_directly(noisy_and_clean):

@@ -180,7 +180,7 @@ aligned = kudio.melspectrogram(y, sr=sr, n_frames=1,
 [`ContextFrames`][kudio.core.feature.ContextFrames] 接受一串矩陣，三維
 陣列則當成每段語句一個矩陣來讀。
 
-### `stack_context`
+### `stack_context` {#stack_context}
 
 [`stack_context`][kudio.core.feature.stack_context] 把每個音框和它前後
 各 `context` 個音框接在一起：`(frames, dim)` 變成
@@ -209,7 +209,7 @@ print(kudio.stack_context(frames, context=1, pad="zero")[0])
 的音框。`forward_backward=` 和 `STFT.forward(context=)` 一律補零。要用
 邊緣填補，請先算不帶前後文的頻譜圖，再對它呼叫 `stack_context`。
 
-### `ContextFrames`
+### `ContextFrames` {#contextframes}
 
 前後各堆疊 5 個音框，每一列就有十一個音框寬，事先堆疊好的訓練集，會佔用
 特徵本身十一倍的記憶體。[`ContextFrames`][kudio.core.feature.ContextFrames]
@@ -235,7 +235,7 @@ print(np.array_equal(batch, full[[0, 5, 829]]))              # True
 做出的目標，索引會一一對齊。`np.asarray(bank)` 會建出完整的堆疊，在真實
 的語料庫上，這正是你本來想省下的記憶體。
 
-### `frame_windows`
+### `frame_windows` {#frame_windows}
 
 [`frame_windows`][kudio.core.feature.frame_windows] 把矩陣切成互不重疊、
 每個 `n_frames` 長的視窗：`(frames, dim)` 變成
@@ -405,6 +405,6 @@ coeffs = kudio.mfcc_from_files(files, n_mfcc=13, desired_samples=sr)    # (3, 32
 
 ## 參數在哪裡 {#where-the-parameters-are}
 
-STFT 和特徵相關的函式與類別，連同簽名和預設值，都在 API 參考的
+STFT 和特徵相關的函式與類別，連同函式簽章和預設值，都在 API 參考的
 [STFT 與特徵](../reference/features.md)。還在呼叫 `w2s` 或 `wav2mel` 的
 程式碼，請看[從 v2 遷移](../migrating.md)。

@@ -101,8 +101,9 @@ def test_agrees_with_the_reference_codec_where_it_is_available():
     filters are checked against pyloudnorm.
 
     The curve here is the analytic one, not the standard's segment layout, so
-    the two are close rather than identical. Half a decibel of round-trip SNR
-    is the claim the docstring makes; this is where it comes from.
+    the two are close rather than identical. On this fixture, at its own
+    level, the round-trip SNRs are 0.47 dB apart; the module docstring gives
+    the spread over 24 dB of level.
     """
     audioop = pytest.importorskip("audioop",
                                   reason="removed in Python 3.13")

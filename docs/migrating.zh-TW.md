@@ -1,4 +1,4 @@
-# 從 v2 遷移 {#migrating-from-v2}
+# 從 v2 與 3.x 遷移 {#migrating-from-v2-and-3x}
 
 kudio 3.0 是一個以整理為主的版本。它替特徵函式取了看名字就懂的名稱，把畫圖、
 dataframe 和即時音訊移出預設安裝，並移除了 v2 還留著的相容性模組。大部分 v2
@@ -8,7 +8,8 @@ dataframe 和即時音訊移出預設安裝，並移除了 v2 還留著的相容
 套件。
 
 之後的 3.x 版本讓幾個呼叫在同樣的寫法下得到不同的結果，其中大多是修正。這些列在
-最後面，因為現在才從 v2 升級的專案，會一次全部碰到。
+最後面，因為現在才從 v2 升級的專案，會一次全部碰到。為 3.7 以後寫的程式碼，只需要看
+[最後一節](#coming-from-3x-to-40)。
 
 ## 升級 {#upgrading}
 
@@ -137,7 +138,7 @@ from kudio.util.visual import Common, WaveVisualizer, history_plot
 `per_file()` 取得；沒有 pandas 時，你拿到的是它們的平均值，像是 `base_stoi`
 等等。
 
-## PESQ
+## PESQ {#pesq}
 
 PESQ 用的是 PyPI 上的 `pesq` 套件，由它自己的選用套件組安裝：
 
@@ -157,8 +158,8 @@ pip install "kudio[eval,pesq]"           # [pesq] compiles: it needs a C compile
 `kudio.score(..., ["pesq"])` 指名要求 PESQ，這樣就會引發例外。
 
 PESQ 預設是 MOS-LQO，16 kHz 音訊用寬頻。請用 3.x 把 v2 的輸出重新評分一次，
-不要把新數字放在舊表格旁邊比，因為兩者不一定在同一個尺度上。大多數語音增強論文
-引用的原始窄頻 P.862 分數，只差兩個參數：
+不要把新數字放在舊表格旁邊比，因為兩者不一定在同一個尺度上。原始窄頻 P.862
+分數只差兩個參數：
 
 ```python
 ev = kudio.AudioEvaluate(clean_files, noisy_files,
@@ -167,7 +168,7 @@ ev = kudio.AudioEvaluate(clean_files, noisy_files,
 
 [`pesq`][kudio.core.evaluator.pesq] 用 `mode=` 和 `scale=` 接受同樣的兩個選擇，
 [`score`][kudio.core.evaluator.score] 和 `eval_metrics` 則是 `pesq_mode=` 和
-`pesq_scale=`。ITU 的 `pesq.exe` 執行檔印出的也是這個原始分數，
+`pesq_scale=`。ITU 的參考程式 `pesq.exe` 也會印出這個原始分數，就在 MOS-LQO 前面，
 [`pesq_score_exe`][kudio.core.evaluator.AudioEvaluate.pesq_score_exe] 仍然可以
 執行它，前提是在 Windows 上並且裝了 `[data]`。該回報哪一種尺度，請看
 [品質評估](guide/metrics.md)。
@@ -259,3 +260,69 @@ librosa 的回傳方式一樣。3.x 不論有沒有 `sr=`，都回傳 `(frames, 
   不論有沒有用行程池，都會得到相同的檔案。執行完把
   [`Synthesizer.seed`][kudio.core.synth.Synthesizer.seed] 留下來，就能再建出同一份
   語料庫；[建立含雜訊資料集](guide/synthesis.md)有示範。
+
+## 從 3.x 升級到 4.0 {#coming-from-3x-to-40}
+
+4.0 新增了指標，3.x 原有的指標，在所有有東西可評的配對上，算出的數字都不變，只有
+長度不同的一對的 PESQ 例外。
+
+PESQ 拿到的是完整的兩段訊號，跟 ITU 程式讀兩個檔案一樣：`pesq`，以及 `score`、
+`eval_metrics`、`AudioEvaluate` 和 `compare_enhancers` 裡的 PESQ 都是。3.9.1 會先把
+較長的那個裁到較短的長度。PESQ 不需要裁切，因為它會自己找出兩者之間的延遲，而且在兩段
+完整的長度上計算，所以就算裁掉的只是靜音，分數也會變：在 ITU 一致性測試 2(b) 的 40 對
+上最多差 0.56，kudio 現在在這些配對上給出的分數，和 ITU 的表到小數第三位都一致。長度
+相同的一對，分數和以前一樣。`pesq`、只要求 PESQ 的 `score`，以及
+`AudioEvaluate.pesq_score`，不再對長度不同發出警告，也不再拒絕超過 `MAX_LENGTH_MISMATCH` 的一對；其中一邊是空的
+時得到 nan。
+
+除此之外，3.x 的呼叫可能看到的不同，大多出在沒有東西可評、或根本不是訊號的輸入上：
+
+- `snr`、`si_sdr`、`segmental_snr` 和 `sdi` 遇到空的一對，或整段都是數位靜音的參考
+  訊號時，得到 nan 並發出警告；3.9.1 則回傳由 1e-12 保護項算出來的數字，例如空的一對
+  的 `sdi` 是 0.0，看起來像完美複本。`si_sdr` 對任何常數的參考訊號也一樣，
+  `segmental_snr` 對比一個音框還短的一對也一樣，以前那是沒有警告的 nan。含 NaN 或 inf
+  的樣本會引發 `ValueError`；以前它會讓分數變成 nan，在 `segmental_snr` 裡則變成一個
+  看起來正常的數字。
+- `pesq` 在 `pesq` 套件以前會引發錯誤的地方，改成得到 nan 並發出警告：其中一邊是空的、
+  靜音的參考訊號、其中一邊短於 0.25 s、找不到語句、輸出是或接近數位靜音。以前攔下這些
+  錯誤、自己填一個下限的程式碼，現在會在沒有錯誤的情況下拿到 nan，而 pandas 算平均時
+  會跳過 nan，所以原本攔錯誤的地方，要改成檢查 nan。
+- 透過 `score`、`eval_metrics` 和 `AudioEvaluate` 計算的 STOI、ESTOI 和 SDR，遇到空的
+  一對、任一個訊號整段都是數位靜音，以及 STOI 和 ESTOI 遇到短於 25.6 ms 的一對時，
+  得到 nan 並發出警告。透過 `score` 時，3.9.1 在這些地方會引發 numpy 的 `AxisError`
+  或 mir_eval 的錯誤；靜音訊號的 ESTOI 則回傳 nan，或是一個每次呼叫都不一樣的小數字，
+  因為 pystoi 會從 numpy 的全域亂數產生器加入雜訊。
+- `segmental_snr` 算出的數字和以前一樣，但參考訊號有音框是數位靜音時，現在會發出警告；
+  這些音框落在它 -10 dB 的下限（輸出在那裡也是靜音時為 0 dB）。停頓處是完全的零的合成
+  參考訊號，每次呼叫都會收到這則警告。
+- int64 和 uint64 的樣本會引發 `ValueError`：以它們的滿刻度來看，16-bit 音訊落在
+  288 dB 以下，分數由 1e-12 保護項決定，3.9.1 裡放在 int64 中的 int16 樣本，`snr`
+  是 0 dB。除了 Windows 上的 numpy 1.x 之外，用 `np.array` 轉換整數清單和 `astype(int)`
+  得到的都是 int64，所以請照讀進來時的型別傳樣本，或傳浮點數。複數、布林和文字陣列、
+  被遮罩的樣本，以及不是單一正數的取樣率也會被拒絕；峰值低於 16-bit 音訊一個量化階
+  （-90.3 dBFS）的訊號，照常評分但會發出警告。
+- [`dnsmos`][kudio.core.dnsmos.dnsmos] 遇到格式不對的輸入時，以前引發 `FeatureError`，
+  現在改成 `ValueError`；NaN 和 inf 樣本以前會直接送進模型，現在會被拒絕；空的片段得到
+  nan 並發出警告。`kudio.core.dnsmos.MODEL_NAMES` 現在是 `MODELS`，對應每個模型所在的
+  資料夾和檔名。
+- 指標的每則警告都以函式名稱開頭，長度不同的警告也是：
+
+    ```text
+    UserWarning: stoi(): the pair needs about 0.4 s of speech left once its silent frames are removed, and has less; scored nan
+    ```
+
+    3.9.1 寫的是 `STOI needs about 0.4 s of speech after silence is removed
+    and got less; scored nan`，長度警告則以 `ref is` 開頭，所以比對舊文字的警告過濾
+    條件，要改成比對新的文字。
+- `AudioEvaluate` 在每一輪之後，每一欄用一則警告說明哪些檔案沒有分數、原因是什麼；
+  3.9.1 則是逐一送到 `kudio` 的 logger。表格的內容相同。
+- [`METRICS`][kudio.core.evaluator.METRICS] 列出 `score` 接受的每個名稱，3.9.1 有 8 個，
+  現在是 23 個。不給清單的 `score` 還是跑和以前一樣的八個，但直接傳入 `METRICS` 的
+  程式碼也會跑到 15 個新的名稱。
+- `kudio.enhance.traditional` 的 `INIT` 和 `EST` 只保留
+  [`trad_enhance`][kudio.enhance.traditional.trad_enhance] 用到的 MCRA 估計，`INIT`
+  也不再接受取樣率：以前是 `INIT(ns_ps, fs)`，現在是 `INIT(ns_ps)`。`trad_enhance`
+  的輸出和以前相同。
+
+`import kudio` 只在某個功能需要時才載入 librosa，所以在沒有 librosa、或 librosa 匯入
+失敗的環境裡，指標照樣能跑；其餘的變更見[更新紀錄](changelog.md)。

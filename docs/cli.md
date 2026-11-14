@@ -29,6 +29,7 @@ python -m kudio.cli info take.wav   # when the kudio script is not on PATH
 | Denoising | [`enhance`](#enhance) | Denoise a file | [`spectral_enhance`][kudio.enhance.spectral.spectral_enhance] |
 | | [`compare`](#compare) | Which denoiser suits this file? | [`compare_enhancers`][kudio.enhance.spectral.compare_enhancers] |
 | Lining up two recordings | [`align`](#align) | How far apart are two versions, and what did that cost? | [`find_delay`][kudio.core.align.find_delay] |
+| Scoring a test set | [`score`](#score) | How does a system do over a whole test set, and does it beat its baseline? | [`score_dataset`][kudio.core.dataset_score.score_dataset] |
 | Audio devices | [`devices`](#devices) | Which audio devices are there? | [`list_devices`][kudio.util.check.list_devices] |
 
 ## What every command has in common
@@ -71,7 +72,9 @@ tone. `hot.wav` is the take five times louder and clipped, `excerpt.wav` the
 four seconds from 4.2 s, and `silence.wav` three seconds of zeros. `noisy.wav`
 adds white noise at 5 dB SNR, and `processed.wav` is `noisy.wav` denoised and
 128 samples late. `raw/` holds three 44.1 kHz stereo 24-bit takes in two
-subfolders, and `corpus/` three clean talkers and two noises.
+subfolders, and `corpus/` three clean talkers and two noises. `testset/` holds
+24 sentences of 12 talkers, `p01_001.wav` to `p12_002.wav`, clean and with
+white noise at 5 dB SNR.
 
 ??? example "Make the example files"
 
@@ -133,6 +136,18 @@ subfolders, and `corpus/` three clean talkers and two noises.
     hum = 0.1 * sum(np.sin(2 * np.pi * 50 * k * t) / k for k in (1, 2, 3))
     kudio.save_wave("corpus/noise/fan.wav", fan, sr)
     kudio.save_wave("corpus/noise/hum.wav", hum, sr)
+
+    for k in range(12):                    # testset/: 12 talkers, two sentences each
+        for n in (1, 2):
+            rng = np.random.default_rng(100 * k + n)
+            low = 95 + 9 * k
+            voice = np.concatenate([phrase(1.2, low, low + 20 * n), np.zeros(sr // 4),
+                                    phrase(1.0, low + 25, low)])
+            clean = 0.5 * voice + 0.003 * rng.standard_normal(voice.size)
+            noisy = kudio.add_noise_snr(clean, rng.standard_normal(clean.size),
+                                        snr_db=5, seed=0)
+            kudio.save_wave(f"testset/clean/p{k + 1:02d}_{n:03d}.wav", clean, sr)
+            kudio.save_wave(f"testset/noisy/p{k + 1:02d}_{n:03d}.wav", noisy, sr)
     ```
 
 ## Inspecting a recording
@@ -433,8 +448,8 @@ convolution; a phone line or a lossy link quantises and drops packets.
 
 ### room
 
-With a file and no other option, `room` measures it as an impulse response to
-ISO 3382-1. `--make` builds a synthetic room instead and prints the
+With a file and no other option, `room` measures it as an impulse response,
+over the whole band, with ISO 3382-1's evaluation ranges. `--make` builds a synthetic room instead and prints the
 measurement of what it built, the first two lines below; measuring that file
 prints the same summary again with the six figures behind it. `--apply` puts a
 file through a room. `--make` with a file as well is refused, since it reads
@@ -741,6 +756,8 @@ spectral_gate + mcra             44       -41.4      6.14    0.28      —   0.5
 
 The input is synthetic, so read this for the shape of the table and not as a
 ranking of the methods on speech. The lowest floor, `wiener`, is fourth here.
+This machine had `kudio[eval]` and not `kudio[pesq]`, so the STOI column is
+filled in and the PESQ one is not.
 
 The noise estimator matters as much as the gain rule, so `--noises` sweeps it
 too; `all` expands to all four. `--noise` holds it at one, `mcra` by default,
@@ -778,9 +795,10 @@ worse than leaving the file alone.
 | `--no-metrics` | off | Skip PESQ and STOI even when installed |
 
 `compare` checks the pair's lengths the way
-[`si_sdr`][kudio.core.evaluator.si_sdr] does: a small difference is scored
-over the shorter of the two with a warning, and a 3 s reference against the
-10 s `noisy.wav`, 70% of it unmeasured, is refused. `align --write-to` writes
+[`si_sdr`][kudio.core.evaluator.si_sdr] does: with a small difference, SNR,
+SI-SDR and STOI are scored over the shorter of the two with a warning and
+PESQ gets the two whole, and a 3 s reference against the 10 s `noisy.wav`,
+70% of it unmeasured, is refused. `align --write-to` writes
 a pair of equal length.
 
 `ms` is wall-clock time per run, taken after a warm-up so the first method is
@@ -847,6 +865,222 @@ the bound, and that can still pass the 0.5 check:
 `kudio align take.wav processed.wav --max-seconds 0.005` (80 samples, under the
 real 128) reports a lag of 2 samples at correlation 0.621 and exits 0.
 
+## Scoring a test set
+
+### score
+
+Score every utterance of a test set and print the table a paper needs, with
+[`score_dataset`][kudio.core.dataset_score.score_dataset]: each metric's mean
+over the utterances with a 95% confidence interval, how many utterances it is
+over, the [signature](guide/metrics.md#signing-a-result) that says how the
+numbers were computed, and what to cite. Here the noisy files of `testset/` are
+denoised first, then scored against the clean ones, with the noisy ones as the
+baseline:
+
+```bash
+kudio enhance testset/noisy testset/enhanced --recursive
+kudio score testset/enhanced --reference testset/clean --baseline testset/noisy \
+    --metrics pesq stoi si_sdr --groups "^(p\d+)_" --per-item scores.csv --bib refs.bib
+```
+
+```text title="Output"
+24/24 file(s) -> testset/enhanced
+  noise floor down 9.7 dB on average
+| Metric | Better | Baseline [95% CI] | Mean [95% CI] | Difference [95% CI] | p | p (Holm) | n | Not scored |
+|---|---|---|---|---|---|---|---|---|
+| PESQ (WB MOS-LQO) | higher | 1.26 [1.24, 1.27] | 1.66 [1.60, 1.72] | +0.40 [+0.34, +0.47] | 0.0005 | 0.0015 | 24 | 0 |
+| STOI | higher | 0.720 [0.694, 0.740] | 0.732 [0.700, 0.758] | +0.012 [+0.005, +0.022] | 0.0181 | 0.0181 | 24 | 0 |
+| SI-SDR (dB) | higher | 5.00 [4.99, 5.01] | 12.00 [11.90, 12.10] | +7.00 [+6.90, +7.10] | 0.0005 | 0.0015 | 24 | 0 |
+
+Signature for the means and the baselines: kudio:4.0.0|sr:16000|pair:aligned=no,cut=shorter,limit=0.5,whole=pesq|si_sdr|pesq:mode=wb,scale=lqo|stoi|pkg:pesq=0.0.4,pystoi=0.4.1|n:24|ci:kind=bootstrap_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,groups=12
+Signature for the differences: kudio:4.0.0|sr:16000|pair:aligned=no,cut=shorter,limit=0.5,whole=pesq|si_sdr|pesq:mode=wb,scale=lqo|stoi|pkg:pesq=0.0.4,pystoi=0.4.1|n:24|ci:kind=paired_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,groups=12
+References: kudio, itut2001p862, itut2003p8621, itut2007p8622, itut2005p862amd2, taal2011stoi, leroux2019sdr, luo2019convtasnet
+```
+
+This run had pesq 0.0.4 and pystoi 0.4.1 installed, and the signature names
+both; the `compare` tables above had pystoi alone, and the other examples
+neither. The input is synthetic, so read the table for its shape.
+
+The sides pair up by id. In a folder the id of a file is its path below the
+folder without the extension, so `testset/clean/p01_001.wav` and
+`testset/enhanced/p01_001.wav` are both `p01_001`, and a subfolder is part of
+the id (`p232/001`). Every file in a format soundfile reads is taken, by its
+suffix (`.wav`, `.flac`, `.ogg`, `.mp3`, `.aiff` and the rest of
+`soundfile.available_formats()`, raw PCM aside), in every subfolder. A warning
+names any other file whose name is no id of the folder, so that no utterance
+leaves the set unsaid; a transcript `p01_001.txt` beside `p01_001.wav` is not
+named. A file with two or more channels is averaged to one, as the other
+commands read audio, and its row says so in `note`.
+Instead of a folder, a side can be a list: one `id path` per line, as a Kaldi
+`wav.scp` has it, or a `.csv` file with `id` and `path` columns. A relative
+path in a list is read from the working directory. An id missing from one
+side, an id given twice, two files that come to one id (`001.wav` and
+`001.flac`) and a listed file that does not exist stop the command with exit 2
+before anything is scored, with the first five ids named and the rest counted.
+Scoring whatever happened to pair up would put a different test set under the
+table's name.
+
+`Mean` is over the utterances scored, `Baseline` is the same metric on the
+baseline files, and `Difference` is the mean minus the baseline. With a
+baseline all three are over the utterances both sides have a score for, so the
+difference is exactly the one mean minus the other. Every interval is BCa from
+10,000 resamples with seed 0, as
+[Confidence intervals and tests](guide/metrics.md#confidence-intervals-and-tests)
+explains. `--groups` gives the speaker of each utterance, here taken from the
+id by the first group of the regular expression, and whole speakers are
+resampled together. `p` is the two-sided sign-flip test of the difference,
+with each speaker's utterances flipped together, and `p (Holm)` is that
+p-value adjusted over the rows of the table. I adjust over the rows because
+the table is read as one claim, that the system and its baseline differ, and
+the claim stands if any row says so: what has to stay at 5% is the chance that
+some row shows a difference that is not there. Whether a difference is for
+the better is read from its sign and the `Better` column. The rows are scored
+on the same utterances and move together, and Holm's procedure holds however
+they depend on each other. A row with no p-value, a metric that scored no
+utterance on both sides, is left out of the family, and a line under the table
+says which. Several systems against one baseline, one run each, make a larger
+family; adjust their p-values together with [`holm`][kudio.core.stats.holm].
+A p-value is printed to four places, and to more where four would round it
+onto 0.05, 0.01 or 0.001 without its being that: 4/4096, the Holm-adjusted
+p-value of the run without a reference further down, prints as 0.00098.
+
+Under the table come the signatures, each line saying what it covers: here
+one for the means and the baselines (`kind=bootstrap_ci`) and one for the
+differences (`kind=paired_ci`). A metric that has no score for some
+utterances gets a line of its own, since its `n` is not the others', and so
+does an interval where BCa gave way to the percentile one; an interval that
+does not exist, over a single utterance, is signed without `ci`. Every line
+says how the run treated its pairs, so a line for PESQ alone still has
+`cut=shorter,limit=0.5` when other metrics cut the pairs. `References` lists
+the BibTeX keys of kudio and of the metrics, and `--bib` writes the entries,
+as [`cite`][kudio.core.registry.cite] gives them.
+
+`--per-item` writes one row per utterance, CSV for `.csv` and JSON lines for
+`.jsonl`, with the baseline's scores in the `baseline_` columns:
+
+```bash
+head -3 scores.csv
+```
+
+```text title="Output"
+id,group,pesq,stoi,si_sdr,baseline_pesq,baseline_stoi,baseline_si_sdr,reason,note,baseline_reason,baseline_note
+p01_001,p01,1.4695559740066528,0.6275048324562252,11.680727575582601,1.310567021369934,0.640674455569799,4.971942205323741,,,,
+p01_002,p01,1.6462552547454834,0.6418690459730046,12.199555794752698,1.2882053852081299,0.6593455739888636,5.004082450104905,,,,
+```
+
+An utterance a metric cannot score, a clip under 0.25 s for PESQ or a silent
+reference, has an empty cell there (null in JSON lines) and in `reason` the
+warning [`score`][kudio.core.evaluator.score] gives for the pair, word for
+word, with the baseline called `baseline` on its side. A pair that cannot be
+scored at all,
+a file that cannot be read or one far shorter than its reference, has the
+error there instead. `note` keeps the warnings given for an utterance that was
+still scored, such as a length difference cut away. Such an utterance is left
+out of the means of the columns it has no score in, the table counts it under
+`Not scored`, a warning on standard error names the first five, and the
+command exits 1.
+
+The set is scored at one rate, that of the references, read from their headers
+before anything is scored. References at two rates are refused, and so is a
+metric that is not defined at the rate, PESQ at 44.1 kHz say, both with exit 2.
+A file scored at another rate than its reference is not resampled behind your
+back: that utterance gets no score, and the reason says why. `--sr` resamples
+every file to one rate as it is read, nothing is then refused for its rate,
+and the signature names the resampler (`resample:soxr_hq`, with librosa and
+soxr under `pkg`).
+
+Without `--reference` only the metrics that need no reference can run:
+dnsmos, dnsmos_p808, srmr and wada_snr. When `--metrics` is not given, that is
+srmr and wada_snr at 8 and 16 kHz, and wada_snr alone at any other rate, since
+SRMR is defined at those two.
+
+```bash
+kudio score testset/enhanced --baseline testset/noisy --groups "^(p\d+)_"
+```
+
+```text title="Output"
+| Metric | Better | Baseline [95% CI] | Mean [95% CI] | Difference [95% CI] | p | p (Holm) | n | Not scored |
+|---|---|---|---|---|---|---|---|---|
+| SRMR | higher | 5.91 [5.52, 6.27] | 31.91 [29.59, 34.15] | +25.99 [+23.69, +28.07] | 0.0005 | 0.00098 | 24 | 0 |
+| WADA-SNR (dB) | higher | 1.63 [1.51, 1.75] | 12.45 [12.13, 12.84] | +10.82 [+10.44, +11.21] | 0.0005 | 0.00098 | 24 | 0 |
+
+Signature for the means and the baselines: kudio:4.0.0|sr:16000|srmr:fast=no,norm=no,min_cf=4.0,max_cf=128.0,drop_silence=yes|wada_snr|n:24|ci:kind=bootstrap_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,groups=12
+Signature for the differences: kudio:4.0.0|sr:16000|srmr:fast=no,norm=no,min_cf=4.0,max_cf=128.0,drop_silence=yes|wada_snr|n:24|ci:kind=paired_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,groups=12
+References: kudio, falk2010srmr, santos2014srmrnorm, kim2008wada
+```
+
+On these synthetic files SRMR comes out far above the 6.12 that SRMRToolbox's
+own test recording gives; the example is there for the form of the command.
+The two kinds mix:
+`--metrics pesq srmr` scores PESQ on the pair and SRMR on the scored file
+alone, whole, with `--align` or without, so a reference that cannot be read
+costs PESQ its score and not SRMR. dnsmos gives three columns, SIG, BAK and
+OVRL, and needs DNS-Challenge's models, found through `--dnsmos-dir` or
+`$KUDIO_DNSMOS_DIR` as [`find_dnsmos_model`][kudio.core.dnsmos.find_dnsmos_model]
+finds them. Each model is opened once before anything is scored, so one that
+takes the other model's input, `sig_bak_ovr.onnx` given for dnsmos_p808 say,
+stops the command with exit 2, and the personalised model in `pDNSMOS/`, which
+dnsmos maps with the other model's polynomials, gets the warning
+[`dnsmos`][kudio.core.dnsmos.dnsmos] gives for it.
+
+`--align` lines each pair up with [`align`][kudio.core.align.align] first, and
+the signature says `aligned=yes`; a pair it takes for two different recordings
+(correlation under 0.5) gets no score, with the reason. A pair with NaN or inf
+in it is refused as such before it is lined up. `--jobs N` scores N utterances
+at a time, each in a process of its own, and gives the same rows in the same
+order as one process. Each process gets an equal share of the CPU's threads
+for BLAS, unless `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS` or
+`MKL_NUM_THREADS` is set. Without that share, four processes on a 20-thread
+CPU each start 20: SDR of the 24 files of `testset/` then took 95 s, against
+2.6 s in one process and 1.9 s with four processes of 5 threads. For a given
+number of BLAS threads the numbers are the same to the last bit; across
+thread counts SI-SDR and SDR can differ by about 1e-14.
+
+`--format latex` prints the table as a LaTeX `tabular` with booktabs rules
+(`\usepackage{booktabs}`), and the signatures and a `\cite` of the keys under
+it as comments. The first `score` command with `--format latex` and without
+`--baseline` prints:
+
+```text title="Output"
+\begin{tabular}{lrr}
+\toprule
+Metric & Mean [95\% CI] & $n$ \\
+\midrule
+PESQ (WB MOS-LQO) $\uparrow$ & 1.66 [1.60, 1.72] & 24 \\
+STOI $\uparrow$ & 0.732 [0.700, 0.758] & 24 \\
+SI-SDR (dB) $\uparrow$ & 12.00 [11.90, 12.10] & 24 \\
+\bottomrule
+\end{tabular}
+% signature: kudio:4.0.0|sr:16000|pair:aligned=no,cut=shorter,limit=0.5,whole=pesq|si_sdr|pesq:mode=wb,scale=lqo|stoi|pkg:pesq=0.0.4,pystoi=0.4.1|n:24|ci:kind=bootstrap_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,groups=12
+% \cite{kudio,itut2001p862,itut2003p8621,itut2007p8622,itut2005p862amd2,taal2011stoi,leroux2019sdr,luo2019convtasnet}
+```
+
+STOI is printed to three places, as are the other measures on a scale that
+ends at 1, and SDI; everything else to two. An interval that does not exist
+prints as `[n/a]` in both formats. `--format json` gives the same summary
+unrounded, with every interval's settings, the columns Holm's adjustment was
+over and null for a number that does not exist. A warning about the intervals,
+too few speakers for one say, names the columns and sides it is about.
+Standard output holds the table alone, in whichever format, so
+`> table.tex` keeps nothing else; the `wrote` lines go to standard error with
+the progress bar and the warnings.
+
+| Option | Default | What it does |
+|---|---|---|
+| `--reference REF` | none | The clean references: a folder, an `id path` list or a CSV |
+| `--baseline BASE` | none | A third side scored against the same references; adds the difference and its test |
+| `--metrics` | `score`'s set, or srmr and wada_snr | Names as [`score`][kudio.core.evaluator.score] takes them, and dnsmos, dnsmos_p808, srmr and wada_snr |
+| `--pesq-mode`, `--pesq-scale` | `auto`, `lqo` | As [`pesq`][kudio.core.evaluator.pesq] takes them |
+| `--sr` | the files' rate | Resample every file to this rate as it is read |
+| `--align` | off | Line each pair up first |
+| `--groups` | none | The speakers: a CSV with `id` and `speaker` columns, `id speaker` lines as in a Kaldi `utt2spk`, or a regular expression whose first group is taken from the id |
+| `--jobs N` | 1 | Utterances scored at once, one process each |
+| `--per-item PATH` | none | One row per utterance, `.csv` or `.jsonl` |
+| `--format` | `markdown` | `markdown`, `latex` or `json` |
+| `--bib PATH` | none | Write the BibTeX entries |
+| `--confidence`, `--resamples`, `--seed` | 0.95, 10000, 0 | The intervals' level, resamples and seed; the test draws as many sign patterns where it cannot run through them all |
+| `--dnsmos-dir DIR` | `$KUDIO_DNSMOS_DIR` | Where the DNSMOS models are |
+
 ## Audio devices
 
 ### devices
@@ -887,12 +1121,16 @@ The commands that can find something wrong exit 1 when they do:
 | `align` | The correlation is below 0.5: not the same recording |
 | `room FILE` | The decay does not look like an impulse response |
 | `convert --recursive`, `enhance --recursive` | Any file failed |
+| `score` | Some utterance has no score in some column, on either side |
 
 Exit 2 is an error, reported as one line on standard error. That covers usage
 errors (an unknown option, a value of the wrong type, a missing argument,
 `enhance --set` without an `=`, `compare` given both `--noise` and
-`--noises`, `channel` with nothing to do), a file that cannot be read, and an
-argument the library refuses. `-v` shows the traceback instead. Otherwise the
+`--noises`, `channel` with nothing to do, `score` given sides that do not pair
+up), a file that cannot be read, and an argument the library refuses. For
+`score`, an audio file that cannot be read is one utterance without a score,
+which exits 1 as the table above says; a list or a groups file that cannot be
+read exits 2. `-v` shows the traceback instead. Otherwise the
 command exits 0, even when `compare` finds that no method beat the input or
 `normalize` writes a clipped file.
 

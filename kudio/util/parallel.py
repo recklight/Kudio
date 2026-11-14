@@ -5,7 +5,7 @@ from __future__ import annotations
 from multiprocessing import Pool
 from typing import Callable, Iterable, List, Optional
 
-from tqdm import tqdm
+from kudio._progress import tqdm
 
 __all__ = ['map_waves']
 

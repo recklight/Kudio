@@ -34,8 +34,8 @@ pip install "kudio[eval,viz]"
 |---|---|---|
 | `audio` | PyAudio、sounddevice | 錄音與播放：[`record`][kudio.core.stream.record]、[`StreamRecorder`][kudio.core.stream.StreamRecorder]、[`play_audio`][kudio.core.stream.play_audio]、串流讀取器、[`list_devices`][kudio.util.check.list_devices] |
 | `eval` | pystoi、0.9 以下的 mir_eval | [`score`][kudio.core.evaluator.score] 裡的 STOI、ESTOI 和 SDR；[`AudioEvaluate`][kudio.core.evaluator.AudioEvaluate] 和 [`eval_metrics`][kudio.core.evaluator.eval_metrics] 裡的 STOI 和 SDR |
-| `pesq` | pesq | [`pesq`][kudio.core.evaluator.pesq]、`score` 和 `AudioEvaluate` 裡的 PESQ（ITU-T P.862 和 P.862.2） |
-| `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos]，不需乾淨參考訊號的 P.835 主觀分數預測 |
+| `pesq` | pesq | [`pesq`][kudio.core.evaluator.pesq]、`score` 和 `AudioEvaluate` 裡的 PESQ（ITU-T P.862 和 P.862.2），以及 [`composite`][kudio.core.quality.composite] 內部用的 PESQ |
+| `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos] 和 [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808]，不需乾淨參考訊號的 P.835 和 P.808 主觀分數預測 |
 | `viz` | matplotlib | [`kudio.util.visual`][kudio.util.visual] 裡的畫圖工具 |
 | `data` | pandas、openpyxl | [`AudioEvaluate.get_df`][kudio.core.evaluator.AudioEvaluate.get_df] 和 [`per_file`][kudio.core.evaluator.AudioEvaluate.per_file]、[`data2xlsx`][kudio.util.conv.data2xlsx] |
 | `all` | `audio`、`eval`、`dnsmos`、`viz`、`data` | 除了 `pesq` 以外的所有執行期套件組 |
@@ -51,7 +51,7 @@ pip install "kudio[eval,viz]"
 `dnsmos`
 :   這裡裝的是執行環境，不是模型。權重屬於 Microsoft 的 DNS-Challenge，由那邊發布，
     所以請 clone 那個儲存庫，把它的 DNSMOS 資料夾傳給 `model_dir=`，或把環境變數
-    `KUDIO_DNSMOS_DIR` 設成它。找不到 `sig_bak_ovr.onnx` 時，kudio 會引發
+    `KUDIO_DNSMOS_DIR` 設成它。找不到模型時，kudio 會引發
     [`FeatureError`][kudio.exceptions.FeatureError]，告訴你去哪裡取得。
 
 `audio`
@@ -211,8 +211,20 @@ si_sdr    1.99 ->  11.04 dB
 segsnr   -3.56 ->   1.01 dB
 ```
 
-[`score`][kudio.core.evaluator.score] 以名稱指定指標：`snr`、`si_sdr`、`segsnr` 和 `sdi`
-不需要額外安裝，其他的需要上面的選用套件組。不給清單時，它會跑這台電腦上能跑的所有指標。
+這兩次呼叫還會各在標準錯誤上印出一則 `UserWarning`：
+
+```text
+UserWarning: segmental_snr(): 105 of ref's 280 frames are digital silence; each scores -10 dB, or 0 dB where deg is silent there too
+```
+
+上面做出來的 `clean.wav`，停頓處是完全的零，這是任何麥克風都錄不出來的；分段 SNR 在
+那些音框裡沒有訊號可以拿來和雜訊比，所以它們都落在 -10 dB 的下限。本身帶有雜訊底的
+參考訊號不會出現這則警告。
+
+[`score`][kudio.core.evaluator.score] 以名稱指定指標。`pesq` 和複合指標的 `csig`、`cbak`、`covl`
+需要 `[pesq]`，`stoi`、`estoi` 和 `sdr` 需要 `[eval]`，其他的裝好 kudio 就能跑。不給清單時，
+它會跑 `snr`、`si_sdr`、`segsnr`、`sdi`，以及 `pesq`、`stoi`、`estoi`、`sdr` 之中這台電腦能跑的
+那些；其他指標要指名才會跑。
 
 這些數字需要乾淨訊號，自己混出來的音檔有，真實的錄音永遠沒有；那正是 `audio_report`
 的用途。它們也是拿第 *i* 個樣本和第 *i* 個樣本比，所以可能錯開的一對，要先用
@@ -368,5 +380,7 @@ logging.getLogger("kudio").setLevel(logging.INFO)
 | 要剪接、濾波或擴增的片段 | [編輯與效果](guide/editing.md) |
 | 乾淨語音和雜訊，想做訓練資料 | [建立含雜訊資料集](guide/synthesis.md)、[房間與通道](guide/degradation.md) |
 | 要清理的含雜訊錄音，或要評估的降噪模型 | [降噪](guide/enhancement.md)、[品質評估](guide/metrics.md) |
+| 要為論文評分的測試集，附區間和參考文獻 | [整個測試集](guide/metrics.md#a-whole-test-set)、[`kudio score`](cli.md#score) |
+| 要評分的轉錄文字、語者驗證試驗、語者分段標記輸出或音高軌跡 | [語音辨識、語者驗證與音高追蹤](guide/task-metrics.md) |
 | 一支麥克風 | [錄音與即時檢視](guide/live-audio.md) |
 | 一個函式，想看所有參數 | [API 參考](reference/index.md) |

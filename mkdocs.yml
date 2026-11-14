@@ -121,7 +121,9 @@ plugins:
             Building a noisy dataset: 建立含雜訊資料集
             Denoising: 降噪
             Measuring quality: 品質評估
+            Recognizers, verifiers and pitch trackers: 語音辨識、語者驗證與音高追蹤
             Recording and live views: 錄音與即時檢視
+            Validation: 指標驗證
             Command line: 命令列
             API reference: API 參考
             Inspection: 檢查
@@ -132,7 +134,7 @@ plugins:
             Configuration and errors: 設定與錯誤
             Utilities: 工具
             Changelog: 更新紀錄
-            Migrating from v2: 從 v2 遷移
+            Migrating from v2 and 3.x: 從 v2 與 3.x 遷移
   # each API page exists once per language, so a name has two anchors; a
   # link goes to the one in its own language
   - autorefs:
@@ -194,7 +196,9 @@ nav:
       - Building a noisy dataset: guide/synthesis.md
       - Denoising: guide/enhancement.md
       - Measuring quality: guide/metrics.md
+      - Recognizers, verifiers and pitch trackers: guide/task-metrics.md
       - Recording and live views: guide/live-audio.md
+  - Validation: validation.md
   - Command line: cli.md
   - API reference:
       - reference/index.md
@@ -207,12 +211,13 @@ nav:
       - Datasets: reference/datasets.md
       - Enhancement: reference/enhancement.md
       - Metrics and alignment: reference/metrics.md
+      - Recognizers, verifiers and pitch trackers: reference/task-metrics.md
       - Live audio: reference/live-audio.md
       - Configuration and errors: reference/config.md
       - Utilities: reference/utilities.md
   - Changelog:
       - changelog.md
-      - Migrating from v2: migrating.md
+      - Migrating from v2 and 3.x: migrating.md
 
 # The toolchain this file needs is declared in the [docs] extra, so a clean
 # checkout can install it instead of copying package names out of a comment:
