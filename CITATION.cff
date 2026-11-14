@@ -7,6 +7,8 @@ authors:
   - alias: "RL"
 version: "4.0.0"
 date-released: "2026-11-14"
+# the concept DOI, which Zenodo points at the newest release
+doi: "10.5281/zenodo.24219274"
 license: MIT
 repository-code: "https://github.com/recklight/Kudio"
 url: "https://recklight.github.io/Kudio/"

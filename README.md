@@ -6,6 +6,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/kudio.svg)](https://pypi.org/project/kudio/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.txt)
 [![Docs](https://img.shields.io/badge/docs-recklight.github.io%2FKudio-blue.svg)](https://recklight.github.io/Kudio/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24219274.svg)](https://doi.org/10.5281/zenodo.24219274)
 
 **Lightweight, composable toolkit for audio, speech most of all.**
 
@@ -435,8 +436,10 @@ lists every rename and every result that changes for the same call.
 
 ## Citing Kudio
 
-If you use Kudio in your research, please cite it. `CITATION.cff` holds what
-GitHub shows under "Cite this repository", and `kudio.cite` writes the BibTeX
+If you use Kudio in your research, please cite it. Zenodo archives the
+releases under [10.5281/zenodo.24219274](https://doi.org/10.5281/zenodo.24219274),
+which resolves to the newest one. `CITATION.cff` holds what GitHub shows
+under "Cite this repository", and `kudio.cite` writes the BibTeX
 for Kudio and for the papers and standards behind the metrics you report:
 
 ```python

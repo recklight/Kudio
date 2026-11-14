@@ -795,6 +795,22 @@ def test_citation_cff_names_this_version():
     assert data['url'] == _pyproject(r'^Documentation = "(.*)"$')
 
 
+def test_the_readme_gives_the_doi_citation_cff_gives():
+    """The DOI is Zenodo's concept DOI, the same for all releases, so neither
+    file changes with a version; what can go wrong is the two drifting apart."""
+    path = ROOT / 'CITATION.cff'
+    if not path.is_file():
+        if not (ROOT / 'mkdocs.yml').is_file():
+            pytest.skip("CITATION.cff only exists in a checkout")
+        pytest.fail("CITATION.cff is missing from the checkout")
+    yaml = pytest.importorskip('yaml')
+    doi = yaml.safe_load(path.read_text(encoding='utf-8'))['doi']
+    assert re.fullmatch(r'10\.5281/zenodo\.\d+', doi)
+    readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+    assert set(re.findall(r'10\.5281/zenodo\.\d+', readme)) == {doi}
+    assert f'(https://doi.org/{doi})' in readme
+
+
 def test_zenodo_json_says_what_citation_cff_says():
     """Zenodo reads .zenodo.json and ignores CITATION.cff when both are there,
     and it takes only part of the CFF schema, an author given by alias not
