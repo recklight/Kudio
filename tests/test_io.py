@@ -32,6 +32,16 @@ def test_save_wave_roundtrip(tmp_path, sine):
     assert np.corrcoef(y, sine)[0, 1] > 0.999
 
 
+@pytest.mark.parametrize("name", ["out.aif", "out.AIF", "out.aiff"])
+def test_save_wave_writes_aiff_under_either_extension(tmp_path, sine, name):
+    # soundfile reads the container from ".aiff" and not from ".aif"
+    out = tmp_path / name
+    save_wave(out, sine, 16000)
+    assert sf.info(str(out)).format == "AIFF"
+    y, sr = file_load(out)
+    assert sr == 16000 and np.corrcoef(y, sine)[0, 1] > 0.999
+
+
 def test_save_wave_resample(tmp_path, sine):
     out = tmp_path / "out8k.wav"
     save_wave(out, sine, 16000, d_sample=8000)

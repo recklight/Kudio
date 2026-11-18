@@ -325,6 +325,9 @@ def _side(source: Any, what: str) -> Dict[str, Path]:
     path = Path(source)
     if path.is_dir():
         return _folder(path, what)
+    if not path.exists():
+        where = "" if path.is_absolute() else f", looked for in {Path.cwd()}"
+        raise _refuse(f"{what} {path} does not exist{where}")
     if not path.is_file():
         raise _refuse(f"{what} {path} is neither a folder nor a list file")
     if path.suffix.lower() in _audio_suffixes():

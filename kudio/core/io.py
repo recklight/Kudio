@@ -501,7 +501,8 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
     """Write *wave* to an audio file via soundfile.
 
     The container follows the extension, the way soundfile picks it: a
-    ``.wav`` path writes WAV, ``.flac`` writes FLAC.
+    ``.wav`` path writes WAV, ``.flac`` writes FLAC, and ``.aiff`` or
+    ``.aif`` AIFF.
 
     :param subtype: soundfile subtype — ``'PCM_16'`` (default), ``'PCM_24'``,
         ``'FLOAT'`` (32-bit float), ... see ``soundfile.available_subtypes()``.
@@ -571,10 +572,17 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
                 np.int16 if container == 16 else np.int32)
 
     Path(path).parent.mkdir(exist_ok=True, parents=True)
+    # soundfile takes the container from the extension spelled as libsndfile
+    # names it, so .aiff writes and .aif, AIFF's other usual extension, did not
+    container = _CONTAINERS.get(Path(path).suffix.lower())
     try:
-        sf.write(str(path), wave, sr, subtype=subtype)
+        sf.write(str(path), wave, sr, subtype=subtype, format=container)
     except Exception as e:
         raise AudioIOError(f"Could not write audio file: {path} ({e})") from e
+
+
+#: extensions soundfile cannot read the container from, and the container
+_CONTAINERS = {'.aif': 'AIFF'}
 
 
 def copy_waves(path: PathLike, wave_: Any) -> List[Path]:

@@ -64,6 +64,8 @@ class PitchTrack:
     :param voiced: the voicing decision, aligned with *f0*.
     :param voiced_prob: pYIN's confidence, aligned with *f0*.
     :param times: centre time of each frame, in seconds.
+    :param length: the tracked signal's length in samples, which ends a run
+        voiced to the last frame; ``None`` for a track built without it.
     """
 
     f0: np.ndarray
@@ -74,6 +76,7 @@ class PitchTrack:
     fmin: float
     fmax: float
     hop_length: int
+    length: Optional[int] = None
 
     def __len__(self) -> int:
         return int(len(self.f0))
@@ -144,17 +147,21 @@ class PitchTrack:
 
     # --------------------------------------------------------------- segments
 
-    def voiced_segments(self, min_seconds: float = 0.05
-                        ) -> List[Tuple[float, float]]:
+    def voiced_segments(self, min_seconds: float = 0.05) -> List[Tuple[float, float]]:
         """Contiguous voiced runs as ``(start, end)`` in seconds.
 
         Runs shorter than *min_seconds* are dropped: at a 10 ms hop a single
         voiced frame in the middle of a fricative is an estimator hiccup, not
         a syllable.
+
+        A run ends a hop after its last frame's centre, and one voiced to the
+        last frame ends with the signal, :attr:`length` samples in; a hop
+        after the last centre would be 3.010 s on a 3 s file.
         """
         if not len(self):
             return []
         hop = self.hop_length / self.sr
+        end = None if self.length is None else self.length / self.sr
         segments: List[Tuple[float, float]] = []
         start: Optional[int] = None
         for i, on in enumerate(np.append(self.voiced, False)):
@@ -162,6 +169,8 @@ class PitchTrack:
                 start = i
             elif not on and start is not None:
                 a, b = self.times[start], self.times[i - 1] + hop
+                if end is not None:
+                    b = min(b, end)
                 if b - a >= min_seconds:
                     segments.append((float(a), float(b)))
                 start = None
@@ -241,7 +250,7 @@ def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
     if y.size == 0:
         empty_f = np.zeros(0, dtype=np.float32)
         return PitchTrack(empty_f, np.zeros(0, dtype=bool), empty_f, empty_f,
-                          sr, float(fmin), float(fmax), hop)
+                          sr, float(fmin), float(fmax), hop, 0)
 
     librosa = _optional.librosa()
     values, voiced, prob = librosa.pyin(
@@ -259,4 +268,4 @@ def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
                                n_fft=None if center else int(frame_length))
     return PitchTrack(values, voiced, np.asarray(prob, dtype=np.float64),
                       np.asarray(times, dtype=np.float64), sr,
-                      float(fmin), float(fmax), hop)
+                      float(fmin), float(fmax), hop, len(y))

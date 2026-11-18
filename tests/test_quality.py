@@ -349,6 +349,42 @@ def test_llr_and_the_cepstral_distance_agree_with_their_spectral_forms(sr):
         _mean_of_best(np.clip(cep_frames, 0.0, 10.0)), rel=1e-9)
 
 
+def _voiced_without_noise(sr: int, seconds: float = 1.0) -> np.ndarray:
+    """29 harmonics of 120 Hz with a wandering pitch, shaped by three formant
+    bumps and cut into 4 Hz syllables, and no noise at all. Order-16 LPC
+    predicts some of its frames down to round-off."""
+    t = np.arange(int(sr * seconds)) / sr
+    offset = np.random.default_rng(0).uniform(0, 6.28)
+    f0 = 120.0 * (1 + 0.08 * np.sin(2 * np.pi * 0.7 * t + offset)
+                  + 0.03 * np.sin(2 * np.pi * 3.1 * t))
+    phase = 2 * np.pi * np.cumsum(f0) / sr
+    y = np.zeros(len(t))
+    for k in range(1, 30):
+        level = sum(np.exp(-((k * 120.0 - fc) / bw) ** 2)
+                    for fc, bw in ((500, 300), (1500, 400), (2500, 500)))
+        y += (level + 0.05) / k * np.sin(k * phase)
+    y *= 0.5 * (1 - np.cos(2 * np.pi * 4.0 * t))
+    return 0.3 * y / np.max(np.abs(y))
+
+
+def test_llr_scores_a_frame_predicted_to_round_off_instead_of_losing_the_pair():
+    """Frame 35 of this signal has a clean prediction error of -7.1e-10
+    against a frame energy of 0.0277: round-off below zero, whose log is NaN,
+    and that one frame took the whole pair and the three composite ratings
+    with it."""
+    clean = _voiced_without_noise(16000)
+    noisy = _mix(clean, _noise(len(clean), 1), 20.0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        score = llr(clean, noisy, 16000)
+        parts = composite(clean, noisy, 16000, pesq=2.0)
+        copy = llr(clean, clean, 16000)
+    assert not [w for w in caught if 'NaN' in str(w.message)]
+    assert 0.0 < score <= 2.0
+    assert np.isfinite(parts.llr) and np.isfinite(parts.covl)
+    assert copy == 0.0
+
+
 def test_the_best_95_percent_rounds_halves_up_the_way_matlab_does():
     """0.95 * 30 = 28.5: MATLAB's round keeps 29 frames and Python's would
     keep 28, which is where pysepm and the MATLAB code part."""

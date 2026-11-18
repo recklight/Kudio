@@ -30,7 +30,7 @@ checkout's DNSMOS folder::
     kudio.dnsmos(y, sr, model_dir="DNS-Challenge/DNSMOS")
     kudio.dnsmos_p808(y, sr, model_dir="DNS-Challenge/DNSMOS")
 
-Needs ``pip install kudio[dnsmos]`` for onnxruntime.
+Needs ``pip install "kudio[dnsmos]"`` for onnxruntime.
 
 References
 ----------

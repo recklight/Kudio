@@ -62,6 +62,8 @@ python -m kudio.cli info take.wav   # when the kudio script is not on PATH
   error instead of the one-line message, and goes before the subcommand:
   `kudio -v report take.wav`. Placed after it, the argument parser rejects it.
   Other libraries' logging stays where it was.
+- `kudio --version` prints the installed version, the line a bug report or a
+  methods section needs.
 
 ## The example files
 
@@ -296,10 +298,10 @@ kudio vad take.wav
 ```
 
 ```text title="Output"
-    1     0.550 →    2.460  (1.910s)
-    2     2.950 →    5.270  (2.320s)
-    3     5.980 →    7.460  (1.480s)
-    4     8.150 →    9.560  (1.410s)
+    1     0.550 -    2.460  (1.910s)
+    2     2.950 -    5.270  (2.320s)
+    3     5.980 -    7.460  (1.480s)
+    4     8.150 -    9.560  (1.410s)
 4 span(s), 7.12s of 10.00s (71%)
 ```
 
@@ -320,10 +322,10 @@ kudio pitch take.wav --segments --labels voiced.txt
 
 ```text title="Output"
 median 128.5 Hz  ·  111.2-158.9 Hz (6.2 semitones)  ·  71% voiced
-    1     0.560 →    2.460  (1.900s)
-    2     2.960 →    5.250  (2.290s)
-    3     5.970 →    7.450  (1.480s)
-    4     8.160 →    9.550  (1.390s)
+    1     0.560 -    2.460  (1.900s)
+    2     2.960 -    5.250  (2.290s)
+    3     5.970 -    7.450  (1.480s)
+    4     8.160 -    9.550  (1.390s)
 wrote 4 label(s) to voiced.txt
 ```
 
@@ -1098,14 +1100,14 @@ kudio devices
 
 ```text title="Output"
 sounddevice indices — use with kudio.record(device=...)
-  unavailable: 'sounddevice' is required for this feature. Install it with: pip install kudio[audio]
+  unavailable: 'sounddevice' is required for this feature. Install it with: pip install "kudio[audio]"
 
 PyAudio indices — use with kudio.Recorder / stream readers
-  unavailable: 'PyAudio' is required for this feature. Install it with: pip install kudio[audio]
+  unavailable: 'PyAudio' is required for this feature. Install it with: pip install "kudio[audio]"
 ```
 
 With the extra installed each device is one line: its index, input and output
-channel counts, default rate and name.
+channel counts, default rate and name, and in the PyAudio list its host API.
 [Recording and live views](guide/live-audio.md) covers the rest.
 
 ## Exit codes and shell tests

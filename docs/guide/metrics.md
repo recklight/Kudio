@@ -936,7 +936,8 @@ For the table under a paper,
 it pairs the files by id, runs any of `score`'s metrics and the ones that need
 no reference, and gives each mean with its confidence interval, the number of
 utterances, the [signature](#signing-a-result) and what to cite. From Python,
-the run of [Command line](../cli.md#score) is:
+the run of [Command line](../cli.md#score) is the following; its `testset/` comes
+from that page's [example files](../cli.md#the-example-files).
 
 ```python
 import re
@@ -1086,9 +1087,12 @@ kudio's simulation of speakers with an intra-class correlation of 0.3,
 utterance-level 95% intervals held the true mean about half the time, and
 speaker-level ones 89% at 10 speakers and 92% at 30; see
 [How the metrics are checked](../validation.md#confidence-intervals-and-the-sign-flip-test).
-Under 10 groups the functions warn. VoiceBank-DEMAND's test set has two
-speakers, and an interval over them can only run between the two speakers'
-own means; report the number of speakers with every interval.
+Under 10 groups `bootstrap_ci` and `paired_ci` warn that the interval means
+little, and `permutation_test` warns once the groups are too few for any
+p-value under 0.05, which for a two-sided test is 5 or fewer.
+VoiceBank-DEMAND's test set has two speakers, and an interval over them can
+only run between the two speakers' own means; report the number of speakers
+with every interval.
 
 The number in the table itself, one system's mean, gets its interval from
 [`bootstrap_ci`][kudio.core.stats.bootstrap_ci], resampled the same way:

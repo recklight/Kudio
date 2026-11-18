@@ -73,7 +73,8 @@ class DependencyError(KudioError, ImportError):
             message = (f"'{package}' is required for this feature, and importing "
                        f"it failed: {failed}")
         else:
-            hint = f"pip install kudio[{extra}]" if extra else f"pip install {package}"
+            # quoted, or zsh reads the brackets as a file pattern
+            hint = f'pip install "kudio[{extra}]"' if extra else f"pip install {package}"
             message = f"'{package}' is required for this feature. Install it with: {hint}"
         super().__init__(message)
         self.package = package

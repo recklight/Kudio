@@ -125,9 +125,9 @@ sounddevice 和 PyAudio 對同一批裝置各自編號，所以一份清單裡�
 不給 `device` 時，各處挑的輸入不一定相同。`record` 用的是 sounddevice 的預設輸入，
 `Recorder` 用的是 PortAudio 的，但 `StreamRecorder` 和 `LocalStreamReader` 會經過
 [`CheckDevice.input_device`][kudio.util.check.CheckDevice.input_device]，它會試過
-PyAudio 知道的每個裝置，取**最後一個**能以輸入開啟的。這個裝置可能屬於
-`system_devices` 沒有列出的 host API，因為 `system_devices` 只涵蓋 PyAudio 的
-第一個 host API。所以只要用哪個輸入錄音有差別，就請傳 `device`。想知道 `StreamRecorder`
+PyAudio 知道的每個裝置，取**最後一個**能以輸入開啟的，不管它屬於哪個 host API；
+`system_devices` 列的就是這些裝置，並標出各自的 host API。所以只要用哪個輸入錄音有
+差別，就請傳 `device`。想知道 `StreamRecorder`
 最後選了什麼，請在建立它之前呼叫 `logging.basicConfig(level=logging.INFO)`，
 kudio 就會記錄裝置的編號、名稱，以及它選的取樣率。
 

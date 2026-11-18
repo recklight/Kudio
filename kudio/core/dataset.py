@@ -168,9 +168,13 @@ def save_labels(path: PathLike, labels: Sequence[Label],
     path, fmt = _label_path(path, fmt)
     path.parent.mkdir(parents=True, exist_ok=True)
     if fmt == 'json':
+        # to the microsecond, as the text format below writes them: a time
+        # worked out by subtraction, 3.14 as 3.1399999999999997, is the same
+        # boundary, and the file is read by people too
+        rows = [{**asdict(x), 'start': round(x.start, 6), 'end': round(x.end, 6)}
+                for x in labels]
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump([asdict(x) for x in labels], fh, indent=2,
-                      ensure_ascii=False)
+            json.dump(rows, fh, indent=2, ensure_ascii=False)
         return path
 
     with open(path, "w", encoding="utf-8", newline="\n") as fh:

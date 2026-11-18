@@ -116,6 +116,24 @@ def test_optional_dep_error_is_typed():
     assert issubclass(DependencyError, kudio.KudioError)
 
 
+def test_every_install_command_for_an_extra_quotes_it():
+    """Unquoted, zsh reads `kudio[audio]` as a file pattern and stops with
+    `no matches found`, so the hint, the README and the pages all quote it."""
+    import re
+
+    from kudio.exceptions import DependencyError
+    assert str(DependencyError('sounddevice', 'audio')).endswith(
+        'Install it with: pip install "kudio[audio]"')
+    root = Path(__file__).resolve().parents[1]
+    files = [root / "README.md", *(root / "docs").rglob("*.md"),
+             *(root / "kudio").rglob("*.py")]
+    bare = [f"{p.relative_to(root)}:{n}"
+            for p in files
+            for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+            if re.search(r"pip install (-U )?kudio\[", line)]
+    assert not bare, bare
+
+
 @pytest.mark.parametrize("args", [('librosa',), ('pesq', 'pesq')])
 def test_a_dependency_error_crosses_a_process_boundary_intact(args):
     """A pool worker hands its exception back pickled, and the first call to
@@ -299,6 +317,24 @@ def test_the_docs_build_stays_on_mkdocs_1():
     pins = [s.replace(' ', '') for s in _extras().get('docs', [])
             if re.match(r'mkdocs\s*[<>=!~]', s)]
     assert pins and '<2' in pins[0], f"[docs] lets pip install MkDocs 2: {pins}"
+
+
+def test_a_mistyped_address_gets_the_english_404_page(tmp_path):
+    """Each language's build writes 404.html at the root, the Chinese one
+    last, and GitHub Pages shows that file for any address it does not have."""
+    pytest.importorskip("markdown")             # the hooks run under the docs build
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("kudio_docs_hooks",
+                                                  ROOT / "tools" / "docs" / "hooks.py")
+    hooks = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hooks)
+    page = tmp_path / "404.html"
+    page.write_text('<html lang="en">not found', encoding="utf-8")
+    hooks.on_post_build({"site_dir": str(tmp_path), "theme": {"language": "en"}})
+    page.write_text('<html lang="zh-TW">找不到', encoding="utf-8")
+    hooks.on_post_build({"site_dir": str(tmp_path), "theme": {"language": "zh-TW"}})
+    assert page.read_text(encoding="utf-8") == '<html lang="en">not found'
 
 
 def test_the_documentation_link_is_where_the_site_is_published():

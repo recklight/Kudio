@@ -443,8 +443,19 @@ def _lpc_pair(clean: np.ndarray, processed: np.ndarray, order: int):
 
 def _frame_llr(clean: np.ndarray, processed: np.ndarray, order: int) -> np.ndarray:
     r_c, a_c, _, a_p = _lpc_pair(clean, processed, order)
+    # Both forms are prediction errors and cannot be negative, but a voiced
+    # frame with no noise in it is predicted so well that its own error is
+    # round-off and can land below zero (-7.1e-10 against a frame energy of
+    # 0.0277), and the log of that is NaN. Both are floored at eps times the
+    # frame's energy, under anything but round-off: such a frame then scores
+    # the cap and an exact copy of it 0, while a frame of digital silence,
+    # whose own form is around 1e-39 against an energy around 1e-29, keeps
+    # its score. np.maximum keeps the NaN of a frame too loud to square.
+    floor = _EPS * r_c[:, 0]
+    numerator = np.maximum(_quadratic(a_p, r_c), floor)
+    denominator = np.maximum(_quadratic(a_c, r_c), floor)
     with np.errstate(divide='ignore', invalid='ignore'):
-        return np.log(_quadratic(a_p, r_c) / _quadratic(a_c, r_c))
+        return np.log(numerator / denominator)
 
 
 def _frame_is(clean: np.ndarray, processed: np.ndarray, order: int) -> np.ndarray:

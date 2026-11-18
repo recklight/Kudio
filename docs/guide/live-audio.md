@@ -145,8 +145,8 @@ sounddevice's default input and `Recorder` PortAudio's, but `StreamRecorder`
 and `LocalStreamReader` go through
 [`CheckDevice.input_device`][kudio.util.check.CheckDevice.input_device], which
 tries every device PyAudio knows and takes the **last** one that opens as an
-input. That can belong to a host API that `system_devices` does not list,
-since it covers only PyAudio's first. So whenever it matters which input
+input, from whichever host API it belongs to; `system_devices` lists the same
+devices and names the host API of each. So whenever it matters which input
 records, pass `device`. To see what `StreamRecorder` settled on, call
 `logging.basicConfig(level=logging.INFO)` before creating it; kudio then logs
 the device's index and name and the rate it chose.

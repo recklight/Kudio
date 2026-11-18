@@ -807,7 +807,7 @@ STOI、ESTOI 和 SDR 是表格列出的例外，因為它們的套件評不了�
 或在 shell 裡用 [`kudio score`](../cli.md#score)，一次做完：依 id 配對檔案，跑 `score`
 的任何指標和不需要參考訊號的指標，並給出每個平均和它的信賴區間、語句數、
 [簽章](#signing-a-result)，以及要引用的文獻。[命令列](../cli.md#score)的那個例子，
-在 Python 裡是這樣：
+在 Python 裡是這樣，其中的 `testset/` 由那一頁的[範例檔案](../cli.md#the-example-files)產生：
 
 ```python
 import re
@@ -942,8 +942,10 @@ by utterance: [+0.094, +0.119]
 的說話者資料上，以語句重抽樣的 95% 區間大約只有一半的時候包含真正的平均，以說話者
 重抽樣則是 10 位說話者時 89%、30 位時 92%，見
 [指標的驗證方式](../validation.md#confidence-intervals-and-the-sign-flip-test)。
-不到 10 組時，這些函式會發出警告。VoiceBank-DEMAND 的測試集只有兩位說話者，在他們
-之上的區間只能落在兩人各自的平均之間；每個區間旁邊都請寫出說話者人數。
+不到 10 組時，`bootstrap_ci` 和 `paired_ci` 會警告區間沒什麼意義；`permutation_test`
+則是在組數少到任何 p 值都不可能低於 0.05 時才警告，雙尾檢定是 5 組以下。
+VoiceBank-DEMAND 的測試集只有兩位說話者，在他們之上的區間只能落在兩人各自的平均
+之間；每個區間旁邊都請寫出說話者人數。
 
 表格裡的數字本身，也就是單一系統的平均，用
 [`bootstrap_ci`][kudio.core.stats.bootstrap_ci] 算它的區間，重抽樣的方式相同：

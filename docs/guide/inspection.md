@@ -594,7 +594,7 @@ three, and kudio runs each as the challenge's `dnsmos_local.py` does.
 The weights belong to Microsoft and are distributed with DNS-Challenge, and
 I would rather not bundle someone else's binary in a library that is
 otherwise source only. So this needs two things the rest of the page does
-not: `pip install kudio[dnsmos]` for onnxruntime, and a checkout of that
+not: `pip install "kudio[dnsmos]"` for onnxruntime, and a checkout of that
 repository.
 
 ```python

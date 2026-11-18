@@ -7,6 +7,7 @@ is everything StreamRecorder owns: accumulation without loss, the level and
 elapsed readings, the rolling tail, the memory cap, and the channel layout of
 the finished take.
 """
+import logging
 import threading
 
 import numpy as np
@@ -278,6 +279,43 @@ def test_a_take_is_not_continued_at_another_rate(monkeypatch):
 # -- format codes, and a missing microphone named as a device error -----------
 def test_the_portaudio_format_codes_are_public():
     assert (kudio.PA_FLOAT32, kudio.PA_INT16) == (1, 8)
+
+
+class _HostApis:
+    """PyAudio as one Windows 11 machine with no default recording device has
+    it: MME holds two outputs, and the microphones are on WDM-KS alone."""
+
+    _apis = ["MME", "Windows WDM-KS"]
+    _devices = [(0, 0, 2, "Speakers"), (0, 0, 2, "Monitor"),
+                (1, 2, 0, "Microphone (USB Audio)"), (1, 0, 2, "Speakers (USB Audio)")]
+
+    def get_device_count(self):
+        return len(self._devices)
+
+    def get_device_info_by_index(self, i):
+        api, inputs, outputs, name = self._devices[i]
+        return {"index": i, "hostApi": api, "name": name, "maxInputChannels": inputs,
+                "maxOutputChannels": outputs, "defaultSampleRate": 44100.0}
+
+    def get_host_api_info_by_index(self, api):
+        return {"index": api, "name": self._apis[api],
+                "deviceCount": sum(d[0] == api for d in self._devices)}
+
+    def get_device_info_by_host_api_device_index(self, api, i):
+        return self.get_device_info_by_index(
+            [n for n, d in enumerate(self._devices) if d[0] == api][i])
+
+
+def test_system_devices_lists_the_inputs_of_every_host_api(caplog):
+    check = kudio.CheckDevice.__new__(kudio.CheckDevice)
+    check.p = _HostApis()
+    with caplog.at_level(logging.INFO, logger="kudio"):
+        devices = check.system_devices()
+    # `kudio devices` prints the list; an INFO line per device repeated it on stderr
+    assert not caplog.records
+    assert [d["index"] for d in devices] == [0, 1, 2, 3]
+    assert [(d["Device"], d["api"]) for d in devices if d["in"]] == [
+        ("Microphone (USB Audio)", "Windows WDM-KS")]
 
 
 def test_input_device_without_a_microphone_is_a_device_error():

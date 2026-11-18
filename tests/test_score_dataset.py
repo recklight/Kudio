@@ -148,6 +148,16 @@ def test_a_listed_file_that_does_not_exist_is_refused(testset, tmp_path):
         kudio.score_dataset(tmp_path / "deg.lst", reference=clean)
 
 
+def test_a_test_set_path_that_does_not_exist_says_so(testset, tmp_path, monkeypatch):
+    clean, _, _ = testset
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match=r"deg testset[\\/]enhanced does not exist, "
+                                         r"looked for in "):
+        kudio.score_dataset("testset/enhanced", reference=clean)
+    with pytest.raises(ValueError, match=r"reference .*clean2 does not exist$"):
+        kudio.score_dataset(clean, reference=clean.parent / "clean2")
+
+
 def test_metric_names_are_checked_before_anything_is_read(testset):
     clean, _, enhanced = testset
     with pytest.raises(ValueError, match=r"si_sdr scores against a reference, and none"):

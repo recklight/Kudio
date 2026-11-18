@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Audio streaming: playback, local recording, and remote (TCP) streams.
 
-PyAudio is an optional dependency (``pip install kudio[audio]``); it is only
+PyAudio is an optional dependency (``pip install "kudio[audio]"``); it is only
 imported when a stream/recorder is actually created, so the package can be
 used for offline processing without any audio hardware.
 """

@@ -128,7 +128,7 @@ pip install "kudio[audio,viz,data]"
 The `DependencyError` names the extra:
 
 ```text
-kudio.exceptions.DependencyError: 'matplotlib' is required for this feature. Install it with: pip install kudio[viz]
+kudio.exceptions.DependencyError: 'matplotlib' is required for this feature. Install it with: pip install "kudio[viz]"
 ```
 
 For four names the extra is not the whole fix. 2.0 imported `WaveVisualizer`,

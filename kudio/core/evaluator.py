@@ -7,8 +7,8 @@ The SNR family (:func:`snr`, :func:`si_sdr`, :func:`segmental_snr`,
 :func:`sdi`) and :func:`lsd` are pure numpy. The rest are optional
 dependencies::
 
-    pip install kudio[eval]   # mir_eval + pystoi: SDR, STOI
-    pip install kudio[pesq]   # pesq: PESQ -- built from source, needs a C compiler
+    pip install "kudio[eval]"   # mir_eval + pystoi: SDR, STOI
+    pip install "kudio[pesq]"   # pesq: PESQ -- built from source, needs a C compiler
 
 **Which PESQ.** ITU-T P.862 scores narrowband speech and P.862.2 wideband.
 P.862 can be reported raw or mapped to MOS-LQO through P.862.1; P.862.2
@@ -900,11 +900,11 @@ def check_metrics_install() -> Tuple[bool, bool, bool]:
     stoi_ok = _has_module("pystoi")
     sdr_ok = _has_module("mir_eval")
     for ok, what, hint in (
-            (pesq_ok, "PESQ", "pip install kudio[pesq] (builds from source: "
+            (pesq_ok, "PESQ", 'pip install "kudio[pesq]" (builds from source: '
                               "needs a C compiler -- on Windows, the MSVC "
                               "Build Tools)"),
-            (stoi_ok, "STOI", "pip install kudio[eval]"),
-            (sdr_ok, "SDR", "pip install kudio[eval]")):
+            (stoi_ok, "STOI", 'pip install "kudio[eval]"'),
+            (sdr_ok, "SDR", 'pip install "kudio[eval]"')):
         if not ok and what not in _REPORTED:
             _REPORTED.add(what)
             log.warning("%s unavailable: %s", what, hint)

@@ -1,5 +1,10 @@
-import pathlib
 # -*- coding: utf-8 -*-
+import io
+import pathlib
+import re
+import sys
+import types
+
 import numpy as np
 import pytest
 from scipy.io import wavfile
@@ -131,7 +136,80 @@ def test_vad_command_lists_spans(tmp_path, capsys):
     assert main(["vad", str(f)]) == 0
     out = capsys.readouterr().out
     assert "span(s)" in out
-    assert "→" in out
+    assert re.search(r"\d\.\d{3} - +\d+\.\d{3}", out)
+
+
+def _ansi_stdout(monkeypatch, encoding: str = "cp1252") -> io.TextIOWrapper:
+    """stdout as Windows sets it up for `> file`: the ANSI code page, cp1252
+    on an English system."""
+    stream = io.TextIOWrapper(io.BytesIO(), encoding=encoding)
+    monkeypatch.setattr(sys, "stdout", stream)
+    return stream
+
+
+@pytest.mark.parametrize("command", [["vad"], ["pitch", "--segments"]])
+def test_span_listings_redirect_on_an_english_windows(tmp_path, monkeypatch, command):
+    f = tmp_path / "speech.wav"
+    _write_speech(f)
+    stream = _ansi_stdout(monkeypatch)
+    assert main([command[0], str(f), *command[1:]]) == 0
+    stream.flush()
+    out = stream.buffer.getvalue().decode("cp1252")
+    assert re.search(r"\d\.\d{3} - +\d+\.\d{3}", out) and "?" not in out
+
+
+def test_a_character_the_code_page_lacks_comes_out_as_a_question_mark(monkeypatch):
+    import kudio.cli
+
+    def run(args):
+        print("Microphone (USB 麥克風)")
+        return 0
+
+    monkeypatch.setattr(kudio.cli, "_run", run)
+    stream = _ansi_stdout(monkeypatch)
+    assert main(["devices"]) == 0
+    stream.flush()
+    assert stream.buffer.getvalue().decode("cp1252").splitlines() == [
+        "Microphone (USB ???)"]
+
+
+def test_help_redirects_under_a_code_page_without_the_dash(monkeypatch):
+    # cp1252 has the em dash in the help text and cp932, a Japanese Windows's, does not
+    stream = _ansi_stdout(monkeypatch, "cp932")
+    with pytest.raises(SystemExit) as done:
+        main(["compare", "--help"])
+    assert done.value.code == 0
+    stream.flush()
+    assert "usage: kudio compare" in stream.buffer.getvalue().decode("cp932")
+
+
+def test_devices_puts_each_device_on_one_line(capsys):
+    from kudio.cli import _cmd_devices
+
+    # Windows's name for a Bluetooth hands-free endpoint, line break included
+    name = "Headset (@System32\\drivers\\bthhfenum.sys,#2;%1 Hands-Free%0\r\n;(Buds))"
+
+    class Pyaudio:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def system_devices(self):
+            return [{"index": 3, "in": 1, "out": 0, "fs": 8000.0, "Device": name,
+                     "api": "Windows WDM-KS"}]
+
+    fake = types.SimpleNamespace(
+        list_devices=lambda: [{"index": 1, "max_input_channels": 1, "max_output_channels": 0,
+                               "default_samplerate": 8000.0, "name": name}],
+        CheckDevice=Pyaudio)
+    _cmd_devices(fake)
+    lines = capsys.readouterr().out.splitlines()
+    flat = "Headset (@System32\\drivers\\bthhfenum.sys,#2;%1 Hands-Free%0 ;(Buds))"
+    assert lines[1] == f"  [ 1] in=1 out=0 fs=8000  {flat}"
+    assert lines[4] == f"  [ 3] in=1 out=0 fs=8000  {flat} (Windows WDM-KS)"
+    assert len(lines) == 5
 
 
 def test_vad_command_exits_nonzero_on_silence(tmp_path, capsys):
@@ -157,7 +235,7 @@ def test_pitch_command_summarises_the_contour(tmp_path, capsys):
     assert main(["pitch", str(f), "--segments"]) == 0
     out = capsys.readouterr().out
     assert "voiced" in out and "semitones" in out
-    assert "→" in out                       # the span listing
+    assert re.search(r"\d\.\d{3} - +\d+\.\d{3}", out)   # the span listing
 
 
 def test_pitch_command_exits_nonzero_when_nothing_is_voiced(tmp_path, capsys):
@@ -671,3 +749,11 @@ def test_a_corrupt_file_exits_2_on_one_line(tmp_path, capsys, command):
     assert main(argv) == 2
     err = capsys.readouterr().err
     assert "not finite" in err and "Traceback" not in err
+
+
+def test_version_prints_the_installed_version(capsys):
+    import kudio
+    with pytest.raises(SystemExit) as done:
+        main(["--version"])
+    assert done.value.code == 0
+    assert capsys.readouterr().out == f"kudio {kudio.__version__}\n"

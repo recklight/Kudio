@@ -65,7 +65,8 @@ def history_plot(history: Any, metrics: str = 'loss',
 
 
 def hist_plt(hist, fig_dir=None, show: bool = False):
-    """Plot Keras accuracy/loss curves side by side."""
+    """Plot Keras accuracy/loss curves side by side, saved as
+    ``model_history.png`` in the folder *fig_dir* when one is given."""
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
     plt.plot(hist.history['accuracy'])
@@ -85,7 +86,7 @@ def hist_plt(hist, fig_dir=None, show: bool = False):
 
     plt.tight_layout()
     if fig_dir is not None:
-        plt.savefig(str(fig_dir), dpi=150)
+        plt.savefig(_figure_path(fig_dir, 'model', 'history'), dpi=150)
     if show:
         plt.show()
         plt.close()
@@ -96,9 +97,9 @@ class Common:
 
     def __init__(self, fig_dir: str = 'kd_figs', is_save: bool = False):
         self.is_save = is_save
+        self.fig_dir = Path(fig_dir).absolute()
         if self.is_save:
-            fig_dir = Path(fig_dir).absolute()
-            fig_dir.mkdir(parents=True, exist_ok=True)
+            self.fig_dir.mkdir(parents=True, exist_ok=True)
 
         self.plt = plt
         self.fig = self.plt.figure(figsize=(7, 5))
@@ -118,8 +119,14 @@ class Common:
         self.fig.show()
 
     def save(self, dir: Union[str, Path]) -> None:
+        """Save the figure when *is_save* was given: a bare name, ``loss`` or
+        ``loss.png``, in *fig_dir*, and a path with a folder in it where it
+        points."""
         if self.is_save:
-            self.plt.savefig(dir)
+            target = Path(dir)
+            if target.parent == Path('.'):
+                target = self.fig_dir / target
+            self.plt.savefig(target)
 
     def close(self) -> None:
         self.plt.close()
@@ -210,8 +217,24 @@ class WaveVisualizer(Common):
         copy_waves(path, wave_list)
 
 
+def _figure_path(save_dir, file, kind: str) -> Path:
+    """Where a plot of *file* is saved: in the folder *save_dir*, made if it
+    is missing, as ``<file stem>_<kind>.png``, so plotting several files or
+    several kinds into one folder keeps every figure. A *save_dir* ending in
+    a format matplotlib writes (``figs/clip.png``, ``.pdf``, ``.svg``) is
+    the file itself."""
+    target = Path(save_dir)
+    formats = plt.gcf().canvas.get_supported_filetypes()
+    if not target.is_dir() and target.suffix[1:].lower() in formats:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+    target.mkdir(parents=True, exist_ok=True)
+    return target / f"{Path(file).stem}_{kind}.png"
+
+
 def basic_analyze(file, show: bool = False, save_dir=None) -> None:
-    """Waveform / STFT / zero-crossing-rate overview of a file."""
+    """Waveform / STFT / zero-crossing-rate overview of a file, saved as
+    ``<stem>_overview.png`` in the folder *save_dir* when one is given."""
     librosa = _librosa()
     x, sr = file_load(file)
 
@@ -236,14 +259,15 @@ def basic_analyze(file, show: bool = False, save_dir=None) -> None:
     plt.tight_layout()
 
     if save_dir is not None:
-        plt.savefig(str(save_dir))
+        plt.savefig(_figure_path(save_dir, file, "overview"))
     if show:
         plt.show()
     plt.close()
 
 
 def plot_4_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> None:
-    """Waveform + spectral centroid/rolloff/ZCR and power spectral density."""
+    """Waveform + spectral centroid/rolloff/ZCR and power spectral density,
+    saved as ``<stem>_4_features.png`` in the folder *save_dir*."""
     librosa = _librosa()
     x, sr = file_load(file)
 
@@ -261,14 +285,15 @@ def plot_4_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> 
 
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(save_dir)
+        plt.savefig(_figure_path(save_dir, file, "4_features"))
     if show:
         plt.show()
     plt.close()
 
 
 def plot_3_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> None:
-    """Waveform + spectral centroid/rolloff/ZCR."""
+    """Waveform + spectral centroid/rolloff/ZCR, saved as
+    ``<stem>_3_features.png`` in the folder *save_dir*."""
     librosa = _librosa()
     x, sr = file_load(file)
 
@@ -285,14 +310,15 @@ def plot_3_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> 
 
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(save_dir)
+        plt.savefig(_figure_path(save_dir, file, "3_features"))
     if show:
         plt.show()
     plt.close()
 
 
 def plot_PSD(file, show: bool = False, save_dir=None, dpi: int = 200) -> None:
-    """Power spectral density of a file."""
+    """Power spectral density of a file, saved as ``<stem>_psd.png`` in the
+    folder *save_dir*."""
     x, sr = file_load(file)
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
@@ -300,7 +326,7 @@ def plot_PSD(file, show: bool = False, save_dir=None, dpi: int = 200) -> None:
 
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(save_dir)
+        plt.savefig(_figure_path(save_dir, file, "psd"))
     if show:
         plt.show()
     plt.close()

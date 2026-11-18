@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import types
+
 import pytest
 
 from kudio import find_duplicate, lowercase, timer
@@ -116,3 +118,49 @@ def test_data2xlsx_fits_the_columns_of_a_new_file(tmp_path):
     sheet = openpyxl.load_workbook(xlsx)['S']
     assert sheet.column_dimensions['A'].width == len('a_long_column_name')
     assert sheet.column_dimensions['B'].width == len('fifteen letters')
+
+
+# -- where the plotting helpers save -------------------------------------------
+
+def test_save_dir_is_a_folder_and_each_plot_keeps_its_own_file(tmp_path):
+    pytest.importorskip("matplotlib")
+    import matplotlib
+    matplotlib.use("Agg")
+    import numpy as np
+
+    import kudio
+    from kudio.util import visual
+
+    clip = tmp_path / "clip.wav"
+    t = np.arange(8000) / 8000
+    kudio.save_wave(clip, (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32), 8000)
+    figs = tmp_path / "figs"
+    visual.plot_PSD(clip, save_dir=figs, dpi=50)
+    visual.plot_3_features(clip, save_dir=figs, dpi=50)
+    visual.plot_4_features(clip, save_dir=figs, dpi=50)
+    visual.basic_analyze(clip, save_dir=figs)
+    history = types.SimpleNamespace(history={"accuracy": [0.5, 0.7], "val_accuracy": [0.4, 0.6],
+                                             "loss": [1.0, 0.6], "val_loss": [1.1, 0.8]})
+    visual.hist_plt(history, fig_dir=figs)
+    assert sorted(p.name for p in figs.iterdir()) == [
+        "clip_3_features.png", "clip_4_features.png", "clip_overview.png", "clip_psd.png",
+        "model_history.png"]
+    # a name with a suffix matplotlib writes is still the file itself
+    visual.plot_PSD(clip, save_dir=tmp_path / "out" / "spectrum.pdf", dpi=50)
+    assert (tmp_path / "out" / "spectrum.pdf").is_file()
+
+
+def test_common_saves_a_bare_name_in_its_fig_dir(tmp_path, monkeypatch):
+    pytest.importorskip("matplotlib")
+    import matplotlib
+    matplotlib.use("Agg")
+    from kudio.util import visual
+
+    monkeypatch.chdir(tmp_path)
+    figure = visual.Common(fig_dir="figs", is_save=True)
+    figure.loss_plot([1.0, 0.5], [1.2, 0.7])
+    figure.save("loss")
+    figure.save(tmp_path / "elsewhere.png")
+    figure.close()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["elsewhere.png", "figs"]
+    assert [p.name for p in (tmp_path / "figs").iterdir()] == ["loss.png"]

@@ -117,7 +117,7 @@ pip install "kudio[audio,viz,data]"
 `DependencyError` 會寫出需要的選用套件組：
 
 ```text
-kudio.exceptions.DependencyError: 'matplotlib' is required for this feature. Install it with: pip install kudio[viz]
+kudio.exceptions.DependencyError: 'matplotlib' is required for this feature. Install it with: pip install "kudio[viz]"
 ```
 
 有四個名稱光裝選用套件組還不夠。2.0 匯入 `kudio` 時會一起匯入 `WaveVisualizer`、

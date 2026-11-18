@@ -3,6 +3,8 @@
 say nothing where there is none?"""
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -112,6 +114,35 @@ def test_voiced_segments_land_on_the_bursts():
     assert segments[0][1] == pytest.approx(2.0, abs=0.1)
     assert segments[1][0] == pytest.approx(3.5, abs=0.1)
     assert segments[1][1] == pytest.approx(4.8, abs=0.1)
+
+
+def test_a_run_voiced_to_the_last_frame_ends_with_the_signal():
+    """A 3 s sweep voiced throughout: the last frame's centre is 3.000 s, and
+    a hop after it is past the end of the file."""
+    t = np.arange(3 * SR) / SR
+    sweep = 0.3 * np.sin(2 * np.pi * (250 * t + 100 * t ** 2))
+    track = kudio.f0(sweep, SR, fmin=200, fmax=1000)
+    assert track.length == 3 * SR
+    assert track.times[-1] + track.hop_length / SR > 3.0
+    assert track.voiced_segments()[-1][1] == 3.0
+    assert track.to_labels()[-1].end == 3.0
+    # a track built without the length keeps the hop past the end
+    loose = dataclasses.replace(track, length=None)
+    assert loose.voiced_segments()[-1][1] > 3.0
+
+
+def test_the_cli_ends_the_spans_and_labels_with_the_file(tmp_path, capsys):
+    from kudio.cli import main
+    t = np.arange(3 * SR) / SR
+    path = tmp_path / "sweep.wav"
+    kudio.save_wave(path, (0.3 * np.sin(2 * np.pi * (250 * t + 100 * t ** 2))
+                           ).astype(np.float32), SR)
+    labels = tmp_path / "voiced.txt"
+    assert main(["pitch", str(path), "--fmin", "200", "--fmax", "1000", "--segments",
+                 "--labels", str(labels)]) == 0
+    span = capsys.readouterr().out.splitlines()[-2]      # the last span, above "wrote"
+    assert span.split()[3] == "3.000", span
+    assert labels.read_text(encoding="utf-8").split()[-3] == "3.000000"   # end, "voiced", n
 
 
 def test_short_runs_are_dropped():

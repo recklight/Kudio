@@ -708,6 +708,7 @@ def test_cite_alone_gives_kudio():
     assert (kind, key) == ('misc', 'kudio')
     assert fields == {'author': 'RL', 'title': 'Kudio',
                       'note': f'Version {kudio.__version__}',
+                      'doi': '10.5281/zenodo.24219274',
                       'url': 'https://github.com/recklight/Kudio'}
     assert text.endswith('}\n')
     assert cite([]) == text
@@ -809,6 +810,7 @@ def test_the_readme_gives_the_doi_citation_cff_gives():
     readme = (ROOT / 'README.md').read_text(encoding='utf-8')
     assert set(re.findall(r'10\.5281/zenodo\.\d+', readme)) == {doi}
     assert f'(https://doi.org/{doi})' in readme
+    assert f"  doi = {{{doi}}}," in kudio.cite().splitlines()
 
 
 def test_zenodo_json_says_what_citation_cff_says():

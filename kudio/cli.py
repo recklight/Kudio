@@ -37,8 +37,11 @@ log = logging.getLogger("kudio.cli")
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from kudio._version import __version__
+
     p = argparse.ArgumentParser(prog="kudio", description="kudio audio utilities")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--version", action="version", version=f"kudio {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("devices", help="list audio devices (needs kudio[audio])")
@@ -295,7 +298,7 @@ def _cmd_devices(kudio) -> None:
         for d in kudio.list_devices():
             print(f"  [{d['index']:>2}] in={d['max_input_channels']} "
                   f"out={d['max_output_channels']} "
-                  f"fs={int(d['default_samplerate'])}  {d['name']}")
+                  f"fs={int(d['default_samplerate'])}  {_one_line(d['name'])}")
     except Exception as e:
         print(f"  unavailable: {e}")
 
@@ -304,9 +307,15 @@ def _cmd_devices(kudio) -> None:
         with kudio.CheckDevice() as cd:
             for d in cd.system_devices():
                 print(f"  [{d['index']:>2}] in={d['in']} out={d['out']} "
-                      f"fs={int(d['fs'])}  {d['Device']}")
+                      f"fs={int(d['fs'])}  {_one_line(d['Device'])} ({d['api']})")
     except Exception as e:
         print(f"  unavailable: {e}")
+
+
+def _one_line(name) -> str:
+    """A device name on one line. Windows names a Bluetooth hands-free
+    endpoint with a line break inside, which split its entry in two."""
+    return " ".join(str(name).split())
 
 
 #: The one handler main() puts on the kudio logger, kept so a second call --
@@ -320,6 +329,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     its check, no speech, nothing voiced, a target missed), 2 an error -- a
     file that cannot be read, an argument that is wrong -- reported on one
     line rather than as a traceback (``-v`` shows the traceback)."""
+    _replace_what_stdout_cannot_write()          # before --help prints
     args = build_parser().parse_args(argv)
     # kudio's loggers only: DEBUG on the root logger let numba's compiler
     # write about 400 lines into a single `kudio -v pitch`
@@ -340,6 +350,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 raise
             print(f"kudio {args.command}: {e}", file=sys.stderr)
             return 2
+
+
+def _replace_what_stdout_cannot_write() -> None:
+    """Redirected to a file or a pipe on Windows, stdout writes the ANSI code
+    page, cp1252 on an English system. A character outside it, a device or
+    file name in Chinese say, would raise UnicodeEncodeError, a ValueError,
+    and end the command with exit 2 halfway through its result; replaced, it
+    comes out as '?'. A UTF-8 stream is left alone."""
+    encoding = (getattr(sys.stdout, 'encoding', None) or '').lower().replace('-', '')
+    if not encoding.startswith('utf8') and hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(errors='replace')
 
 
 def _refusals() -> tuple:
@@ -623,7 +644,7 @@ def _run(args) -> int:
             return 1
         total = sum(b - a for a, b in spans)
         for n, (start, end) in enumerate(spans, 1):
-            print(f"  {n:>3}  {start:8.3f} → {end:8.3f}  ({end - start:.3f}s)")
+            print(f"  {n:>3}  {start:8.3f} - {end:8.3f}  ({end - start:.3f}s)")
         print(f"{len(spans)} span(s), {total:.2f}s of "
               f"{len(y) / sr:.2f}s ({total / (len(y) / sr) * 100:.0f}%)")
         if args.split_to:
@@ -652,7 +673,7 @@ def _run(args) -> int:
         segments = track.voiced_segments()
         if args.segments:
             for n, (start, end) in enumerate(segments, 1):
-                print(f"  {n:>3}  {start:8.3f} → {end:8.3f}  ({end - start:.3f}s)")
+                print(f"  {n:>3}  {start:8.3f} - {end:8.3f}  ({end - start:.3f}s)")
         if args.labels:
             kudio.save_labels(args.labels, track.to_labels())
             print(f"wrote {len(segments)} label(s) to {args.labels}")

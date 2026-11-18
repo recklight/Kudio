@@ -188,6 +188,16 @@ def test_labels_round_trip_as_json(tmp_path):
     assert kudio.load_labels(path) == _labels()
 
 
+def test_json_labels_are_written_to_the_microsecond(tmp_path):
+    """4.02 - 0.88 is 3.1399999999999997 in floating point, and it went into
+    the file like that."""
+    import json
+    path = kudio.save_labels(tmp_path / "a.labels.json",
+                             [kudio.Label(4.02 - 0.88, 4.02, "speech")])
+    assert '"start": 3.14,' in path.read_text(encoding="utf-8")
+    assert json.loads(path.read_text(encoding="utf-8"))[0]["start"] == 3.14
+
+
 def test_labels_round_trip_as_an_audacity_track(tmp_path):
     """Three columns of plain text that half the audio world can already read."""
     path = kudio.save_labels(tmp_path / "a.txt", _labels())

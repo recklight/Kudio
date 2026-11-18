@@ -95,6 +95,20 @@ Largest difference
     frame of such a pair sitting at its cap. At 8 kHz the same low-pass
     agrees with 60 digits to 7.7e-7, relative.
 
+    A reference with no noise at all, a harmonic source alone, makes the
+    clean frame's own fit singular the same way, and its prediction error
+    can come out as round-off below zero: -7.1e-10 against a frame energy of
+    0.0277 on the signal in `tests/test_quality.py`. pysepm sets a ratio at
+    or below zero to 1000 before the log; kudio floors both quadratic forms
+    at eps times the frame's energy. Either way the frame scores the cap of
+    `llr`. Uncapped, in the composite, the two part. Here one frame of the
+    129 is floored and scores 34.0, the worst of them, so it drops out with
+    the worst 5%. pysepm finds three, and log 1000 = 6.91 is below every
+    other frame's 9.00 or more, so they stay in the mean as its best frames.
+    Under white noise at 20 dB that signal scores 2 in both, and the
+    composite's uncapped LLR is 12.083 here and 11.925 in pysepm, 12.139
+    with those three frames left out.
+
 On purpose
 :   LLR, IS, CEP and WSS keep the best `round(0.95 M)` of M frames rounded
     the MATLAB way, a half away from zero; pysepm rounds it to even, and at

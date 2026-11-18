@@ -4,6 +4,63 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] - 2026-11-19
+
+### Fixed
+
+- `llr`, and with it CSIG, CBAK and COVL, scored nan when the reference has
+  no noise in it at all, a harmonic source alone for instance. Order-16 LPC
+  predicts some of its frames to round-off, the clean frame's own prediction
+  error came out below zero (-7.1e-10 against a frame energy of 0.0277 on the
+  signal in the tests), and its log is NaN; the warning blamed a frame too
+  loud to square. Both quadratic forms are floored at eps times the frame's
+  energy, so such a frame scores the cap, as it does in pysepm. On 22 pairs
+  of the test suite and 4 others that scored before, `llr` and the
+  composite's LLR are unchanged to the bit.
+- `kudio vad` and `kudio pitch --segments` ended with exit 2 when their
+  output went to a file or a pipe under a code page without "→", cp1252 on
+  an English Windows. Spans are listed as `0.550 -    2.460`, and any
+  character the code page lacks comes out as `?` instead of ending the
+  command. The same goes for `--help`, whose em dashes cp932 lacks.
+- `CheckDevice.system_devices()` listed host API 0 alone. On a Windows 11
+  machine with no default recording device that held no input at all, while
+  `input_device()` found the microphones on WDM-KS. It lists every host API,
+  naming each in a new `api` key, and logs each device at DEBUG rather than
+  INFO. `kudio devices` prints the host API and keeps each device on one
+  line; Windows names a Bluetooth hands-free endpoint with a line break in
+  it.
+- `save_dir` of the plots in `kudio.util.visual`, and `fig_dir` of
+  `hist_plt`, were used as a file name: `save_dir="figs"` wrote `figs.png`,
+  and the next plot replaced it. It is a folder, made if missing, that gets
+  `<stem>_<kind>.png`; a name ending in a format matplotlib writes is still
+  the file. `Common(fig_dir=..., is_save=True)` made its folder and then
+  saved a bare name from `save()` in the working folder; it saves it in
+  `fig_dir`.
+- `score_dataset` given a path that does not exist says so, and for a
+  relative one where it looked.
+- `save_wave` to a `.aif` path raised `AudioIOError`: soundfile reads the
+  container from `.aiff` and not from `.aif`. Both write AIFF.
+- `PitchTrack.voiced_segments` and `to_labels`, and with them
+  `kudio pitch --segments` and `--labels`, ended a run voiced to the last
+  frame a hop past the end of the signal: 3.010 s on a 3 s sweep at a 10 ms
+  hop. They end it with the signal.
+- `save_labels` wrote JSON times as they came out of the arithmetic,
+  `3.1399999999999997` for 4.02 - 0.88. They are written to the microsecond,
+  as the Audacity format already was.
+
+### Added
+
+- `kudio --version`.
+- `cite()` gives Zenodo's concept DOI, 10.5281/zenodo.24219274.
+- `PitchTrack.length`, the tracked signal's length in samples; `None` for a
+  track built without it.
+
+### Changed
+
+- Every `pip install` of an extra, in the README, the docs and the messages
+  naming one, quotes it: `pip install "kudio[audio]"`. Unquoted, zsh reads
+  the brackets as a file pattern.
+
 ## [4.0.0] - 2026-11-14
 
 Metrics for enhancement, intelligibility, separation, recognition, speaker

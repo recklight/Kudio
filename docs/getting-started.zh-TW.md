@@ -304,7 +304,7 @@ except kudio.DependencyError as e:
 ```
 
 ```text
-'pesq' is required for this feature. Install it with: pip install kudio[pesq]
+'pesq' is required for this feature. Install it with: pip install "kudio[pesq]"
 pesq
 ```
 

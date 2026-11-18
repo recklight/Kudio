@@ -37,13 +37,13 @@ and how closely it agrees with its reference; this README is the short tour.
 
 ```bash
 pip install kudio            # core: I/O, features, effects, synthesis, metrics
-pip install kudio[audio]     # + live capture / playback (PyAudio, sounddevice)
-pip install kudio[eval]      # + STOI / SDR back-ends (pystoi, mir_eval)
-pip install kudio[pesq]      # + PESQ (pesq) -- builds from source, needs a C compiler
-pip install kudio[dnsmos]    # + DNSMOS perceptual score (onnxruntime)
-pip install kudio[viz]       # + plotting helpers (matplotlib)
-pip install kudio[data]      # + Excel / dataframe export (pandas, openpyxl)
-pip install kudio[all]       # everything but [pesq]
+pip install "kudio[audio]"   # + live capture / playback (PyAudio, sounddevice)
+pip install "kudio[eval]"    # + STOI / SDR back-ends (pystoi, mir_eval)
+pip install "kudio[pesq]"    # + PESQ (pesq) -- builds from source, needs a C compiler
+pip install "kudio[dnsmos]"  # + DNSMOS perceptual score (onnxruntime)
+pip install "kudio[viz]"     # + plotting helpers (matplotlib)
+pip install "kudio[data]"    # + Excel / dataframe export (pandas, openpyxl)
+pip install "kudio[all]"     # everything but [pesq]
 ```
 
 > `pesq` is published on PyPI as source only, so `kudio[pesq]` compiles it:

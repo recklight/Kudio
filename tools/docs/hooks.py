@@ -250,3 +250,20 @@ def on_page_markdown(markdown: str, page, config, files, **kwargs) -> str:
     if MARKER not in markdown:
         return markdown
     return markdown.replace(MARKER, _overview(config, "zh-TW" if chinese else "en"))
+
+
+#: the English build's 404 page. Each language's build writes 404.html at
+#: the root of the site, the Chinese one last, and GitHub Pages shows that one
+#: file for every address it does not have, so a mistyped English address
+#: answered in Chinese.
+_NOT_FOUND: Dict[str, bytes] = {}
+
+
+def on_post_build(config, **kwargs) -> None:
+    page = Path(config["site_dir"]) / "404.html"
+    if not page.is_file():
+        return
+    if config["theme"]["language"] == "en":
+        _NOT_FOUND["en"] = page.read_bytes()
+    elif "en" in _NOT_FOUND:
+        page.write_bytes(_NOT_FOUND["en"])

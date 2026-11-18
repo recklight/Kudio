@@ -143,21 +143,32 @@ class CheckDevice:
         self.p.terminate()
 
     def system_devices(self) -> List[dict]:
-        """Return `[{'Device', 'index', 'fs', 'out', 'in'}, ...]` for host API 0."""
+        """Return `[{'Device', 'index', 'fs', 'out', 'in', 'api'}, ...]`, every
+        device of every host API in PyAudio's index order, `api` naming the
+        host API.
+
+        All of them, because input_device() picks from all of them. On a
+        Windows 11 machine with no default recording device, MME, DirectSound
+        and WASAPI list no input at all and WDM-KS lists five.
+        """
         device_list = []
-        info = self.p.get_host_api_info_by_index(0)
-        for i in range(info.get('deviceCount')):
-            dev = self.p.get_device_info_by_host_api_device_index(0, i)
+        apis = {}
+        for i in range(self.p.get_device_count()):
+            dev = self.p.get_device_info_by_index(i)
+            api = dev.get('hostApi')
+            if api not in apis:
+                apis[api] = self.p.get_host_api_info_by_index(api).get('name')
             device_list.append({
                 'Device': dev.get('name'),
                 'index': dev.get('index'),
                 'fs': dev.get('defaultSampleRate'),
                 'out': dev.get('maxOutputChannels'),
                 'in': dev.get('maxInputChannels'),
+                'api': apis[api],
             })
-            log.info("Device %s: in=%s out=%s (%s)",
-                     dev.get('index'), dev.get('maxInputChannels'),
-                     dev.get('maxOutputChannels'), dev.get('name'))
+            log.debug("Device %s: in=%s out=%s (%s, %s)",
+                      dev.get('index'), dev.get('maxInputChannels'),
+                      dev.get('maxOutputChannels'), dev.get('name'), apis[api])
         return device_list
 
     def _describe(self, device) -> str:

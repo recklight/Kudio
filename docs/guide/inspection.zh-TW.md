@@ -540,7 +540,7 @@ kudio 都照該挑戰賽的 `dnsmos_local.py` 的做法來跑。
 
 權重屬於 Microsoft，隨 DNS-Challenge 發布；kudio 除此之外全是原始碼，
 我不想在裡面夾帶別人的二進位檔。所以這裡需要兩樣這一頁其他地方都不需要的東西：
-用 `pip install kudio[dnsmos]` 裝 onnxruntime，以及從那個儲存庫 clone 下來的一份副本。
+用 `pip install "kudio[dnsmos]"` 裝 onnxruntime，以及從那個儲存庫 clone 下來的一份副本。
 
 ```python
 score = kudio.dnsmos(take, sr, model_dir="DNS-Challenge/DNSMOS")

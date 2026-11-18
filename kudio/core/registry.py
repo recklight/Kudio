@@ -816,11 +816,14 @@ def _kudio_entry() -> str:
     # @misc rather than @software: plain.bst and IEEEtran.bst know no
     # @software and drop its version, and every style prints a note. No
     # year: the year a version came out is not known until it is out, and a
-    # guessed one in a bibliography outlives the guess.
+    # guessed one in a bibliography outlives the guess. The DOI is Zenodo's
+    # concept DOI, which resolves to the newest release; the version in the
+    # note says which one was used.
     return "\n".join(("@misc{kudio,",
                       "  author = {RL},",
                       "  title = {Kudio},",
                       f"  note = {{Version {__version__}}},",
+                      "  doi = {10.5281/zenodo.24219274},",
                       "  url = {https://github.com/recklight/Kudio},",
                       "}"))
 
