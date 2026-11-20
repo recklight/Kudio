@@ -10,6 +10,7 @@ import numpy as np
 
 import figstyle
 import kudio
+from kudio.core import report
 
 SR = 16000
 
@@ -23,40 +24,48 @@ def _take() -> np.ndarray:
     return 0.05 * voice * words + 0.002 * rng.standard_normal(t.size)
 
 
-def _spectrum_db(y: np.ndarray, size: int = 1024):
-    """Mean power over half-overlapping Hann frames, in dB under its peak --
-    the spectrum audio_report reads the bandwidth from."""
-    starts = range(0, len(y) - size + 1, size // 2)
-    frames = np.stack([y[s:s + size] for s in starts]) * np.hanning(size)
-    power = np.mean(np.abs(np.fft.rfft(frames, axis=-1)) ** 2, axis=0)
-    db = 10 * np.log10(np.maximum(power, 1e-30))
-    return np.fft.rfftfreq(size, 1 / SR), db - db.max()
+def _edges(y: np.ndarray):
+    """The spectrum audio_report looks for an edge in, and its peak in dB."""
+    edges = report._Edges(*report._welch_db(np.asarray(y, dtype=np.float64), SR), SR)
+    return edges, float(edges.db.max())
 
 
 def draw_bandwidth(fig, p) -> None:
     take = _take()
     narrow = kudio.resample(kudio.resample(take, SR, 8000), 8000, SR)
+    fc = 4000.0                       # the Nyquist frequency of 8 kHz audio
     ax = fig.add_subplot()
     # the upsampled copy underneath and wider: below 3.8 kHz the two are the
     # same audio, and both lines should stay visible there
     for y, colour, width, name in [
             (narrow, p["c2"], 2.0, "8 kHz audio in a 16 kHz file"),
             (take, p["c1"], 0.8, "recorded at 16 kHz")]:
-        freqs, db = _spectrum_db(y)
-        edge = kudio.audio_report(y, SR).bandwidth_hz
-        ax.plot(freqs / 1000, db, color=colour, lw=width,
-                label=f"{name}: content to {edge / 1000:.1f} kHz")
-        ax.plot([edge / 1000], [-50], "o", color=colour, ms=6, zorder=3)
-    ax.axhline(-50, color=p["muted"], lw=0.9, ls="--")
-    ax.text(4.3, -53, "50 dB under the peak", color=p["muted"], fontsize=9,
-            va="top")
-    ax.axvline(0.9 * SR / 2 / 1000, color=p["c4"], lw=0.9, ls=":")
-    ax.text(0.9 * SR / 2 / 1000 - 0.08, -112, "0.9 of Nyquist", color=p["c4"],
-            fontsize=9, ha="right", va="bottom")
+        edges, peak = _edges(y)
+        depth = edges.cliff_and_depth(fc)[1]
+        ax.plot(edges.freqs / 1000, edges.db - peak, color=colour, lw=width,
+                label=f"{name}: depth {depth:.0f} dB at 4 kHz")
+
+    # the two bands the depth compares, read off the smoothed spectrum
+    edges, peak = _edges(narrow)
+    smoothed = edges._smooth(fc) - peak
+    below = edges._median(smoothed, 0.70 * fc, 0.88 * fc)
+    above = edges._median(smoothed, 1.05 * fc, 0.97 * SR / 2)
+    ax.hlines(below, 0.70 * fc / 1000, 0.88 * fc / 1000, color=p["c4"], lw=3.0, zorder=3)
+    ax.hlines(above, 1.05 * fc / 1000, 0.97 * SR / 2 / 1000, color=p["c4"], lw=3.0,
+              zorder=3)
+    ax.annotate("", xy=(fc / 1000, above), xytext=(fc / 1000, below),
+                arrowprops=dict(arrowstyle="<->", color=p["c4"], lw=1.2))
+    ax.text(fc / 1000 + 0.12, (below + above) / 2,
+            f"depth {below - above:.0f} dB\n(an edge needs {report._DEPTH_DB:.0f})",
+            color=p["c4"], fontsize=9, va="center")
+    ax.text(0.79 * fc / 1000, below - 5, "0.70-0.88\nof the edge", color=p["c4"],
+            fontsize=9, ha="center", va="top")
+    ax.text(0.97 * SR / 2 / 1000, above + 14, "1.05 of the edge to 0.97 of Nyquist",
+            color=p["c4"], fontsize=9, ha="right", va="bottom")
     ax.set_xlim(0, SR / 2 / 1000 + 0.15)
     handles, labels = ax.get_legend_handles_labels()
     ax.legend(handles[::-1], labels[::-1], loc="upper right", fontsize=9)
-    ax.set_ylim(-115, 5)
+    ax.set_ylim(min(-120.0, above - 15), 5)
     ax.set_xlabel("Frequency (kHz)")
     ax.set_ylabel("Level under the peak (dB)")
 

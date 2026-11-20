@@ -120,7 +120,7 @@ the block below and run it first, in an empty folder, to make them.
 
     ```text title="Output"
     4.00s @ 16000 Hz · peak -10.1 dBFS · -22.8 LUFS · SNR~7 dB · bandwidth 8000 Hz
-    estimated SNR around 7 dB — the noise floor is close to the content
+    estimated SNR around 7 dB — noise close to the content gives that, and so does a steady sound such as hum or a running machine, whose loud and quiet frames hardly differ; the estimate cannot tell the two apart
     noisy     SI-SDR  +0.0 dB   SNR  +0.0 dB
     denoised  SI-SDR  +8.3 dB   SNR  +8.9 dB
     ```
@@ -134,7 +134,7 @@ the block below and run it first, in an empty folder, to make them.
     ```text title="Output"
     4.00s @ 16000 Hz · peak -10.1 dBFS · -22.8 LUFS · SNR~7 dB · bandwidth 8000 Hz
 
-    · estimated SNR around 7 dB — the noise floor is close to the content
+    · estimated SNR around 7 dB — noise close to the content gives that, and so does a steady sound such as hum or a running machine, whose loud and quiet frames hardly differ; the estimate cannot tell the two apart
 
     (This is a technical check. A perceptual score with no reference needs a trained model — see kudio.dnsmos.)
     ```

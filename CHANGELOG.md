@@ -4,6 +4,76 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.0] - 2026-11-20
+
+### Changed
+
+- `audio_report` decides `band_limited` by an edge, not by where the spectrum
+  falls 50 dB under its peak. A recording made at its own rate keeps its
+  converter's floor going above the content however low the content stops,
+  and is not band-limited: a 192 kHz measurement with content to 50 kHz was
+  told its extra rate was empty, and so was a pure tone or a clean take with
+  a quiet top octave. An edge is a band at least 20 dB under the one just
+  below it and 40 dB under it to Nyquist, looked for at the Nyquist
+  frequencies of ten common rates from 8 to 96 kHz and anywhere from 0.1 to
+  0.9 of Nyquist. Linear interpolation, which leaves no edge, is found by the
+  mirror image it leaves above the old Nyquist frequency.
+  tools/validation/band_limit.py has the cases it was tried on: eight
+  resamplers and 720 upsampled files, of which 468 of the 480 at 0 and
+  -20 dB are flagged (the 12 left are linear interpolation by a ratio that
+  is not a whole number) and none is named after a rate it was not made
+  from, and 470 recordings at their own rate, none flagged. `bandwidth_hz`
+  is the same number as before.
+- The band-limit finding compares the content with half the rate ("a 16000 Hz
+  file holds up to 8000 Hz"), where it said the file claims the rate; gives
+  where the edge test finds the content ending, `band_edge_hz`, where it
+  quoted `bandwidth_hz`, which a resampler's stopband carried to 27750 Hz on
+  white noise taken from 48 to 192 kHz and called 48 kHz; names
+  one source rate, two neighbours 9% apart when the edge fits both, or none
+  when it sits where no resampler would leave it; and says a codec cutting
+  there looks the same. `telephone` output is band-limited without a rate:
+  its 3400 Hz filter ends the content at 0.94 of 4 kHz.
+- An SNR estimate under 10 dB says that a steady sound, hum or a running
+  machine, reads the same as noise close to the content, since its loud and
+  quiet frames hardly differ; calling it noise was a guess.
+
+### Added
+
+- `tonal_lines`: the peaks of the averaged spectrum that stand 20 dB or more
+  above the running median around them, each with its frequency, level and
+  prominence, and the combs they make on whole multiples of one frequency,
+  found from the spacing as well, so hum without its fundamental is still a
+  50 Hz comb. It is not one of the report's findings, because a voice or a
+  note held at one pitch is a comb too.
+- `AudioReport.source_rates`, `mirrored`, `band_edge_hz`,
+  `full_scale_samples`, `sample_step` and `grid_bits`, after the other
+  fields and with defaults, so an `AudioReport` built by keyword keeps
+  working.
+  `full_scale_samples` counts every sample at 0.999 of full scale or more, in
+  a run or not. `sample_step` and `grid_bits` are the grid every sample
+  sits on, read at 24 bits; a grid coarser than 16 bits is a finding.
+  `grid_bits` is not ENOB, which is read from a sine's SINAD.
+- `audio_report(..., clip_run=3)`, the shortest flat run that counts as
+  clipping, for comparing with tools that count two samples in a row, or one.
+- `vad(..., band=None)`: `(low, high)` judges the frames band-passed to it,
+  the flatness over that band alone. In a 192 kHz file a floor above 20 kHz
+  can outweigh a quiet voice on the whole band; `band=(100, 4000)` finds it.
+- `mfcc(..., n_fft=None, hop_length=None, n_mels=None, fmax=None)`, passed to
+  librosa's mel spectrogram and left to librosa's own defaults when not
+  given. At 192 kHz those leave 3 of 128 bands empty; `n_fft=8192` leaves
+  none.
+
+### Fixed
+
+- A clipped plateau with a sample just under full scale at its edge, 0.9993
+  before five samples at 1.0, was judged together with that sample, found
+  not flat, and not counted at all. The plateau is counted on its own, when
+  it holds at least twice the share of its run above 0.999 that a smooth peak
+  of the same height keeps within 1e-4 of its top, so a sine normalised to
+  full scale stays unclipped at any frequency. The take on
+  docs/guide/inspection.md keeps its 3321; `hot.wav` on docs/cli.md counts
+  3390 where it counted 3342.
+
 ## [4.1.0] - 2026-11-19
 
 ### Fixed

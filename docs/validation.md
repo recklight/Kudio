@@ -2,10 +2,13 @@
 
 Each metric in the table below was compared with the implementation its
 published numbers come from, or, where there is none, with its definition
-worked out a second way. The comparisons are scripts in `tools/validation/`
-that anyone can run again. This page says, for each metric, where its
-definition comes from, what it was compared with, on what signals, the largest
-difference found, and where kudio differs from the reference on purpose.
+worked out a second way. `tonal_lines`, and the band limit, the clipping count
+and the sample grid of `audio_report`, have neither, and are checked on
+signals whose answer is known. The comparisons are scripts in
+`tools/validation/` that anyone can run again. This page says, for each
+metric, where its definition comes from, what it was compared with, on what
+signals, the largest difference found, and where kudio differs from the
+reference on purpose.
 Differences are absolute unless marked relative.
 
 Most of the comparisons are in the test suite as well: the tests store the
@@ -36,6 +39,10 @@ conformance recordings and pySIIB's demo recording is committed.
 | `der`, `jer`, `detection_error_rate` | pyannote.metrics 4.2.0; dscore's JER; a count on 1 ms frames | 8.9e-16 |
 | `pit_si_sdr`, `si_sdr_improvement`, `bss_eval`, `sdr_improvement` | torchmetrics 1.9.0; every permutation; mir_eval 0.8.2 | 8.9e-11 dB in SI-SDR; 0 for BSS Eval |
 | `bootstrap_ci`, `paired_ci`, `rate_ci`, `paired_rate_ci`, `permutation_test`, `holm` | scipy's `bootstrap` and `permutation_test` (1.13.1 and 1.18.1) on the same resamples and patterns; exact fractions; the definitions restated | 0 for percentile ends read off scipy's resamples and for exact p-values; 2.4e-14 of the width for BCa |
+| `audio_report`'s `band_limited`, `source_rates`, `mirrored` | no implementation; 720 upsampled files, 10 codec cuts and 470 recordings of known history | at 0 and -20 dB 468 of 480 flagged, the 12 left linear interpolation by a ratio that is not a whole number; none named wrong; none of the 470 flagged |
+| `tonal_lines` | no implementation; 720 sines, 90 noise clips, 40 pairs of combs | 0.162 Hz and 0.52 dB on the sines; no line in noise; 40 of 40 combs grouped right |
+| `audio_report`'s `clipped_samples`, `full_scale_samples` | no implementation; 1000 smooth peaks, 409 cut sines, an overdriven voice | no smooth peak counted; every plateau of a sine driven 1.01 times or more counted in full |
+| `audio_report`'s `sample_step`, `grid_bits` | no implementation; 7 known grids and 4 clips without one | 0 |
 
 The sections below have the details, and the last two say how to run the
 scripts and how the input rule and the import without librosa are tested.
@@ -815,6 +822,190 @@ On purpose
     (b + 1)/(B + 1); scipy doubles the smaller one-sided p-value. Over
     every pattern the two are the same.
 
+## Upsampling and band limits in `audio_report`
+
+Defined by
+:   kudio itself; no published test says whether a file was upsampled. An
+    edge is a frequency where the Welch spectrum (8192-sample Hann segments,
+    half overlapped, median-smoothed over 2% of the edge) stands at least
+    20 dB higher at 0.70-0.88 of the edge than at 1.05-1.25 of it, and at
+    least 40 dB higher than the median of everything from 1.05 of the edge to
+    0.97 of Nyquist. The content ends at the last frequency within 10 dB of
+    the band under the edge, and each common rate whose Nyquist frequency it
+    ends 0.95-1.06 of is named. Linear interpolation is tested apart: by a
+    whole factor, its image above the old Nyquist frequency fc stands
+    `40 log10 |sin(pi (fc - x) / sr) / sin(pi (fc + x) / sr)|` dB under the
+    band it mirrors, and the measured difference has to follow that curve to
+    a median absolute deviation of 0.3 dB, with its median within 1 dB of it.
+
+Compared with
+:   No implementation: files whose history is known, made by
+    `tools/validation/band_limit.py`.
+
+Signals
+:   Upsampled, 720 files of 2 s: the harmonic speech of the tests, white
+    noise, and noise low-passed at 0.84 of its own Nyquist frequency; ten
+    pairs of rates from 8000 -> 16000 to 96000 -> 192000 Hz; 0, -20 and
+    -40 dB; scipy's `resample_poly` with its default window and with
+    ("kaiser", 8.6), scipy's FFT `resample`, soxr VHQ, HQ, MQ and LQ, and
+    `np.interp`; quantised to 16 bits. Codec cuts: a brick wall at 15.5, 16,
+    17.5, 19.5 and 20 kHz in a 44.1 kHz file, at 0 and -20 dB. Recorded at
+    their own rate, 470 files, each as float and as 16-bit over five seeds:
+    speech, white noise, a spectrum falling 6 dB an octave and a random walk
+    at eight rates from 8000 to 192000 Hz; at 192000 Hz a floor rising
+    towards Nyquist, and bands stopping at 10, 20, 30, 50 and 80 kHz, with a
+    tone over a flat floor and without one over a rising floor; at 96000 Hz
+    bands stopping at 5, 10 and 20 kHz over a floor; mains hum at 48000 Hz.
+
+Result
+:   At 0 and -20 dB all 468 upsampled files the test models are flagged, the
+    12 by linear interpolation at 16000 -> 44100 and 44100 -> 96000 aside;
+    the 48 by whole-factor linear interpolation are found as mirror images,
+    0.20 dB off the curve at most, the median within 0.09 dB. None of the 720
+    is named after a rate it was not made from, and none of the 372 named is
+    said to hold content past 1.06 of the Nyquist frequency of the rate it is
+    named after. The content ends at 1.024 to
+    1.039 of the old Nyquist frequency with `resample_poly`, 1.042 to 1.052
+    with its Kaiser window, 1.000 with FFT resampling, 0.959 to 0.965 with
+    soxr VHQ, HQ and MQ, and 0.861 to 0.875 with soxr LQ, whose files are
+    flagged and not named; the low-passed noise, ending at 0.85 on its own,
+    is not named either. At -40 dB the 70 files of speech through the seven
+    resamplers that leave an edge are not flagged: the speech's bed stands
+    28.6 to 33.1 dB above the 16-bit floor there, under the 40 dB an edge
+    needs. All ten codec cuts are flagged, the content said to stop within
+    0.03% of the cut, and the cuts at 15.5 and 16 kHz are named 32000 Hz. None of the 470 recordings is flagged. The deepest
+    edge among them with a cliff of 20 dB is 34.3 dB deep, a band stopping at
+    80 kHz over a rising floor; the nearest to an image is 0.60 dB off the
+    curve and 1.77 dB above it, a band stopping at 30 kHz over a rising
+    floor, read at 24 kHz.
+
+On purpose
+:   Rates 9% apart (11025 and 12000, 22050 and 24000, 44100 and 48000, 88200
+    and 96000) are both named when the end of the content fits both: soxr
+    from 24, 48 or 96 kHz is named beside the rate below it. Linear
+    interpolation by a ratio that is not a whole number smears its image
+    (0.39 to 0.76 dB off the curve, the median 0.93 to 1.77 dB under it) and
+    is not caught. Edges above 0.9 of Nyquist, where a file's own
+    anti-aliasing filter can sit, are not judged, nor are clips shorter than
+    2048 samples.
+
+## Narrowband lines: `tonal_lines`
+
+Defined by
+:   kudio itself. A line is a local peak of the Welch spectrum (Hann
+    segments, half overlapped, the longest power of two up to
+    `sr / resolution_hz`, 5 Hz by default) standing `min_prominence_db`,
+    20 dB, above the median of the 101 bins around it; its frequency and
+    level are read off a parabola through the peak's three bins in dB. A comb
+    is three lines or more on one unbroken run of whole multiples of a
+    frequency, broken where three multiples in a row have no line, and is
+    scored one for each line it explains and minus a half for each multiple
+    from 1 to its highest member that has none.
+
+Compared with
+:   No implementation: sines and noise whose answer is known, made by
+    `tools/validation/report_checks.py`.
+
+Signals
+:   Sines at 120 frequencies spread evenly in log frequency from 50 Hz to
+    0.45 of the rate, at 16, 48 and 192 kHz, at -20 and -40 dBFS over white
+    noise at -60 dBFS, 3 s each: 720. Sines at 440, 3150 and 9100 Hz over
+    white noise of the same level, 10 s at 48 kHz, read at 10, 5 and 2.5 Hz.
+    White, pink and brown noise of 1 and 10 s at the three rates, five seeds:
+    90. A voice of 29 harmonics whose pitch glides from 110 to 170 Hz and
+    back, and one that wavers between 125 and 155 Hz five times a second,
+    five takes of 6 s each. A hum at 50 or 60 Hz with 10 harmonics beside a
+    comb at 1000 or 1300 Hz with 3 and a line at 2.5 times it, at two levels
+    and five seeds: 40.
+
+Result
+:   Every sine is found, and found alone: its frequency within 0.162 Hz
+    (0.042 of a bin), its level within 0.52 dB. Each halving of
+    `resolution_hz` raises a sine's prominence over the noise by 2.83 to
+    3.15 dB. No line in the 90 noise clips. The gliding voice leaves 20 lines
+    over its five takes and the wavering one 10, and neither a comb: where
+    a pitch turns it dwells long enough to stand out. The two combs are
+    grouped right in 40 of 40.
+
+On purpose
+:   The lines are not among `audio_report`'s findings: a voice or a note
+    held at one pitch is a comb, and a turning pitch leaves lines. A line is
+    measured against the median around it, so content switching on and off,
+    which raises that median, hides a weaker line under it.
+
+## Clipping in `audio_report`
+
+Defined by
+:   kudio itself. Samples at 0.999 of full scale or more make runs, and the
+    plateau of a run is its samples within 1e-4 of its top. A plateau counts
+    when it is `clip_run` samples long or more, three by default, and holds
+    at least twice the share of its run that a smooth peak of the same
+    height keeps within 1e-4 of its top: `sqrt(1e-4 / (m - 0.999))` for a
+    top at m, 0.32 at full scale, so 0.63 there. A run whose top is within
+    1e-4 of 0.999 is not judged. `full_scale_samples` counts every sample at
+    0.999 or more.
+
+Compared with
+:   No implementation: sines normalised to a peak and sines cut at full
+    scale, made by `tools/validation/report_checks.py`.
+
+Signals
+:   Smooth peaks: sines at 25 frequencies from 20 Hz to 2 kHz, at 16, 44.1,
+    48, 96 and 192 kHz, normalised to 1.0, 0.9999, 0.9995 and 0.9992, as
+    float and as 16 bits: 1000. Plateaus: sines at the same frequencies at
+    16, 48 and 192 kHz driven to 1.0005, 1.001, 1.002, 1.005, 1.01, 1.1 and
+    2 times full scale and cut back to it, where they leave a plateau of
+    three samples or more: 409. A voice of 19 harmonics on a wavering pitch,
+    10 s at 16 kHz, driven 1.2, 2 and 5 times and cut.
+
+Result
+:   No smooth peak is counted; the nearest holds 0.93 of the share that
+    counts. Every plateau of a sine driven 1.01 times or more is counted in
+    full, 207 of 207. Driven less, some count in part: at 0.05% cut off
+    (driven 1.0005), 5 of 42 in full and 35 in part; at 0.1%, 44 of 49 in
+    full; at 0.2%, 49 of 52;
+    at 0.5%, 57 of 59. The nearest plateau counted holds 1.01 of the share.
+    On the voice, `full_scale_samples` is the count of samples at 0.999 or
+    more, 3858, 33518 and 62310; `clip_run=1` leaves out 12, 267 and 12 of
+    them, the samples on the way up to a plateau, and the default three
+    counts 3492, 31608 and 62298.
+
+On purpose
+:   A cut of less than about 0.05% of the top cannot be told from a smooth
+    peak and is not counted: a sine driven 1.0005 times holds, on the
+    parabola, the share the threshold asks for, 0.632.
+
+## The sample grid of `audio_report`
+
+Defined by
+:   kudio itself. Every finite sample is read at 24-bit resolution. When all
+    of them are whole numbers there and 16 distinct values or more remain
+    once the two values at full scale are left out, the step is the greatest
+    common divisor of the gaps between neighbouring values; `sample_step` is
+    the step as a fraction of full scale and `grid_bits` is
+    `log2(2 / sample_step)`. Under 15.95 bits is a finding.
+
+Compared with
+:   No implementation: grids built in `tools/validation/report_checks.py`.
+
+Signals
+:   A 220 Hz tone with a tremolo over a noise bed, 2 s at 16 kHz, rounded to
+    steps of 1, 16, 256, 12 and 3 at 16 bits, to 12 at 16 bits with an
+    offset of 4, and to 1 at 24 bits. Without a grid: the same tone filtered
+    in float, a square wave, uniform noise within 7 steps of zero at 16 bits,
+    and digital silence.
+
+Result
+:   Every grid is measured exactly: 16, 12, 8, 12.4150, 14.4150, 12.4150 and
+    24 bits, the step to the bit. None of the four clips without a grid is
+    given one.
+
+On purpose
+:   `grid_bits` is not ENOB, which is read from a sine's SINAD; it says only
+    what steps the samples take. A gain raised after quantising leaves a
+    grid of its own, which is the point of the finding, and a near-silent
+    take with fewer than 16 values is not judged.
+
 ## SNR, SI-SDR, STOI and SDR
 
 `snr`, `si_sdr`, `segmental_snr` and `sdi` are a few lines of numpy each,
@@ -857,12 +1048,14 @@ either is in kudio.
 | `f0eval.py` | the F0 measures | mir_eval | 2 s |
 | `separation.py` | `pit_si_sdr`, `si_sdr_improvement`, `bss_eval` | torchmetrics, mir_eval | 70 s; 3 minutes on newer numpy |
 | `stats.py [--repetitions N]` | `bootstrap_ci`, `paired_ci`, `rate_ci`, `paired_rate_ci`, `permutation_test`, `holm` | scipy | 85 s; 30 s with `--repetitions 500` |
+| `band_limit.py` | the band limit of `audio_report` | soxr, which librosa installs | 2 minutes |
+| `report_checks.py` | `tonal_lines`, and the clipping count and sample grid of `audio_report` | nothing | 2 minutes |
 
 The numbers on this page come from five environments:
 
-- Python 3.9.13, numpy 2.0.2, scipy 1.13.1, librosa 0.11.0 and
+- Python 3.9.13, numpy 2.0.2, scipy 1.13.1, librosa 0.11.0, soxr 1.1.0 and
   scikit-learn 1.6.1: `lsd.py`, `wada.py`, `wer.py`, `verification.py`,
-  `stats.py` and `siib.py`, and the rows of `quality.py` and `srmr.py` that
+  `stats.py`, `siib.py`, `band_limit.py` and `report_checks.py`, and the rows of `quality.py` and `srmr.py` that
   need no reference package.
 - Python 3.10.22, numpy 2.2.6, scipy 1.15.2, librosa 0.11.0, pysepm_evo 0.1.1
   (with numba 0.67.0), pesq 0.0.4, SRMRpy 1.0 (with Gammatone 1.0.3),

@@ -108,6 +108,7 @@ from kudio.core.loudness import (
     normalize_lufs,
     true_peak,
 )
+from kudio.core.lines import TonalLines, tonal_lines
 from kudio.core.manager import AudioDataManager
 from kudio.core.melcepstrum import MCD_SETTINGS, mcd
 from kudio.core.report import AudioReport, audio_report
@@ -230,7 +231,7 @@ __all__ = [
     'loudness_over_time', 'LoudnessCurve', 'loudness_range', 'true_peak',
     'MOMENTARY', 'SHORT_TERM',
     # reference-free inspection
-    'AudioReport', 'audio_report',
+    'AudioReport', 'audio_report', 'TonalLines', 'tonal_lines',
     'DnsmosScore', 'dnsmos', 'dnsmos_p808', 'find_dnsmos_model',
     # what each metric is, and what to cite for it
     'METRIC_INFO', 'MetricInfo', 'metric_info', 'BIBTEX', 'cite',

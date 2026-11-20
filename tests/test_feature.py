@@ -67,6 +67,26 @@ def test_w2mfcc_shape(sine):
     assert mfcc.shape[0] == 1 and mfcc.shape[2] == 40
 
 
+def test_mfcc_left_to_its_defaults_is_librosas_own(sine):
+    import librosa
+    ours = w2mfcc(sine, 16000, n_mfcc=20)
+    theirs = librosa.feature.mfcc(y=np.asarray(sine), sr=16000, n_mfcc=20)
+    np.testing.assert_array_equal(ours[0], theirs.T)
+
+
+def test_mfcc_takes_the_analysis_of_the_mel_spectrogram():
+    """At 192 kHz librosa's 2048-point default leaves 3 of 128 bands empty and
+    warns; 8192 points fill them. The hop sets the number of frames."""
+    y = np.random.default_rng(0).standard_normal(192000).astype(np.float32)
+    with pytest.warns(UserWarning, match="Empty filters"):
+        w2mfcc(y, 192000)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        wide = w2mfcc(y, 192000, n_fft=8192, hop_length=1920)
+    assert wide.shape == (1, 1 + 192000 // 1920, 40)
+    assert w2mfcc(y, 192000, n_mels=64, fmax=24000).shape == (1, 1 + 192000 // 512, 40)
+
+
 def test_mfcc_from_files(wav_dir):
     files = sorted(wav_dir.glob("*.wav"))
     out = mfcc_from_files(files, n_mfcc=20)

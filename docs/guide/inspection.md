@@ -11,6 +11,7 @@ can answer on its own:
 |---|---|---|
 | What is this file? | [`audio_info`][kudio.core.io.audio_info] | the core install |
 | Is it technically sound? | [`audio_report`][kudio.core.report.audio_report] | the core install |
+| Does a hum or a whine stand out? | [`tonal_lines`][kudio.core.lines.tonal_lines] | the core install |
 | How loud does it sound, and where did the level move? | [`loudness`][kudio.core.loudness.loudness] and the functions beside it | the core install |
 | How reverberant is it? | [`srmr`][kudio.core.srmr.srmr] | the core install |
 | How far does the speech sit above its noise? | [`wada_snr`][kudio.core.wada.wada_snr] | the core install |
@@ -67,23 +68,32 @@ It takes mono audio and raises a [`FeatureError`][kudio.exceptions.FeatureError]
 on a multi-channel array. The default `file_load` averages the channels, which
 can hide a fault in one of them, so check a stereo file a channel at a time:
 load it with `mono=False` and report `y[:, 0]` and `y[:, 1]`. Frames are 30 ms
-at a 15 ms hop, and the thresholds are fixed, not parameters:
+at a 15 ms hop, and the thresholds are fixed; the one parameter, `clip_run`, is
+under [Clipping](#clipping):
 
 | Field | Measures | Flagged when |
 |---|---|---|
 | `peak_dbfs` | the loudest sample, in dBFS | over 0, over -0.5 or under -30 |
-| `clipped_samples`, `clipped_ratio` | samples in a flat run at full scale | any |
+| `clipped_samples`, `clipped_ratio` | samples in a flat run at full scale, `clip_run` (3) long or more | any |
+| `full_scale_samples` | samples at 0.999 of full scale or more, in a run or not | never |
 | `dc_offset` | the mean sample value | size over 0.01 |
 | `silence_ratio` | share of frames more than 40 dB below the 95th-percentile frame | over 0.6 |
 | `noise_floor_dbfs` | level of the 10th-percentile frame | never |
 | `estimated_snr_db` | 95th-percentile frame level minus the 10th | under 10 dB |
-| `bandwidth_hz`, `band_limited` | highest frequency still carrying content | under 0.9 of Nyquist |
+| `bandwidth_hz` | highest frequency within 50 dB of the strongest | never |
+| `band_limited`, `source_rates`, `mirrored`, `band_edge_hz` | an edge with an empty band above it, or the mirror image linear interpolation leaves | when found |
+| `sample_step`, `grid_bits` | the grid every sample sits on | coarser than 16 bits |
 | `lufs`, `rms_dbfs` | integrated loudness (`nan` under 0.4 s) and plain RMS | never |
 | `non_finite_samples` | samples that are NaN or inf | any |
 
 The three peak limits mean past full scale, one gain stage from clipping, and
 too little of the bit depth in use. A peak of `-inf` (digital silence) and any
 non-finite sample are each reported on their own, with nothing else beside them.
+
+An SNR estimate under 10 dB is a finding with two readings. Noise close to the
+content gives it, and so does a steady sound, hum or a running machine, whose
+loud and quiet frames hardly differ: white noise reads 0.8 dB, a 50 Hz hum 2.2.
+The frame levels cannot tell the two apart, so the finding names both.
 
 ### Clipping
 
@@ -114,20 +124,52 @@ that it peaks at 0.0 dBFS, right against the ceiling. A clipped recording turned
 before writing, while the samples past 1.0 are still there to see; the second
 case needs a look at the waveform.
 
+Other tools draw the line elsewhere, at two samples in a row or at every sample
+at full scale. `clip_run` moves the run length, and `full_scale_samples` counts
+every sample at 0.999 of full scale or more, so a count from another tool can
+be checked against the same file:
+
+```python
+clipped = np.clip(hot, -1.0, 1.0)
+for run in (3, 2, 1):
+    r = kudio.audio_report(clipped, sr, clip_run=run)
+    print(run, r.clipped_samples, r.full_scale_samples)
+```
+
+```text
+3 3321 4448
+2 4439 4448
+1 4440 4448
+```
+
+Even one sample at a time, 8 of the 4448 are not counted: each sits beside a
+plateau at 0.9992 to 0.9998, the waveform on its way up to full scale rather
+than on it.
+
 ### Upsampled and band-limited files
 
 The fault that does the quietest damage to a dataset is a 16 kHz file holding
 8 kHz audio: resampled up at some point, nothing above 4 kHz, and treated as
-wideband by everything downstream. A recording made at its stated rate usually
-has a noise floor spread over the whole band, so its spectrum reaches Nyquist.
-Upsampled audio has nothing above the old Nyquist at all.
+wideband by everything downstream. Where the content stops does not say it on
+its own. A 192 kHz measurement whose content ends at 50 kHz is a native
+recording, because its converter's floor goes on above the content all the way
+to Nyquist. Upsampled audio has an edge instead, with an empty band above it.
 
-So the report averages the spectrum over 1024-sample Hann frames and takes the
-highest frequency still within 50 dB of the strongest one. Below 0.9 of Nyquist
-the clip counts as band-limited. When twice that frequency is within 15 % of a
-common rate (8, 11.025, 16, 22.05, 32, 44.1 or 48 kHz), the finding names it
-as the rate the file was upsampled from; otherwise it names the frequency
-itself, "band-limited to about 3219 Hz".
+So the report looks for an edge. It averages the spectrum over 8192-sample
+Hann segments, smooths it with a running median over 2% of the frequency in
+question, and calls that frequency an edge when the band at 0.70-0.88 of it
+stands at least 20 dB above the band at 1.05-1.25 of it, and at least 40 dB
+above everything from 1.05 of it to Nyquist. It asks first at the Nyquist
+frequencies of ten common rates from 8 to 96 kHz, then at 200 frequencies from
+0.1 to 0.9 of Nyquist, for a codec or a filter. Where the content ends names
+the rate: each common rate whose Nyquist frequency it ends 0.95-1.06 of goes
+into `source_rates`. Resamplers end it anywhere from 0.959 (soxr VHQ) to 1.052
+(scipy's `resample_poly` with a Kaiser window) of the old Nyquist frequency, so
+where two rates are 9% apart, 22.05 and 24 kHz for instance, the finding can
+name both. The finding gives `band_edge_hz`, where the edge test finds the
+content ending. `bandwidth_hz`, the highest frequency within 50 dB of the
+strongest, is kept beside it; a resampler's stopband or a line above the edge
+can carry it past the rate the file is named after.
 
 ```python
 narrow = kudio.resample(kudio.resample(take, sr, 8000), 8000, sr)
@@ -136,23 +178,110 @@ for problem in kudio.audio_report(narrow, sr).problems():
 ```
 
 ```text
-content stops at 3797 Hz although the file claims 16000 Hz — it was very likely upsampled from 8000 Hz, and the extra rate is empty
+content stops at 3816 Hz, although a 16000 Hz file holds up to 8000 Hz — it was very likely upsampled from 8000 Hz (a codec that cuts there looks the same), and the band above is empty
 ```
 
-![Average spectrum of the take and of its upsampled copy, with the 50 dB line where the report reads the bandwidth](../images/inspection-bandwidth-light.webp#only-light)
-![Average spectrum of the take and of its upsampled copy, with the 50 dB line where the report reads the bandwidth](../images/inspection-bandwidth-dark.webp#only-dark)
+![Average spectrum of the take and of its upsampled copy, with the two bands the report compares at 4 kHz](../images/inspection-bandwidth-light.webp#only-light)
+![Average spectrum of the take and of its upsampled copy, with the two bands the report compares at 4 kHz](../images/inspection-bandwidth-dark.webp#only-dark)
+
+Linear interpolation leaves no edge. It mirrors the band under the old Nyquist
+frequency above it, weakened by the interpolator's response, which depends on
+nothing but the two rates. When the band above follows that response to
+0.3 dB, the report sets `mirrored` and says the file was upsampled by linear
+interpolation.
 
 [`telephone`][kudio.effects.channel.telephone] on
 [Rooms and channels](degradation.md) makes such a file on purpose, and the
-report reads it the same way. The check makes two assumptions. The content has
-to be broadband, as speech is: a pure 220 Hz tone is reported as band-limited
-and as noisy, which is correct arithmetic and no use to anybody. And the noise
-floor has to sit within 50 dB of the strongest part of the spectrum. A clean
-recording with a quieter hiss and a quiet top octave stops short of 0.9 of
-Nyquist with nothing resampled: the take's voice with its harmonics falling as
-`1 / k**1.5` instead of `1 / k`, over hiss at -66 dBFS, is reported as
-stopping at 6578 Hz. On a quiet, clean file, take the finding as a reason to
-look at the spectrum, not as proof.
+report finds its edge, without a rate: the line's own filter ends the content
+earlier than a resampler would.
+[How the metrics are checked](../validation.md#upsampling-and-band-limits-in-audio_report)
+has the cases the rule was tried on: eight resamplers, ten pairs of rates, and
+470 recordings made at their own rate, none of which it flags. What it misses:
+content standing less than 40 dB above the floor of the file it was upsampled
+into (the test speech at -40 dB in a 16-bit file stands 28.6 to 33.1 dB
+above it); linear interpolation by a ratio that is not a whole number, 16 to
+44.1 kHz for instance; and an edge above 0.9 of Nyquist, as from 44.1 to
+48 kHz, where the file's own anti-aliasing filter can sit. A codec that cuts at
+a common rate's Nyquist frequency leaves the same edge as upsampling from that
+rate, which is why the finding says so.
+
+### The sample grid
+
+The container says 16 or 24 bits; the samples say how many are in use. The
+report reads every finite sample at 24-bit resolution and, when they all sit on
+a coarser grid, gives its step as `sample_step`, a fraction of full scale
+(2/65536 for 16-bit audio), and its size as `grid_bits`. Fewer than 16 is
+a finding: a 12-bit converter written to a 16-bit file, or gain raised after
+the audio was quantised, leaves every sample a multiple of some step.
+
+```python
+coarse = np.round(take * 2048) / 2048           # a 12-bit converter's steps
+r = kudio.audio_report(coarse, sr)
+print(r.sample_step, r.grid_bits)
+for problem in r.problems():
+    print(problem)
+```
+
+```text
+0.00048828125 12.0
+every sample sits on a grid of 12.0 bits — coarser than 16-bit audio, from a low-resolution converter or gain raised after the audio was quantised
+```
+
+The two values at full scale are left out, so a clipped take keeps its grid,
+and fewer than 16 distinct values, a square wave or a near-silent take, is no
+grid at all. Float audio that has been processed sits on none: `sample_step`
+is 0.0 and `grid_bits` nan.
+
+### Hum and other lines
+
+A line 30 dB above its neighbourhood moves none of the report's numbers much,
+and it is what a machine, a switching supply or a ground loop leaves in a
+recording. [`tonal_lines`][kudio.core.lines.tonal_lines] finds the peaks of
+the averaged spectrum that stand 20 dB or more above the running median
+around them, and groups those on whole multiples of one frequency into a
+comb, the shape mains hum takes:
+
+```python
+hum = sum(0.01 / k * np.sin(2 * np.pi * 50 * k * t) for k in range(1, 6))
+whine = 0.003 * np.sin(2 * np.pi * 1000 * t)
+room = 0.002 * rng.standard_normal(t.size) + hum + whine
+found = kudio.tonal_lines(room, sr)
+print(found)
+for line in found.lines:
+    print(f"{line.hz:7.1f} Hz  {line.level_dbfs:6.1f} dBFS  {line.prominence_db:4.0f} dB above")
+```
+
+```text
+6 lines, the strongest at 49.9 Hz, 35 dB above its neighbourhood; 50.00 Hz comb, 5 lines (harmonics 1-5)
+   49.9 Hz   -39.9 dBFS    35 dB above
+  100.0 Hz   -45.8 dBFS    34 dB above
+  150.0 Hz   -49.3 dBFS    33 dB above
+  200.1 Hz   -52.0 dBFS    30 dB above
+  250.0 Hz   -54.0 dBFS    28 dB above
+ 1000.0 Hz   -50.4 dBFS    32 dB above
+```
+
+The 1 kHz whine stays a line of its own: a comb has to explain at least three
+lines, and it loses half a point for every multiple it misses. A comb is
+found from the spacing of its lines too, so hum whose fundamental did not
+make it through a small speaker is still a 50 Hz comb. The function says
+which frequencies stand out, not why, and a voice held at one pitch is a comb
+like any other:
+
+```python
+print(kudio.tonal_lines(take, sr))
+```
+
+```text
+44 lines, the strongest at 140.0 Hz, 39 dB above its neighbourhood; 140.00 Hz comb, 44 lines (harmonics 1-40, 42-45)
+```
+
+Speech moves its pitch and smears its harmonics, so it seldom shows up; a
+held note, a machine's tone and the take above always do. The spectrum is
+read at about 5 Hz a bin (`resolution_hz`), as fine as the clip's length
+allows. Content switching on and off raises the background a line is
+measured against: in the take, the words lift it from -85 to -70 dB around
+100 Hz, and a hum line 14 dB above that is not reported.
 
 ### When one fault changes another's reading
 
@@ -160,8 +289,8 @@ The measurements all come from the same samples, so one fault could move a
 number that belongs to another. A DC offset does not: the frame levels are
 measured with the clip's mean taken out, so an offset is reported as an offset
 and the floor is read from what is left. Clipping does. It spreads energy up
-the spectrum, past the 50 dB line, so a clipped file looks wideband whatever
-its history:
+the spectrum and fills the empty band above the edge, so a clipped file looks
+wideband whatever its history:
 
 ```python
 for label, clip in [("as is", narrow),

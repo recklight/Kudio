@@ -261,11 +261,18 @@ is added to each end.
 | `min_speech` | 0.10 s | clicks and knocks come through as short spans (raise it) |
 | `min_silence` | 0.15 s | words split at their stops (raise it), or separate phrases merge (lower it) |
 | `pad` | 0.05 s | the cuts clip the first or last consonant (raise it) |
+| `band` | `None`, the whole band | the recording is at a high rate with a strong floor above the speech band: `(100, 4000)` |
 
 White noise sits close above the default flatness limit, so raise it with
 care: on `quiet.wav`, 0.5 still finds the three words alone, and 0.6 brings
 the clatter back as 2.14 to 2.51 s. The [reference][kudio.core.vad.vad] has
-every argument. `vad` raises [`FeatureError`][kudio.exceptions.FeatureError]
+every argument. `band` band-passes the clip before it is judged and takes the
+flatness over that band alone. In a 192 kHz file a floor above 20 kHz can
+hold most of each frame's energy: the test bursts at a tenth of their level
+over such a floor are not found on the whole band, and with `band=(100, 4000)`
+both are, within 0.02 s of where the 16 kHz clip has them. Like the rumble
+below, a thump inside the band is loud and uneven and can still pass as
+speech. `vad` raises [`FeatureError`][kudio.exceptions.FeatureError]
 on a multichannel array; [`file_load`][kudio.core.io.file_load] mixes down to
 mono unless you pass `mono=False`.
 

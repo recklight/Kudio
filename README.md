@@ -95,9 +95,10 @@ print(kudio.true_peak(y, sr))                         # dBTP, between the sample
 # --- is this recording usable at all? no reference needed -----------------
 info = kudio.audio_info("clip.wav")                   # header, without loading
 for problem in kudio.audio_report(y, sr).problems():
-    print(problem)     # "content stops at 3812 Hz although the file claims
-                       #  16000 Hz — it was very likely upsampled from
-                       #  8000 Hz, and the extra rate is empty"
+    print(problem)     # "content stops at 3812 Hz, although a 16000 Hz file
+                       #  holds up to 8000 Hz — it was very likely upsampled
+                       #  from 8000 Hz (a codec that cuts there looks the
+                       #  same), and the band above is empty"
 
 print(kudio.srmr(y, sr), kudio.wada_snr(y, sr))  # reverberation (8/16 kHz), SNR
 

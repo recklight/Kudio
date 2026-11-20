@@ -34,7 +34,7 @@ MODULES = ('kudio', 'kudio.core.evaluator', 'kudio.core.quality', 'kudio.core.sr
            'kudio.core.room', 'kudio.core.align', 'kudio.core.intelligibility',
            'kudio.core.wer', 'kudio.core.f0eval', 'kudio.core.verification',
            'kudio.core.separation', 'kudio.core.diarization', 'kudio.core.melcepstrum',
-           'kudio.core.dnsmos', 'kudio.core.siib')
+           'kudio.core.dnsmos', 'kudio.core.siib', 'kudio.core.lines')
 
 #: Each metric that needs no optional package, as an expression that has to
 #: give a finite number with every warning raised as an error. In scope:
@@ -62,6 +62,7 @@ SCORES = {
     'loudness': 'kudio.loudness(clip, sr)',
     'true_peak': 'kudio.true_peak(clip, sr)',
     'audio_report': 'kudio.audio_report(clip, sr).estimated_snr_db',
+    'tonal_lines': 'len(kudio.tonal_lines(clip, sr).lines)',
     'rt60': 'kudio.rt60(rir, sr).t30',
     'find_delay': 'kudio.find_delay(ref, deg, sr).delay',
     'ncm': 'kudio.ncm(ref, deg, sr)',

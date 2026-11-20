@@ -203,11 +203,23 @@ def save_spectrogram_as_wave(wave_out_dir: PathLike, noisy_file: PathLike,
     save_wave(wave_out_dir, y_out, rate)
 
 
-def mfcc(y: np.ndarray, sr: int, n_mfcc: int = 40) -> np.ndarray:
-    """Waveform -> MFCC, shaped ``(1, n_frames, n_mfcc)``. *y* is mono."""
+def mfcc(y: np.ndarray, sr: int, n_mfcc: int = 40, *,
+         n_fft: Optional[int] = None, hop_length: Optional[int] = None,
+         n_mels: Optional[int] = None, fmax: Optional[float] = None) -> np.ndarray:
+    """Waveform -> MFCC, shaped ``(1, n_frames, n_mfcc)``. *y* is mono.
+
+    *n_fft*, *hop_length*, *n_mels* and *fmax* go to librosa's mel
+    spectrogram; each one left out is librosa's own (2048, 512, 128 and
+    Nyquist in librosa 0.11 and 1.0). At 192 kHz those defaults leave 3 of the
+    128 bands without a single FFT bin, which librosa warns about; an *n_fft*
+    of 8192, or 64 bands, leaves none empty.
+    """
     y = _mono(y, "mfcc()")
     librosa = _optional.librosa()
-    return librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc).T.reshape(1, -1, n_mfcc)
+    given = {name: value for name, value in (("n_fft", n_fft), ("hop_length", hop_length),
+                                             ("n_mels", n_mels), ("fmax", fmax))
+             if value is not None}
+    return librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc, **given).T.reshape(1, -1, n_mfcc)
 
 
 def mfcc_from_files(wav_list: Sequence, n_mfcc: int = 40,

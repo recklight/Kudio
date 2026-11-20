@@ -242,11 +242,13 @@ for problem in kudio.audio_report(phone, sr).problems():
 
 ```text
 True
-content stops at 3766 Hz although the file claims 16000 Hz — it was very likely upsampled from 8000 Hz, and the extra rate is empty
+content stops at 3758 Hz, although a 16000 Hz file holds up to 8000 Hz — it was very likely upsampled from a lower rate, or passed through a codec or a filter that cuts there, and the band above is empty
 ```
 
 [`audio_report`][kudio.core.report.audio_report] sees through it: the content
-stops below 4 kHz, so it names 8 kHz as the rate the file really had.
+stops below 4 kHz with nothing above it. It does not name 8 kHz, because the
+line's 3400 Hz filter ends the content at 0.94 of 4 kHz, earlier than a
+resampler would, and a filter there looks the same at any rate.
 [Inspecting a recording](inspection.md) explains how it decides.
 
 ### Companding and bit depth

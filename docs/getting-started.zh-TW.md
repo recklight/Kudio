@@ -143,7 +143,7 @@ for problem in report.problems():
 
 ```text
 4.50s @ 16000 Hz · peak -5.3 dBFS · -18.4 LUFS · SNR~9 dB · bandwidth 8000 Hz
-estimated SNR around 9 dB — the noise floor is close to the content
+estimated SNR around 9 dB — noise close to the content gives that, and so does a steady sound such as hum or a running machine, whose loud and quiet frames hardly differ; the estimate cannot tell the two apart
 ```
 
 [`audio_report`][kudio.core.report.audio_report] 不需要乾淨的參考訊號。它量準位、響度、

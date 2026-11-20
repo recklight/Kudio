@@ -172,7 +172,7 @@ kudio report hot.wav
 ```text title="輸出"
 10.00s @ 16000 Hz · peak 0.0 dBFS · -9.7 LUFS · SNR~33 dB · bandwidth 8000 Hz
 
-· 3342 samples clipped (2.09% of the clip) — the recording was already too hot; no processing gets that back
+· 3390 samples clipped (2.12% of the clip) — the recording was already too hot; no processing gets that back
 
 (This is a technical check. A perceptual score with no reference needs a trained model — see kudio.dnsmos.)
 ```
@@ -373,7 +373,7 @@ kudio normalize take.wav loud.wav --lufs -6
 warning: normalize_lufs: -6.0 LUFS puts the peak at 2.09 (6.4 dBFS over); the signal will clip when written to an integer format
 ```
 
-之後執行 `kudio report loud.wav` 會發現 12164 個削峰樣本，佔檔案的 7.60%。我讓增益維持
+之後執行 `kudio report loud.wav` 會發現 12352 個削峰樣本，佔檔案的 7.72%。我讓增益維持
 精確，而不是加上限制器，因為限制器會改變你要求的響度。
 
 ### trim {#trim}
@@ -477,8 +477,8 @@ si_sdr       -4.54 dB against the original
 
 `--telephone` 就是 [`telephone`][kudio.effects.channel.telephone]：300 到 3400 Hz，降到
 8 kHz，經過 G.711 mu-law 再升回來。加上 `--codec a_law` 則改用歐洲的壓擴曲線。之後
-`kudio report phone.wav` 會以 1 結束，只有一項發現：「content stops at 3797 Hz although
-the file claims 16000 Hz」，電話錄音就是這樣露出馬腳的。
+`kudio report phone.wav` 會以 1 結束，只有一項發現：「content stops at 3768 Hz, although
+a 16000 Hz file holds up to 8000 Hz」，電話錄音就是這樣露出馬腳的。
 
 封包遺失是 [`dropouts`][kudio.effects.channel.dropouts]。`--loss` 是要遺失的 20 ms 封包
 比例，遺失的數量剛好就是這麼多，而不是照這個機率抽：500 個封包的 5% 是 25 個。獨立遺失時，

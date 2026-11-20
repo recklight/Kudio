@@ -198,3 +198,43 @@ def test_a_corrupt_clip_is_refused():
     y[100] = np.nan
     with pytest.raises(kudio.FeatureError, match="not finite"):
         kudio.vad(y, 16000)
+
+
+# -- judging the frames on a band ----------------------------------------------
+def _under_an_ultrasonic_floor(seed=1):
+    """make_speech at a tenth of its level in a 192 kHz file, over a floor
+    above 20 kHz that holds most of each frame's energy."""
+    from conftest import make_speech
+    voice = kudio.resample(make_speech(), SR, 192000).astype(np.float64)
+    floor = kudio.highpass(np.random.default_rng(seed).standard_normal(len(voice)),
+                           192000, cutoff=20000)
+    return 0.1 * voice + 0.02 * floor, 0.02 * floor
+
+
+def test_a_band_finds_speech_that_an_ultrasonic_floor_hides(speech):
+    y, _ = _under_an_ultrasonic_floor()
+    assert kudio.vad(y, 192000) == [], "the floor outweighs the voice"
+    found = kudio.vad(y, 192000, band=(100, 4000))
+    expected = kudio.vad(speech, SR)
+    assert len(found) == len(expected) == 2
+    assert np.ravel(found) == pytest.approx(np.ravel(expected), abs=0.02)
+
+
+def test_a_band_does_not_find_speech_in_the_floor_alone():
+    _, floor = _under_an_ultrasonic_floor()
+    white = 0.01 * np.random.default_rng(2).standard_normal(len(floor))
+    assert kudio.vad(floor + white, 192000, band=(100, 4000)) == []
+
+
+@pytest.mark.parametrize("band", [(0, 4000), (100, 8000), (100, 4000)])
+def test_a_band_on_a_16_khz_clip_finds_the_same_bursts(speech, band):
+    found = kudio.vad(speech, SR, band=band)
+    assert np.ravel(found) == pytest.approx(np.ravel(kudio.vad(speech, SR)), abs=0.02)
+
+
+@pytest.mark.parametrize("band", [(4000, 100), (-1, 100), (9000, 10000), (1005, 1020)])
+def test_a_band_that_is_not_one_is_refused(speech, band):
+    """(1005, 1020) holds no bin of a 30 ms frame, 33.3 Hz apart, and came back
+    as no speech with a numpy warning about an empty mean."""
+    with pytest.raises(FeatureError, match="band"):
+        kudio.vad(speech, SR, band=band)

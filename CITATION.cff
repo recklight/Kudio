@@ -5,8 +5,8 @@ abstract: "Audio toolkit, speech most of all: I/O, recording, features, noisy-da
 type: software
 authors:
   - alias: "RL"
-version: "4.1.0"
-date-released: "2026-11-19"
+version: "4.2.0"
+date-released: "2026-11-20"
 # the concept DOI, which Zenodo points at the newest release
 doi: "10.5281/zenodo.24219274"
 license: MIT

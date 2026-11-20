@@ -194,7 +194,7 @@ kudio report hot.wav
 ```text title="Output"
 10.00s @ 16000 Hz · peak 0.0 dBFS · -9.7 LUFS · SNR~33 dB · bandwidth 8000 Hz
 
-· 3342 samples clipped (2.09% of the clip) — the recording was already too hot; no processing gets that back
+· 3390 samples clipped (2.12% of the clip) — the recording was already too hot; no processing gets that back
 
 (This is a technical check. A perceptual score with no reference needs a trained model — see kudio.dnsmos.)
 ```
@@ -415,7 +415,7 @@ kudio normalize take.wav loud.wav --lufs -6
 warning: normalize_lufs: -6.0 LUFS puts the peak at 2.09 (6.4 dBFS over); the signal will clip when written to an integer format
 ```
 
-`kudio report loud.wav` afterwards finds 12164 clipped samples, 7.60% of the
+`kudio report loud.wav` afterwards finds 12352 clipped samples, 7.72% of the
 file. I keep the gain exact rather than limiting it, because a limiter would
 change the loudness that was asked for.
 
@@ -535,8 +535,8 @@ si_sdr       -4.54 dB against the original
 `--telephone` is [`telephone`][kudio.effects.channel.telephone]: 300 to
 3400 Hz, down to 8 kHz, through G.711 mu-law and back up. Add `--codec a_law`
 for the European companding curve. `kudio report phone.wav` then exits 1 with
-one finding, "content stops at 3797 Hz although the file claims 16000 Hz",
-which is what gives a phone recording away.
+one finding, "content stops at 3768 Hz, although a 16000 Hz file holds up to
+8000 Hz", which is what gives a phone recording away.
 
 Packet loss is [`dropouts`][kudio.effects.channel.dropouts]. `--loss` is the
 fraction of 20 ms packets to drop, and that many are dropped exactly, not drawn

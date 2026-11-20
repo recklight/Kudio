@@ -33,7 +33,7 @@ cut does not land on the first consonant. Pure numpy — no webrtcvad, no torch.
 from __future__ import annotations
 
 import logging
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -69,11 +69,13 @@ FRICATIVE_REACH = 0.20
 _NOISE_PERCENTILE = 15.0
 
 
-def _flatness(frames: np.ndarray) -> np.ndarray:
-    """Wiener entropy per frame: geometric over arithmetic mean of the power."""
+def _flatness(frames: np.ndarray, keep: Optional[np.ndarray] = None) -> np.ndarray:
+    """Wiener entropy per frame: geometric over arithmetic mean of the power,
+    over the bins *keep* marks (all but DC when it is None)."""
     window = np.hanning(frames.shape[-1])
     power = np.abs(np.fft.rfft(frames * window, axis=-1)) ** 2
-    power = np.maximum(power[:, 1:], 1e-20)         # drop DC, keep the log sane
+    power = power[:, 1:] if keep is None else power[:, keep]
+    power = np.maximum(power, 1e-20)                # keep the log sane
     geometric = np.exp(np.mean(np.log(power), axis=-1))
     arithmetic = np.mean(power, axis=-1)
     return geometric / np.maximum(arithmetic, 1e-20)
@@ -104,7 +106,8 @@ def vad(y: np.ndarray, sr: int, *,
         min_silence: float = 0.15,
         pad: float = 0.05,
         frame: float = FRAME,
-        hop: float = HOP) -> List[Tuple[float, float]]:
+        hop: float = HOP,
+        band: Optional[Tuple[float, float]] = None) -> List[Tuple[float, float]]:
     """Find the spans of *y* that contain speech, in **seconds**.
 
     ```
@@ -122,11 +125,17 @@ def vad(y: np.ndarray, sr: int, *,
     :param min_silence: gaps shorter than this do not split a segment; a stop
         consonant is a real silence in the middle of a word.
     :param pad: seconds added to each end, so the cut misses the consonant.
+    :param band: ``(low, high)`` in Hz to judge the frames on, band-passed to
+        it. In a recording made at 192 kHz a floor above the speech band can
+        hold most of each frame's energy, and a quiet voice no longer stands
+        the *threshold_db* above it a frame needs; ``(100, 4000)`` judges it
+        where speech is. ``None``, the default, takes the whole band.
     :returns: non-overlapping ``(start, end)`` pairs, in order. Empty when
         nothing in the clip looks like speech.
 
-    :raises FeatureError: on non-mono audio, samples that are not finite, or
-        a non-positive sample rate. A clip with NaN or inf in it is refused,
+    :raises FeatureError: on non-mono audio, samples that are not finite, a
+        non-positive sample rate, or a *band* that is not ``low < high`` with
+        *low* under Nyquist. A clip with NaN or inf in it is refused,
         as :func:`kudio.f0` and :func:`kudio.spectral_enhance` refuse it,
         rather than judged with those frames left out.
     """
@@ -142,9 +151,30 @@ def vad(y: np.ndarray, sr: int, *,
                            f"sample(s) that are not finite (NaN or inf); repair "
                            f"the clip first")
 
+    keep = None
+    if band is not None:
+        low, high = (float(v) for v in band)
+        if not 0.0 <= low < high or low >= sr / 2.0:
+            raise FeatureError(f"vad() needs a band with 0 <= low < high and low under "
+                               f"{sr / 2.0:g} Hz, got {band}")
+        from kudio.effects.filters import bandpass, highpass, lowpass
+        if high >= sr / 2.0:
+            y = highpass(y, sr, cutoff=low) if low > 0 else y
+        elif low > 0:
+            y = bandpass(y, sr, low=low, high=high)
+        else:
+            y = lowpass(y, sr, cutoff=high)
+
     size = max(16, int(round(frame * sr)))
     step = max(1, int(round(hop * sr)))
     frames = frame_view(y, size, step)
+    if band is not None:
+        freqs = np.fft.rfftfreq(size, 1.0 / sr)
+        keep = (freqs >= max(low, freqs[1])) & (freqs <= high)
+        if np.count_nonzero(keep) < 2:
+            raise FeatureError(f"vad() band {band} holds {np.count_nonzero(keep)} of the "
+                               f"bins of a {size}-sample frame, {freqs[1]:.1f} Hz apart; "
+                               f"widen it")
     n_frames = frames.shape[0]
     duration = len(y) / sr
 
@@ -163,7 +193,7 @@ def vad(y: np.ndarray, sr: int, *,
     active = (db > noise_floor + threshold_db) & (db > loudest - FLOOR_REL_DB)
 
     # what is loud *and* harmonic is the only thing trusted on its own
-    core = active & (_flatness(frames) < flatness_max)
+    core = active & (_flatness(frames, keep) < flatness_max)
     # a hissy frame joins only if it is next to one of those. Zero-crossing
     # rate cannot tell an /s/ from a burst of white noise -- position can.
     reach = max(1, int(round(FRICATIVE_REACH / hop)))

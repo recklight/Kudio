@@ -9,6 +9,7 @@
 |---|---|---|
 | 這是什麼檔案？ | [`audio_info`][kudio.core.io.audio_info] | 核心安裝 |
 | 技術上有沒有問題？ | [`audio_report`][kudio.core.report.audio_report] | 核心安裝 |
+| 有沒有嗡聲或嘯聲突出來？ | [`tonal_lines`][kudio.core.lines.tonal_lines] | 核心安裝 |
 | 聽起來有多大聲，音量在哪裡變了？ | [`loudness`][kudio.core.loudness.loudness] 和它旁邊的函式 | 核心安裝 |
 | 殘響有多重？ | [`srmr`][kudio.core.srmr.srmr] | 核心安裝 |
 | 語音比它的雜訊高出多少？ | [`wada_snr`][kudio.core.wada.wada_snr] | 核心安裝 |
@@ -63,23 +64,30 @@ print(report.problems())
 `file_load` 預設會把各聲道平均，這可能把其中一個聲道的毛病藏起來，
 所以立體聲檔案請一個聲道一個聲道檢查：用 `mono=False` 載入，
 再分別對 `y[:, 0]` 和 `y[:, 1]` 產生報告。音框是 30 ms，位移 15 ms，
-門檻都是固定的，不是參數：
+門檻都是固定的；唯一的參數 `clip_run` 在[削峰](#clipping)那一節說明：
 
 | 欄位 | 量測什麼 | 何時標出 |
 |---|---|---|
 | `peak_dbfs` | 最大聲的樣本，以 dBFS 表示 | 超過 0、超過 -0.5，或低於 -30 |
-| `clipped_samples`、`clipped_ratio` | 在滿刻度上連成平坦一段的樣本 | 只要有 |
+| `clipped_samples`、`clipped_ratio` | 在滿刻度上連成平坦一段、長度至少 `clip_run`（3）的樣本 | 只要有 |
+| `full_scale_samples` | 在滿刻度 0.999 以上的樣本，不論是否連成一段 | 不標出 |
 | `dc_offset` | 樣本的平均值 | 絕對值超過 0.01 |
 | `silence_ratio` | 比第 95 百分位數的音框低 40 dB 以上的音框所佔比例 | 超過 0.6 |
 | `noise_floor_dbfs` | 第 10 百分位數音框的準位 | 不標出 |
 | `estimated_snr_db` | 第 95 百分位數的音框準位減去第 10 百分位數的 | 低於 10 dB |
-| `bandwidth_hz`、`band_limited` | 仍帶有內容的最高頻率 | 低於奈奎斯特頻率的 0.9 |
+| `bandwidth_hz` | 和最強頻率相差不到 50 dB 的最高頻率 | 不標出 |
+| `band_limited`、`source_rates`、`mirrored`、`band_edge_hz` | 上方是空頻帶的邊緣，或線性內插留下的鏡像 | 找到時 |
+| `sample_step`、`grid_bits` | 每個樣本都落在上面的格點 | 比 16 位元粗 |
 | `lufs`、`rms_dbfs` | 整合響度（短於 0.4 秒時為 `nan`）和單純的 RMS | 不標出 |
 | `non_finite_samples` | 是 NaN 或 inf 的樣本 | 只要有 |
 
 三個峰值門檻分別代表：已經超過滿刻度、再多一級增益就會削峰，以及用到的位元深度太少。
 峰值為 `-inf`（數位靜音），以及有任何非有限值的樣本，這兩種情況都會單獨回報，
 旁邊不會有其他發現。
+
+估計 SNR 低於 10 dB 這項發現有兩種解讀。雜訊很接近內容會這樣，穩定的聲音也會，
+像是嗡聲或運轉中的機器，它們大聲和小聲的音框幾乎沒有差別：白雜訊讀成 0.8 dB，
+50 Hz 的嗡聲讀成 2.2 dB。只看音框準位分不出這兩種，所以發現裡兩種都寫。
 
 ### 削峰 {#clipping}
 
@@ -107,19 +115,45 @@ peaks at +5.5 dBFS, past full scale — it will clip the moment it is written to
 削峰的錄音事後再調小，即使只調 1 dB，平台也會落到 0.999 以下，完全不會被回報。
 請在寫檔之前執行報告，趁超過 1.0 的樣本還看得到；第二種情況則要自己看波形。
 
+別的工具把線畫在別處：連續兩個樣本就算，或是每個碰到滿刻度的樣本都算。
+`clip_run` 可以改連續的長度，`full_scale_samples` 則把滿刻度 0.999 以上的樣本
+全部算進去，這樣別的工具算出的數字，可以拿同一個檔案來對：
+
+```python
+clipped = np.clip(hot, -1.0, 1.0)
+for run in (3, 2, 1):
+    r = kudio.audio_report(clipped, sr, clip_run=run)
+    print(run, r.clipped_samples, r.full_scale_samples)
+```
+
+```text
+3 3321 4448
+2 4439 4448
+1 4440 4448
+```
+
+就算一個樣本一個樣本算，4448 個裡還是有 8 個不算：它們在平台旁邊，落在 0.9992 到
+0.9998 之間，是波形正要爬上滿刻度的那一點，不在平台上。
+
 ### 升取樣與頻寬受限的檔案 {#upsampled-and-band-limited-files}
 
 對資料集傷害最隱蔽的毛病，是 16 kHz 的檔案裡裝著 8 kHz 的音訊：
 某個時候被升取樣過，4 kHz 以上什麼都沒有，下游的每個環節卻都把它當成寬頻。
-以標示的取樣率錄下的錄音，雜訊底通常散布在整個頻帶上，所以頻譜會一路延伸到
-奈奎斯特頻率。升取樣的音訊在舊的奈奎斯特頻率以上則完全是空的。
+光看內容停在哪裡還說不準。一段 192 kHz 的量測錄音，內容到 50 kHz 就沒了，
+它仍然是原生的錄音，因為轉換器的雜訊底在內容上方一路延伸到奈奎斯特頻率。
+升取樣的音訊則有一道邊緣，邊緣上方是空的。
 
-所以報告用 1024 個樣本的 Hann 窗音框把頻譜平均起來，
-取和最強頻率相差不到 50 dB 的最高頻率。低於奈奎斯特頻率的 0.9，
-這個片段就算頻寬受限。這個頻率的兩倍落在某個常見取樣率
-（8、11.025、16、22.05、32、44.1 或 48 kHz）的 15% 以內時，
-發現會指出檔案就是從那個取樣率升取樣上來的；否則它直接寫出那個頻率，
-例如「band-limited to about 3219 Hz」。
+所以報告找的是邊緣。它用 8192 個樣本的 Hann 窗把頻譜分段平均，再以要判斷的那個
+頻率的 2% 做移動中位數平滑；邊緣下方 0.70–0.88 倍的頻帶，若比 1.05–1.25 倍的
+頻帶高出至少 20 dB，而且比 1.05 倍一直到奈奎斯特頻率的全部高出至少 40 dB，那個
+頻率就算邊緣。它先問 8 到 96 kHz 十個常見取樣率的奈奎斯特頻率，再為編解碼器或
+濾波器問奈奎斯特頻率 0.1 到 0.9 倍之間的 200 個頻率。取樣率由內容停下的位置來指名：
+內容停在某個常見取樣率奈奎斯特頻率的 0.95–1.06 倍，那個取樣率就放進
+`source_rates`。重新取樣器讓內容停在舊奈奎斯特頻率的 0.959（soxr VHQ）到
+1.052（scipy 的 `resample_poly` 配 Kaiser 窗）倍之間，所以相差 9% 的兩個取樣率，
+例如 22.05 和 24 kHz，發現可能兩個都寫。發現裡寫的是 `band_edge_hz`，也就是邊緣檢查
+找到內容停下的位置。`bandwidth_hz` 是和最強頻率相差不到 50 dB 的最高頻率，留在旁邊；
+重新取樣器的阻帶或邊緣上方的一條線，可能把它推過檔案被指名的取樣率。
 
 ```python
 narrow = kudio.resample(kudio.resample(take, sr, 8000), 8000, sr)
@@ -128,28 +162,102 @@ for problem in kudio.audio_report(narrow, sr).problems():
 ```
 
 ```text
-content stops at 3797 Hz although the file claims 16000 Hz — it was very likely upsampled from 8000 Hz, and the extra rate is empty
+content stops at 3816 Hz, although a 16000 Hz file holds up to 8000 Hz — it was very likely upsampled from 8000 Hz (a codec that cuts there looks the same), and the band above is empty
 ```
 
-![這段錄音和升取樣後複本的平均頻譜，標出報告讀取頻寬用的 50 dB 線](../images/inspection-bandwidth-light.webp#only-light)
-![這段錄音和升取樣後複本的平均頻譜，標出報告讀取頻寬用的 50 dB 線](../images/inspection-bandwidth-dark.webp#only-dark)
+![這段錄音和升取樣後複本的平均頻譜，標出報告在 4 kHz 比較的兩個頻帶](../images/inspection-bandwidth-light.webp#only-light)
+![這段錄音和升取樣後複本的平均頻譜，標出報告在 4 kHz 比較的兩個頻帶](../images/inspection-bandwidth-dark.webp#only-dark)
+
+線性內插不會留下邊緣。它把舊奈奎斯特頻率下方的頻帶鏡射到上方，強度照內插器的
+響應衰減，而這個響應只由兩個取樣率決定。上方頻帶跟這條響應的差距在 0.3 dB 以內時，
+報告會設定 `mirrored`，並說明檔案是用線性內插升取樣的。
 
 [房間與通道](degradation.md)裡的 [`telephone`][kudio.effects.channel.telephone]
-就是刻意做出這種檔案，報告也用同樣的方式解讀它。這項檢查有兩個前提。
-內容必須是寬頻的，語音就是：一個 220 Hz 的純音會被報成頻寬受限而且雜訊很多，
-算術上沒錯，但對誰都沒有用。另外，雜訊底必須落在頻譜最強處的 50 dB 以內。
-一段乾淨的錄音，如果嘶聲比較小、最高的八度又很安靜，沒有經過任何重新取樣，
-也會停在奈奎斯特頻率的 0.9 之前：把這段錄音的人聲諧波改成照
-`1 / k**1.5` 而不是 `1 / k` 衰減，墊在 -66 dBFS 的嘶聲上，
-就會被報成內容停在 6578 Hz。在安靜、乾淨的檔案上，
-請把這個發現當成去看頻譜的理由，而不是證據。
+就是刻意做出這種檔案，報告找得到它的邊緣，但不指名取樣率：線路自己的濾波器讓內容
+停得比重新取樣器還早。[指標的驗證方式](../validation.md#upsampling-and-band-limits-in-audio_report)
+列出這條規則試過的情況：八種重新取樣器、十組取樣率，以及 470 段以自己的取樣率錄下的
+錄音，沒有一段被標出。它抓不到的有：內容比升取樣後檔案的雜訊底高不到 40 dB 的
+（測試用的語音在 16 位元檔案裡降到 -40 dB 時，只比雜訊底高 28.6 到 33.1 dB）；
+取樣率比不是整數倍的線性內插，例如 16 到 44.1 kHz；以及高於奈奎斯特頻率 0.9 倍的
+邊緣，例如 44.1 到 48 kHz，那裡可能就是檔案自己的抗混疊濾波器。編解碼器截在某個
+常見取樣率的奈奎斯特頻率時，留下的邊緣和從那個取樣率升取樣一模一樣，所以發現裡會
+這樣註明。
+
+### 樣本的格點 {#the-sample-grid}
+
+容器說的是 16 或 24 位元；實際用到多少，要看樣本。報告以 24 位元的解析度讀每個
+有限值樣本，如果它們都落在更粗的格點上，就把格距寫在 `sample_step`（滿刻度的
+比例，16 位元音訊是 2/65536），把相當於幾位元寫在 `grid_bits`。少於 16 位元
+就算一項發現：12 位元的轉換器寫進 16 位元檔案，或量化之後才調大增益，都會讓每個
+樣本變成某個格距的整數倍。
+
+```python
+coarse = np.round(take * 2048) / 2048           # a 12-bit converter's steps
+r = kudio.audio_report(coarse, sr)
+print(r.sample_step, r.grid_bits)
+for problem in r.problems():
+    print(problem)
+```
+
+```text
+0.00048828125 12.0
+every sample sits on a grid of 12.0 bits — coarser than 16-bit audio, from a low-resolution converter or gain raised after the audio was quantised
+```
+
+滿刻度的兩個值不列入，所以削峰的錄音仍保有它的格點；不同的值少於 16 個時，例如
+方波或幾乎靜音的錄音，就不算有格點。處理過的浮點數音訊不落在任何格點上：
+`sample_step` 是 0.0，`grid_bits` 是 nan。
+
+### 嗡聲和其他窄頻線 {#hum-and-other-lines}
+
+比附近高 30 dB 的一條線，幾乎不會動到報告裡的任何數字，但機器、交換式電源或接地迴路
+留在錄音裡的，正是這種線。[`tonal_lines`][kudio.core.lines.tonal_lines] 在平均頻譜上
+找比周圍移動中位數高 20 dB 以上的峰，再把落在同一個頻率整數倍上的線歸成一組梳狀，
+市電嗡聲就是這個樣子：
+
+```python
+hum = sum(0.01 / k * np.sin(2 * np.pi * 50 * k * t) for k in range(1, 6))
+whine = 0.003 * np.sin(2 * np.pi * 1000 * t)
+room = 0.002 * rng.standard_normal(t.size) + hum + whine
+found = kudio.tonal_lines(room, sr)
+print(found)
+for line in found.lines:
+    print(f"{line.hz:7.1f} Hz  {line.level_dbfs:6.1f} dBFS  {line.prominence_db:4.0f} dB above")
+```
+
+```text
+6 lines, the strongest at 49.9 Hz, 35 dB above its neighbourhood; 50.00 Hz comb, 5 lines (harmonics 1-5)
+   49.9 Hz   -39.9 dBFS    35 dB above
+  100.0 Hz   -45.8 dBFS    34 dB above
+  150.0 Hz   -49.3 dBFS    33 dB above
+  200.1 Hz   -52.0 dBFS    30 dB above
+  250.0 Hz   -54.0 dBFS    28 dB above
+ 1000.0 Hz   -50.4 dBFS    32 dB above
+```
+
+1 kHz 的嘯聲自成一條線：梳狀至少要解釋三條線，每缺一個倍數就扣半分。梳狀也會從線的
+間距找出來，所以小喇叭放不出基頻的嗡聲，仍然是 50 Hz 的梳狀。這個函式說的是哪些頻率
+突出，不是為什麼突出；維持在同一個音高的人聲，也和其他梳狀一樣：
+
+```python
+print(kudio.tonal_lines(take, sr))
+```
+
+```text
+44 lines, the strongest at 140.0 Hz, 39 dB above its neighbourhood; 140.00 Hz comb, 44 lines (harmonics 1-40, 42-45)
+```
+
+說話時音高會動，諧波在長時間平均裡被抹開，所以很少出現；長音、機器的音調和上面這段
+錄音一定會出現。頻譜大約以每格 5 Hz 讀取（`resolution_hz`），片段長度允許多細就多細。
+內容一開一關，會把量線時參考的背景墊高：在這段錄音裡，字詞讓 100 Hz 附近的背景從
+-85 升到 -70 dB，比那裡高 14 dB 的嗡聲線就不會被回報。
 
 ### 一個毛病改變另一個讀數的時候 {#when-one-fault-changes-anothers-reading}
 
 所有量測都來自同樣的樣本，所以某個毛病有可能動到屬於另一項的數字。
 直流偏移不會：音框準位是扣掉片段的平均值之後才量的，
 所以偏移會被回報成偏移，雜訊底則從剩下的部分讀取。削峰就會。
-它把能量往頻譜上方散開，越過 50 dB 那條線，所以不管檔案經歷過什麼，
+它把能量往頻譜上方散開，填滿邊緣上方原本空的頻帶，所以不管檔案經歷過什麼，
 削峰的檔案看起來都是寬頻：
 
 ```python

@@ -2,6 +2,8 @@
 
 ::: kudio.core.report
 
+::: kudio.core.lines
+
 ::: kudio.core.loudness
 
 ::: kudio.core.dnsmos

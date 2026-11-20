@@ -213,11 +213,13 @@ for problem in kudio.audio_report(phone, sr).problems():
 
 ```text
 True
-content stops at 3766 Hz although the file claims 16000 Hz — it was very likely upsampled from 8000 Hz, and the extra rate is empty
+content stops at 3758 Hz, although a 16000 Hz file holds up to 8000 Hz — it was very likely upsampled from a lower rate, or passed through a codec or a filter that cuts there, and the band above is empty
 ```
 
 [`audio_report`][kudio.core.report.audio_report] 一眼就看穿：內容在 4 kHz 以下
-就沒了，所以它指出這個檔案真正的取樣率是 8 kHz。它怎麼判斷，在
+就沒了，上面什麼都沒有。它不會指名 8 kHz，因為線路的 3400 Hz 濾波器讓內容停在
+4 kHz 的 0.94，比重新取樣器會停的位置還早，而停在那裡的濾波器放在任何取樣率都長得
+一樣。它怎麼判斷，在
 [檢查錄音](inspection.md)有說明。
 
 ### 壓擴與位元深度 {#companding-and-bit-depth}
