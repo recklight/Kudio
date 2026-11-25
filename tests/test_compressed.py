@@ -556,6 +556,44 @@ def test_a_real_m4a_under_another_name(tmp_path, ffmpeg, extension):
         assert native == sr and np.array_equal(y, whole)
 
 
+def test_the_synthesizer_looks_at_the_header_of_one_first(tmp_path, ffmpeg):
+    """An m4a called .wav gets that far, and one that lost its header empties no
+    folder."""
+    made, rate, _ = _encode(ffmpeg, tmp_path, "m4a")
+    shutil.copy(made, tmp_path / "take.wav")
+    noise = tmp_path / "noise.wav"
+    sf.write(str(noise), 0.1 * np.random.default_rng(0).standard_normal(20000), 16000)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "keep.txt").write_text("from an earlier run")
+    whole = (tmp_path / "take.wav").read_bytes()
+    (tmp_path / "take.wav").write_bytes(whole[:len(whole) // 3])
+    syx = kudio.Synthesizer(str(tmp_path / "take.wav"), str(noise), out, snr_ratio=0)
+    with pytest.raises(kudio.SynthesisError, match="could not read clean file .*take.wav"):
+        syx.syn(seed=0)
+    assert [p.name for p in out.iterdir()] == ["keep.txt"]
+    (tmp_path / "take.wav").write_bytes(whole)
+    # the packets are those of what is decoded; the header has tenths of a second
+    link, mixture = {'loss': 0.9, 'burst': 1.5}, out / "take_noise_0dB.wav"
+    with pytest.warns(UserWarning, match="not recognise it as the .wav"):
+        samples, _ = kudio.file_load(tmp_path / "take.wav")
+    own = (synth._file_seed(0, mixture, out) * 2654435761) & 0x7FFFFFFF
+    with pytest.raises(kudio.FeatureError) as expected:
+        kudio.dropouts(np.zeros(len(samples)), rate, seed=own, **link)
+    syx = kudio.Synthesizer(str(tmp_path / "take.wav"), str(noise), out, snr_ratio=0,
+                            channel=link)
+    with warnings.catch_warnings(record=True) as said:
+        warnings.simplefilter("always")
+        with pytest.raises(kudio.FeatureError) as caught:
+            syx.syn(seed=0)
+    assert str(caught.value) == f"{mixture}: {expected.value}"
+    assert not said, "what there is to warn about is said when the file is mixed"
+    assert [p.name for p in out.iterdir()] == ["keep.txt"]
+    syx = kudio.Synthesizer(str(tmp_path / "take.wav"), str(noise), out, snr_ratio=0)
+    with pytest.warns(UserWarning, match="not recognise it as the .wav"):
+        assert len(syx.syn(seed=0)) == 1
+
+
 def test_a_real_alac_caf(tmp_path, ffmpeg):
     path = tmp_path / "take.caf"
     pcm = _tone(44100, 2, seconds=2.0)

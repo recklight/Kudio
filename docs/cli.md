@@ -636,9 +636,12 @@ writes one file per clean file and takes the noises and SNRs in turn.
 !!! warning "`--out` is emptied before every run"
     Whatever is in the output folder is deleted first, so a rerun cannot leave
     files from an older run mixed in with the new ones. The command refuses
-    when the folder is a drive root or holds one of the input files, the
-    working directory or the home directory, but anything else in it goes.
-    Give every corpus a folder of its own.
+    when the folder is a link or a drive root, or holds one of the input files,
+    the working directory, the home directory or a file that cannot be deleted,
+    but anything else in it goes. It tries
+    [what can be tried](guide/synthesis.md) without the samples first, and
+    leaves the folder alone if that fails. Give every corpus a folder of its
+    own.
 
 Every file draws its noise crop, its room and its packet loss from the seed
 and its own path, so the same command rebuilds the same files, byte for byte.

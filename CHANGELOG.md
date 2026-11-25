@@ -92,7 +92,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   NaN lost packets one at a time and a loss of `True` lost them all.
 - `Synthesizer` takes `rt60` and `drr_db` that are finite, and `rt60` that is
   not `True`, and raises `ValueError` when it is built with anything else.
-  `background_snr` of `syn_extra_mode` has to be finite as well.
+  `background_snr` of `syn_extra_mode` has to be finite as well. It and
+  `snr_ratio` lie between -300 and 3000 dB: at 3083 the gain was an
+  `OverflowError`, and at -400 the noise overflowed in a loud file and not in a
+  quiet one, where it was 10^20 times the speech.
 - `load_labels` names the row of a JSON label file that is not an object, has
   no `start` or `end`, or has one that is not a number, with a `ValueError`.
   The first two were an `AttributeError` and a `TypeError` about `__init__`; a
@@ -146,6 +149,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `rooms` and `manifest()` as they were. A run that is not refused writes the
   same files. `syn_extra_mode` looks at `background_snr`, the seed and librosa
   first.
+- `Synthesizer` emptied its output folder for a run that the headers of its
+  inputs, the names of its outputs or the folder itself show cannot be made. Of
+  4000 random calls, most of them with a setting or a file that is odd or
+  wrong, 1247 raised with the folder gone; 41 do, each for what only the
+  samples show.
+- A link that loses more than half of its packets in runs is tried for every
+  output of a `Synthesizer`, with the output's own length and seed.
+  `{'loss': 0.9, 'burst': 1}` failed on the first file, with the folder empty.
+  The `FeatureError` names the output.
+- `Synthesizer` reads the header of every input before it empties the folder.
+  One that cannot be read, that has no frames or a single one at the rate it is
+  mixed at is the `SynthesisError` it was. `syn` and `syn_extra_mode` also look
+  again at the SNRs, the subtype and the lists of files, which can be changed
+  after the `Synthesizer` was built, and at a room that does not fit in memory,
+  and start the process pool. A warning about a header that the caller's
+  filters make an error of is raised by then.
+- `Synthesizer` writes a sample at every rate, and one under the longest names,
+  in a folder beside the output one before it empties that. A name of more than
+  255 letters, a subtype or a rate that libsndfile does not write, and a name
+  that would be a file and a folder were found by the first file they stopped.
+- On Windows a read-only file in the output folder of a `Synthesizer`, or one
+  that another program had open, stopped the emptying half-way. It is looked
+  through first. The guard against deleting the inputs follows links and
+  junctions, through which they could be in the folder unseen, and a link
+  itself is not emptied.
+- `syn_extra_mode` mixes the noises with the backgrounds before it empties the
+  folder, so whatever is wrong with one of those leaves it as it is.
 - A file with NaN or inf in it could be read with `sr=None` alone; any `sr`,
   the file's own included, raised "Audio buffer is not finite everywhere". At
   its own rate it is read, with the warning. At another it is an

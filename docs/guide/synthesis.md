@@ -86,17 +86,36 @@ file name reads as the start of the suffix, and a room adds `_rt300ms`.
     `out_path` before it writes. It refuses, with
     [`SynthesisError`][kudio.exceptions.SynthesisError], when that folder
     holds one of the input files, the working directory or the home
-    directory, or is the root of a filesystem, which catches an `out_path=`
-    one level too high. Anything else in there is gone. `overwrite=False`
+    directory, or is a link or the root of a filesystem, which catches an
+    `out_path=` one level too high, and when something in it will not be
+    deleted: a file that another program has open on Windows, or a folder you
+    may not write in. Anything else in there is gone. `overwrite=False`
     leaves a non-empty folder alone, warns, and returns `None`, so check the
     return value in a script that carries on.
 
-    The settings are tried before anything is deleted: every room at the rate
-    of its file, the link, `target_sr=`, the seed, and librosa if a file has to
-    be resampled. One that cannot work raises,
-    and the corpus in the folder is still there, with `seed`, `rooms` and
-    `manifest()` describing it. A file that cannot be read is found when its
-    turn comes, after the folder was emptied.
+    The run is tried before anything is deleted, as far as it goes without the
+    samples:
+
+    - the header and the length of every input it reads;
+    - every room at the rate of its file, `target_sr=`, the SNRs, the seed, and
+      librosa if a file has to be resampled;
+    - the link at every rate and, if it loses more than half of its packets in
+      runs, the packets of every output, by its own length and seed;
+    - a sample written at every rate and one under the longest names, in a
+      folder beside `out_path` that is gone afterwards.
+
+    What cannot work raises, and the corpus in the folder is still there, with
+    `seed`, `rooms` and `manifest()` describing it.
+
+    Some of it shows in the samples or in the writing, and comes up when the
+    folder is empty already: a clean file of digital silence, a noise without
+    variation where it was cropped, NaN or inf, a file damaged behind its
+    header, a full disk or too little memory, an input that changes or goes
+    away during the run, Ctrl-C. A warning that your filters make an error of
+    is one of these too, unless it is about a header, as that of a
+    [WAV cut short](audio-files.md#a-file-that-was-cut-short) is. For a corpus
+    there is no other copy of, write into a new folder and delete the old one
+    yourself.
 
 ## Which mode: `reg` or `inc`
 
@@ -195,6 +214,9 @@ This talker is silent for 30% of the file, which puts the SNR 1.54 dB above
 the label while they are talking. Leading and trailing silence does the same,
 so if the label should describe the speech, trim the clean files first
 ([Speech activity and pitch](speech.md) finds where the speech is).
+
+An SNR lies between -300 and 3000 dB. At the one end the noise is $10^{15}$
+times the speech, and at the other its gain is 0.
 
 A noise file shorter than its clean partner is looped to length; a longer one
 is cropped at a random offset drawn from the file's seed. The noise is
@@ -318,7 +340,8 @@ in `inc` mode, a pooled run and a serial one give the same 216 files, byte for
 byte. On Windows and macOS, where Python starts each worker as a fresh
 interpreter, the workers begin by importing your script again, so the call
 has to sit under `if __name__ == "__main__":`. Without that guard every worker
-fails as it starts, the pool keeps replacing them, and the run hangs.
+fails as it starts, the pool keeps replacing them, and the run hangs, before
+it has emptied `out_path`.
 
 ## Writing the files
 
@@ -471,8 +494,10 @@ manifest holds 20. Each clean file is also copied in unchanged as
 `{stem}_n0.wav`, the speech alone where `_n00` is the noise alone; those
 copies are in neither.
 
-The output folder is emptied first, under the same guard as
-[`syn()`][kudio.core.synth.Synthesizer.syn], but the rest differs:
+The output folder is emptied before the second stage, under the same guard as
+in [`syn()`][kudio.core.synth.Synthesizer.syn] and once that stage has been
+tried the same way; what is wrong with a noise or a background shows in the
+first stage, which is written elsewhere. The rest differs:
 
 - Rooms and links are not applied.
 - Names carry `dB` on both signs, `n5dB` and `5dB`, where `syn()` writes `n5`.

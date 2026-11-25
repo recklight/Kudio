@@ -652,6 +652,12 @@ def resample(y: np.ndarray, orig_sr: float, target_sr: float,
                    limits.min, limits.max).astype(y.dtype)
 
 
+def _resampled_length(n: int, orig_sr: float, target_sr: float) -> int:
+    """How many frames :func:`resample` makes of *n*. librosa pads or cuts what
+    the resampler gives to this."""
+    return n if orig_sr == target_sr else int(np.ceil(n * (float(target_sr) / orig_sr)))
+
+
 @dataclass(frozen=True)
 class AudioInfo:
     """What a file is, before you decide whether to load it.

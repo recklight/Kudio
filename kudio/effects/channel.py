@@ -96,6 +96,50 @@ def independent_burst(loss: float) -> float:
     return 1.0 / (1.0 - loss)
 
 
+def _packets(n: int, sr: int, packet_ms: float, loss: float) -> Tuple[int, int, int]:
+    """``(size, packets, lost)`` of a clip of *n* samples: the samples in a
+    packet, the packets, and how many of them go."""
+    size = max(1, int(round(packet_ms / 1000.0 * sr)))
+    packets = int(np.ceil(n / size))
+    return size, packets, min(int(round(loss * packets)), packets)
+
+
+def _run_lengths(packets: int, n_lost: int, burst: float,
+                 rng: np.random.Generator) -> List[int]:
+    """How many packets go in each run, *n_lost* altogether, or a FeatureError
+    when the packets that survive are too few to keep the runs apart."""
+    runs: List[int] = []
+    total = 0
+    probability = 1.0 / burst
+    while total < n_lost:
+        length = int(rng.geometric(probability)) if probability < 1.0 else 1
+        length = min(length, n_lost - total)
+        runs.append(length)
+        total += length
+
+    count = len(runs)
+    survivors = packets - n_lost
+    if survivors < count - 1:
+        raise FeatureError(
+            f"loss={n_lost / packets:.3f} in runs of {burst:g} packet(s) "
+            f"needs about {count - 1} surviving packets to keep the runs "
+            f"apart and only {survivors} survive. Either lose less or lose it "
+            f"in longer runs.")
+    return runs
+
+
+def _check_loss(n: int, sr: int, spec: dict, seed: Optional[int]) -> None:
+    """The FeatureError, if any, that :func:`dropouts` ends in on a clip of *n*
+    samples. It depends on nothing but how many packets there are and on
+    *seed*, so no audio is needed to find it."""
+    loss = _loss(spec['loss'], 'dropouts')
+    burst = _burst(spec['burst'], loss, 'dropouts')
+    _, packets, n_lost = _packets(n, sr, float(spec['packet_ms']), loss)
+    # there are never more runs than packets lost
+    if burst is not None and packets - n_lost < n_lost - 1:
+        _run_lengths(packets, n_lost, burst, np.random.default_rng(seed))
+
+
 def _burst_runs(packets: int, n_lost: int, burst: float,
                 rng: np.random.Generator) -> np.ndarray:
     """Which packets go, lost in runs averaging *burst* packets.
@@ -115,24 +159,9 @@ def _burst_runs(packets: int, n_lost: int, burst: float,
     requested, which would make *burst* unmeasurable and therefore not worth
     having as a parameter.
     """
-    runs: List[int] = []
-    total = 0
-    probability = 1.0 / burst
-    while total < n_lost:
-        length = int(rng.geometric(probability)) if probability < 1.0 else 1
-        length = min(length, n_lost - total)
-        runs.append(length)
-        total += length
-
+    runs = _run_lengths(packets, n_lost, burst, rng)
     count = len(runs)
-    survivors = packets - n_lost
-    free = survivors - (count - 1)
-    if free < 0:
-        raise FeatureError(
-            f"loss={n_lost / packets:.3f} in runs of {burst:g} packet(s) "
-            f"needs about {count - 1} surviving packets to keep the runs "
-            f"apart and only {survivors} survive. Either lose less or lose it "
-            f"in longer runs.")
+    free = packets - n_lost - (count - 1)
 
     # A uniform composition of the spare survivors over the gaps before each
     # run: stars and bars, so every arrangement is equally likely.
@@ -352,17 +381,13 @@ def dropouts(y: np.ndarray, sr: int, *, loss: float = 0.05,
             f"{', '.join(CONCEALMENT)}")
     burst = _burst(burst, loss, "dropouts")
 
-    size = max(1, int(round(packet_ms / 1000.0 * sr)))
-    packets = int(np.ceil(len(y) / size))
+    size, packets, n_lost = _packets(len(y), sr, packet_ms, loss)
     out = y.astype(np.float32, copy=True)
     spans: List[Tuple[float, float]] = []
-    if packets == 0 or loss == 0.0:
+    if n_lost == 0:
         return (out, spans) if return_spans else out
 
     rng = np.random.default_rng(seed)
-    n_lost = min(int(round(loss * packets)), packets)
-    if n_lost == 0:
-        return (out, spans) if return_spans else out
     if burst is None:
         lost = np.sort(rng.choice(packets, size=n_lost, replace=False))
     else:

@@ -360,6 +360,11 @@ the whole run. `burst=` sets the mean run length in packets:
 The run lengths are geometric, as in the bad state of Gilbert's two-state
 model,[^gilbert] and runs stay at least one surviving packet apart, so two never join
 into one and the runs you count in the output are the runs that were drawn.
+Past a loss of a half there may be too few survivors for that, and `dropouts`
+raises a `FeatureError`: of 50 packets, 0.9 in runs of one leaves 5 between 45.
+How many runs there are is drawn, so it can depend on the seed.
+[`Synthesizer`][kudio.core.synth.Synthesizer] draws them for every output
+before it empties its folder.
 
 `burst=1` is not the default under another name. Independent draws land side
 by side now and then, so the default already averages `1 / (1 - loss)` packets

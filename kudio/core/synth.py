@@ -29,17 +29,23 @@ and easier problem. :meth:`manifest` records which is which.
 """
 from __future__ import annotations
 
+import contextlib
 import itertools
 import logging
 import math
+import os
+import secrets
 import shutil
+import stat
 import tempfile
+import time
 import zlib
 import warnings
-from functools import partial
+from functools import lru_cache, partial
 from multiprocessing import Pool
 from pathlib import Path, PurePath
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import (Any, Dict, Iterable, Iterator, List, NamedTuple, Optional, Sequence, Set,
+                    Tuple, Union)
 
 import numpy as np
 
@@ -47,9 +53,9 @@ from kudio import _optional
 from kudio._progress import tqdm, trange
 from kudio.core.dataset import Pair
 from kudio.core.io import (PathLike, _abspath, _check_rate, _is_fixed_point, _read_mono,
-                           _reason, _relative, _source_root, audio_info, check_input,
-                           resample, save_wave)
-from kudio.exceptions import AudioIOError, DependencyError, SynthesisError
+                           _reason, _relative, _resampled_length, _source_root, audio_info,
+                           check_input, resample, save_wave)
+from kudio.exceptions import AudioIOError, DependencyError, FeatureError, SynthesisError
 
 __all__ = ['Synthesizer']
 
@@ -58,6 +64,22 @@ log = logging.getLogger(__name__)
 #: keeps a file's noise crop out of step with its room, which is drawn from
 #: the same per-file seed
 _CROP_STREAM = 0x63726F70          # 'crop'
+
+#: The SNRs a mixture can be made at, in dB. Under the first the noise is 10^15
+#: times the speech and on its way out of what a 32-bit float holds; over the
+#: second 10 ** (snr / 10) is out of what a 64-bit one does.
+_SNR_RANGE = (-300.0, 3000.0)
+
+#: More frames than a file has. libsndfile gives the largest number there is
+#: for a FLAC that was written to a pipe, whose header has none.
+_ENDLESS = 2 ** 62
+
+#: An impulse response up to this many samples, 350 s of it at 48 kHz, is not
+#: made for the sake of finding out whether it fits in memory.
+_LONG_ROOM = 2 ** 24
+
+#: more outputs than this go through a process pool where one is asked for
+_POOL_FROM = 200
 
 
 def _snr_text(snr) -> str:
@@ -113,15 +135,150 @@ def _load(path, sr: Optional[int], what: str) -> Tuple[np.ndarray, int]:
                              f"{_reason(e, path)}") from e
 
 
-def _own_rate(path) -> Optional[int]:
-    """The rate of a file, or None when it cannot be read. What there is to
-    warn about is said when the file is."""
+class _Header(NamedTuple):
+    """What an input says about itself: its rate, and its frames, which are None
+    where it takes decoding to count them."""
+    sr: int
+    frames: Optional[int]
+
+
+def _header(path, what: str) -> _Header:
+    """The header of an input file, or the SynthesisError that :func:`_load`
+    would raise for it.
+
+    What there is to warn about is said when the samples are read. The caller's
+    filters are left as they are, so a warning that is an error for the caller
+    is one here, where it can still keep the output folder from being emptied.
+    """
+    import soundfile as sf
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            return audio_info(path, peak=False).sr
-    except AudioIOError:
-        return None
+        with warnings.catch_warnings(record=True):
+            info = audio_info(path, peak=False)
+            if info.format is None:                     # it is for ffmpeg
+                return _Header(info.sr, None)
+            with sf.SoundFile(str(path)) as f:
+                readable = f.seekable() and f.frames < _ENDLESS
+            if not readable:
+                # GSM in a WAV, a FLAC written to a pipe: libsndfile opens them
+                # and soundfile does not read them to the end
+                _read_mono(path)
+    except DependencyError:
+        raise
+    except Exception as e:                              # noqa: BLE001
+        cause = e.__cause__ if isinstance(e, AudioIOError) and e.__cause__ else e
+        raise SynthesisError(f"could not read {what} file {path}: "
+                             f"{_reason(cause, path)}") from e
+    # of an MP3 that was cut the header still tells the whole length
+    return _Header(info.sr, None if info.format == 'MP3' else info.frames)
+
+
+def _silent_clean(path) -> SynthesisError:
+    return SynthesisError(f"clean file has no signal to set an SNR against: {path}. "
+                          f"It is empty or digital silence. Drop it from the clean set.")
+
+
+def _empty_noise(path) -> SynthesisError:
+    return SynthesisError(f"noise file is empty: {path}. Drop it from the noise set.")
+
+
+def _check_lengths(clean: _Header, noise: _Header, sr: int, cln, nos) -> None:
+    """Refuse a pair that the headers show to be too short to mix at *sr*: a
+    single sample has no level apart from its mean."""
+    for header, what, path in ((clean, 'clean', cln), (noise, 'noise', nos)):
+        if header.frames is None:
+            continue
+        if not header.frames:
+            raise _silent_clean(path) if what == 'clean' else _empty_noise(path)
+        if _resampled_length(header.frames, header.sr, sr) < 2:
+            raise SynthesisError(f"{what} file is a single sample long at {sr} Hz, which "
+                                 f"no SNR can be set with: {path}. Drop it from the "
+                                 f"{what} set.")
+
+
+def _check_snr(values: Sequence, name: str) -> None:
+    """Refuse an SNR that no mixture has."""
+    if not all(np.isfinite(float(v)) for v in values):
+        raise ValueError(f"{name} values must be finite, got {list(values)}")
+    low, high = _SNR_RANGE
+    if not all(low <= float(v) <= high for v in values):
+        raise ValueError(f"{name} values must lie between {low:g} and {high:g} dB, got "
+                         f"{list(values)}; past that the gain of the noise is no number "
+                         f"its samples hold")
+
+
+def _is_link(path) -> bool:
+    """A symbolic link, or a junction of Windows."""
+    try:
+        found = os.lstat(str(path))
+    except OSError:
+        return False
+    return stat.S_ISLNK(found.st_mode) or (
+        os.name == 'nt' and found.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT)
+
+
+def _held(path: str, folder: bool) -> Optional[str]:
+    """What keeps Windows from deleting *path*, if anything does."""
+    for wait in (0.01, 0.05, 0.2, None):
+        try:
+            if os.lstat(path).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+                return "it is read-only"
+            # to the name it has: nothing happens to it, and it asks for the
+            # access that deleting it will
+            os.rename(path, path)
+            return None
+        except PermissionError as e:
+            # 32 is a sharing violation. A folder is refused for what is open
+            # below it as well, which comes up under its own name if it matters.
+            if folder and e.winerror != 32:
+                return None
+            if wait is None:
+                return f"{e.strerror or type(e).__name__}; it may be open in another program"
+            time.sleep(wait)        # for a virus scanner or an indexer to be done
+        except OSError:                           # it is gone, or has no such thing
+            return None
+    return None
+
+
+@contextlib.contextmanager
+def _scratch_beside(folder: Path) -> Iterator[Path]:
+    """An empty folder in the place of *folder* and with a name as long, so that
+    a path that is too long below the one is too long below the other."""
+    size = len(folder.name)
+    for attempt in itertools.count(1):
+        scratch = folder.parent / secrets.token_hex(size)[:size]
+        try:
+            scratch.mkdir()
+            break
+        except FileExistsError:
+            # a name of one letter runs out
+            size += attempt > 20
+        except OSError as e:
+            raise SynthesisError(f"refusing to empty {folder} before synthesising: nothing "
+                                 f"can be written beside it ({e.strerror}).") from e
+    try:
+        yield scratch
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _in_the_way(folder: Path) -> Optional[str]:
+    """Why *folder* cannot be deleted as a whole, or None: the first thing in it
+    that would stop the deleting half-way."""
+    unlisted: List[OSError] = []
+    for where, folders, files in os.walk(str(folder), onerror=unlisted.append):
+        folders[:] = [f for f in folders if not _is_link(os.path.join(where, f))]
+        if os.name == 'nt':
+            for path in [os.path.join(where, f) for f in files] + [where]:
+                why = _held(path, folder=path == where)
+                if why:
+                    return f"{path} cannot be deleted ({why})"
+        elif os.path.ismount(where):
+            return f"{where} is a mount point"
+        elif not os.access(where, os.W_OK | os.X_OK):
+            return f"what is in {where} cannot be deleted (no permission to write there)"
+    if unlisted:
+        return f"{unlisted[0].filename} cannot be opened ({unlisted[0].strerror})"
+    return None
 
 
 def _room_fits(sr: int, rt60: float, drr_db: float, seed: int) -> bool:
@@ -132,8 +289,9 @@ def _room_fits(sr: int, rt60: float, drr_db: float, seed: int) -> bool:
     """
     from kudio.core.room import _DIRECT_MS
     half = int(round(_DIRECT_MS / 1000.0 * sr))
-    n = min(int(round(1.5 * rt60 * sr)), 16 * (half + 1))
-    if n < 2:
+    whole = int(round(1.5 * rt60 * sr))
+    n = min(whole, 16 * (half + 1))
+    if n < 2 or whole > _LONG_ROOM:
         return False
     tail = np.random.default_rng(seed).standard_normal(n) * \
         10.0 ** (-3.0 * (np.arange(n) / sr) / rt60)
@@ -160,9 +318,10 @@ class Synthesizer:
     :param noise: the same, for the noise.
     :param out_path: output directory for the mixed files (default
         ``mixed``). With ``overwrite=True`` :meth:`syn` empties it first, and
-        refuses to when it is the root of a filesystem or holds an input file,
-        the working directory or the home directory.
-    :param snr_ratio: one or more SNR values in dB.
+        refuses to when it is the root of a filesystem or a link, or holds an
+        input file, the working directory, the home directory or something the
+        system will not delete.
+    :param snr_ratio: one or more SNR values in dB, from -300 to 3000.
     :param rt60: one or more reverberation times in seconds. ``None`` (the
         default) puts no room on the speech and leaves it out of the output
         names. Several values are another axis: every output the mode would
@@ -225,8 +384,7 @@ class Synthesizer:
         self.snrRatio = list(snr_ratio) if hasattr(snr_ratio, '__iter__') else [snr_ratio]
         if not self.snrRatio:
             raise ValueError("snr_ratio is empty")
-        if not all(np.isfinite(float(v)) for v in self.snrRatio):
-            raise ValueError(f"snr_ratio values must be finite, got {self.snrRatio}")
+        _check_snr(self.snrRatio, 'snr_ratio')
 
         if isinstance(rt60, str):
             raise TypeError("rt60 can't be str")
@@ -312,6 +470,21 @@ class Synthesizer:
         are. mode ``'inc'``/``'increment'``: full cartesian product
         clean x noise x SNR.
 
+        With ``overwrite=True`` the output folder is emptied, and before that
+        the run is tried as far as it goes without the samples: the header and
+        the length of every input it reads, every room at the rate of its file,
+        the packets the link loses in every output, and a sample written beside
+        the folder at every rate and under the longest names. Whatever fails
+        there raises, and the folder, :attr:`seed`, :attr:`target_sr`,
+        :attr:`rooms` and :meth:`manifest` stay as they were.
+
+        What only the samples or the writing can show comes up after the folder
+        was emptied: a clean file of digital silence, a noise without variation
+        where it was cropped, NaN or inf, damage behind a header, a disk or a
+        memory that is full, an input that changes or goes away meanwhile, an
+        interrupted run. So does a warning that the caller's filters make an
+        error of, unless it is about a header.
+
         :param rdn_choice_num: synthesise this many clean files, drawn at
             random without replacement, instead of all of them.
         :param is_silence: also write a *p_silence* share of the outputs again
@@ -344,6 +517,8 @@ class Synthesizer:
         else:
             target_sr = _check_rate(target_sr, 'target_sr', optional=True)
         self._check_room()
+        _check_snr(self.snrRatio, 'snr_ratio')
+        self._check_any(self.cleanWaves, self.noiseWaves, self.snrRatio)
         log.info("==== Audio synthesizing ====")
         occupied = self.noisyDir.is_dir() and any(self.noisyDir.iterdir())
         if occupied and not overwrite:
@@ -460,31 +635,32 @@ class Synthesizer:
                 # room happens to be loudest
                 channels_of[out] = (self.channel,
                                     (file_seed * 2654435761) & 0x7FFFFFFF)
-        self._try_settings(entries, rooms_of, target_sr)
+        # optionally copy the raw clean files alongside the output, mirrored
+        # like the mixtures, or two talkers' sa1.wav would be one copy
+        raw = [(cln, self.noisyDir / "RAW_DATA" /
+                (_relative(cln, self.clean_root).parent if mkdir_parents else Path()) /
+                f"{cln.stem}_raw.wav") for cln in (chosen if is_add_clean else ())]
 
-        if occupied:
-            log.warning("Output path exists, overwriting -> %s", self.noisyDir)
-            shutil.rmtree(self.noisyDir)
-        self.noisyDir.mkdir(parents=True, exist_ok=True)
-        self.seed, self.target_sr = base, target_sr
-        self.rooms, self.channels, self.targets = rooms_of, channels_of, targets_of
+        rates = self._try_settings(entries, rooms_of, channels_of, target_sr)
+        with self._workers(is_pool and len(entries) > _POOL_FROM) as pool:
+            if occupied:
+                self._try_writing([*seeds, *targets_of.values(), *(to for _, to in raw)],
+                                  rates, [cln for cln, _ in raw])
+                log.warning("Output path exists, overwriting -> %s", self.noisyDir)
+                shutil.rmtree(self.noisyDir)
+            self.noisyDir.mkdir(parents=True, exist_ok=True)
+            self.seed, self.target_sr = base, target_sr
+            self.rooms, self.channels, self.targets = rooms_of, channels_of, targets_of
 
-        # optionally copy the raw clean files alongside the output
-        if is_add_clean:
-            dir_ = self.noisyDir / "RAW_DATA"
-            for cln in chosen:
-                # mirrored like the mixtures, or two talkers' sa1.wav would
-                # be one copy
-                where = dir_ / (_relative(cln, self.clean_root).parent
-                                if mkdir_parents else Path())
-                where.mkdir(parents=True, exist_ok=True)
-                shutil.copy(cln, where / f"{cln.stem}_raw.wav")
+            for cln, to in raw:
+                to.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(cln, to)
 
-        self.synWavesList = entries
-        self._noise_only = silent
-        peaks = self.__syn_pool(entries, is_pool=is_pool, subtype=self.subtype,
-                                seeds=seeds, silent=silent, rooms=self.rooms,
-                                channels=self.channels, targets=self.targets)
+            self.synWavesList = entries
+            self._noise_only = silent
+            peaks = self.__syn_pool(entries, pool=pool, sr=target_sr, subtype=self.subtype,
+                                    seeds=seeds, silent=silent, rooms=self.rooms,
+                                    channels=self.channels, targets=self.targets)
         message = self._clipping(entries, peaks)
         if message:
             warnings.warn(message, UserWarning, stacklevel=2)
@@ -533,10 +709,11 @@ class Synthesizer:
         Stage one mixes every noise with every background at *background_snr*
         in a temporary folder. Stage two mixes every clean file with each of
         those mixtures, noises and backgrounds at every SNR, and writes a 2%
-        share again as noise alone. The output folder is emptied first, under
-        the same guard as :meth:`syn`; *seed* is as there. Rooms, the link
-        and resampling are not applied in this mode, and the output is written
-        flat, one folder for everything.
+        share again as noise alone. The output folder is emptied between the
+        two, under the same guard as :meth:`syn` and once stage two has been
+        tried as there; *seed* is as there too. Rooms, the link and resampling
+        are not applied in this mode, and the output is written flat, one
+        folder for everything.
 
         Names carry ``dB`` on both signs, ``n5dB`` and ``5dB``, where
         :meth:`syn` writes ``n5``. Corpora on disk already use both spellings,
@@ -550,8 +727,8 @@ class Synthesizer:
         if isinstance(background_snr, str):
             raise TypeError("background_snr can't be str")
         bgSNR = list(background_snr) if hasattr(background_snr, '__iter__') else [background_snr]
-        if not all(np.isfinite(float(v)) for v in bgSNR):
-            raise ValueError(f"background_snr values must be finite, got {bgSNR}")
+        _check_snr(bgSNR, 'background_snr')
+        _check_snr(self.snrRatio, 'snr_ratio')
         bgNoiseWaves, _ = check_input(background_path)
         if not bgNoiseWaves:
             raise ValueError(f"No wave files found in: {background_path}")
@@ -559,24 +736,15 @@ class Synthesizer:
         if occupied:
             self._check_clearable(bgNoiseWaves)
         base = self._base_seed(seed)
+        rng = np.random.default_rng(base)
+        cleanWaves = self.cleanWaves
+        copies = [(cln, self.noisyDir / f"{cln.stem}_n0{cln.suffix}") for cln in cleanWaves]
         # every clean file meets every noise and every background
-        rates = {_own_rate(f) for f in
-                 itertools.chain(self.cleanWaves, self.noiseWaves, bgNoiseWaves)} - {None}
+        rates = {_header(f, what).sr
+                 for what, files in (('clean', cleanWaves), ('noise', self.noiseWaves),
+                                     ('background', bgNoiseWaves)) for f in files}
         if len(rates) > 1:
             _optional.librosa()
-        if occupied:
-            shutil.rmtree(self.noisyDir)
-        self.noisyDir.mkdir(parents=True, exist_ok=True)
-        # after the guards, like `syn`: a run that refuses to clear the folder
-        # must not take the seed that names the corpus already sitting in it
-        self.seed = base
-        rng = np.random.default_rng(base)
-        self.rooms, self.channels, self.targets = {}, {}, {}
-        # no resampling in this mode, whatever an earlier syn() asked for
-        self.target_sr = None
-        cleanWaves = self.cleanWaves
-        for cln in cleanWaves:
-            shutil.copy(cln, self.noisyDir / f"{cln.stem}_n0{cln.suffix}")
 
         def name(cln, nos, snr) -> str:
             tag = f"n{_snr_text(snr)}" if float(snr) < 0 else _snr_text(snr)
@@ -584,7 +752,8 @@ class Synthesizer:
 
         with tempfile.TemporaryDirectory(prefix="kudio-extra-") as tmp:
             # stage 1: noise x background noise into a temporary directory,
-            # written as float -- an intermediate has no business clipping
+            # written as float -- an intermediate has no business clipping. It
+            # comes before the output folder is emptied, and so do its errors.
             temporaryPath = Path(tmp)
             fullCleanWaves = [n for n in self.noiseWaves
                               for _ in range(len(bgNoiseWaves) * len(bgSNR))]
@@ -595,7 +764,9 @@ class Synthesizer:
                             in zip(fullCleanWaves, fullNoiseWaves, fullSnrSequence)]
             stage1 = list(zip(fullOutPaths, fullCleanWaves, fullNoiseWaves,
                               fullSnrSequence))
-            self.__syn_pool(stage1, is_pool=False, subtype='FLOAT',
+            self._try_settings(stage1, {}, {}, None)
+            # no resampling in this mode, whatever an earlier syn() asked for
+            self.__syn_pool(stage1, pool=None, sr=None, subtype='FLOAT',
                             seeds=self._seeds(stage1, base, temporaryPath))
 
             # stage 2: clean x (stage-1 output + noise + background noise)
@@ -609,14 +780,27 @@ class Synthesizer:
                             in zip(fullCleanWaves, fullNoiseWaves, fullSnrSequence)]
             entries = list(zip(fullOutPaths, fullCleanWaves, fullNoiseWaves,
                                fullSnrSequence))
+            self._check_any(entries)
             self._warn_collisions([out for out, *_ in entries], False)
             extra = self._silence_share(entries, rng, 0.02, flat=True)
             entries += extra
-            self.synWavesList = entries
-            self._noise_only = {out for out, *_ in extra}
-            peaks = self.__syn_pool(entries, is_pool=is_pool, subtype=self.subtype,
-                                    seeds=self._seeds(entries, base, self.noisyDir),
-                                    silent={out for out, *_ in extra})
+            seeds = self._seeds(entries, base, self.noisyDir)
+            rates = self._try_settings(entries, {}, {}, None)
+            with self._workers(is_pool and len(entries) > _POOL_FROM) as pool:
+                if occupied:
+                    self._try_writing([*seeds, *(to for _, to in copies)], rates, cleanWaves)
+                    shutil.rmtree(self.noisyDir)
+                self.noisyDir.mkdir(parents=True, exist_ok=True)
+                # after the guards, like `syn`: a run that refuses to clear the
+                # folder must not take the seed that names the corpus in it
+                self.seed, self.target_sr = base, None
+                self.rooms, self.channels, self.targets = {}, {}, {}
+                for cln, to in copies:
+                    shutil.copy(cln, to)
+                self.synWavesList = entries
+                self._noise_only = {out for out, *_ in extra}
+                peaks = self.__syn_pool(entries, pool=pool, sr=None, subtype=self.subtype,
+                                        seeds=seeds, silent=self._noise_only)
         message = self._clipping(entries, peaks)
         if message:
             warnings.warn(message, UserWarning, stacklevel=2)
@@ -633,6 +817,14 @@ class Synthesizer:
         return int(seed) if seed is not None else \
             int(np.random.randint(0, 2 ** 31 - 1))
 
+    @staticmethod
+    def _check_any(*lists: Sequence) -> None:
+        """Refuse a run that would empty the folder and write nothing. Nothing
+        was empty when it was passed in, and an attribute can be since."""
+        if not all(len(given) for given in lists):
+            raise SynthesisError("there is nothing to synthesise: cleanWaves, noiseWaves "
+                                 "or snrRatio is empty")
+
     def _check_room(self) -> None:
         """Refuse a room that is none at any rate."""
         if not all(0 < float(v) < math.inf for v in self.rt60Ratio):
@@ -641,31 +833,32 @@ class Synthesizer:
             raise ValueError(f"drr_db must be a finite number, got {self.drr_db}")
 
     def _try_settings(self, entries: list, rooms: Dict[Path, tuple],
-                      target_sr: Optional[int]) -> None:
-        """Run every room and the link of a plan before its folder is emptied,
-        and ask for librosa if a file of it has to be resampled.
+                      channels: Dict[Path, tuple], target_sr: Optional[int]) -> Set[int]:
+        """Go through a plan before its folder is emptied, as far as that is
+        possible without the samples; returns the rates it writes.
 
         Which settings work is for the functions that use them to say, and
-        some of it comes down to the rate of a file and the seed of a room:
-        whether the direct sound can be that far below the tail, whether the
-        telephone band fits under Nyquist. A file that cannot be read is not a
-        setting, and is named when its turn comes.
+        some of it comes down to the rate of a file, its length and the seed of
+        an output: whether the direct sound can be that far below the tail,
+        whether the telephone band fits under Nyquist, whether the packets that
+        survive keep the runs of lost ones apart.
         """
         from kudio.core.room import rir
-        from kudio.effects.channel import apply_channel, channel_spec
-        rates: Dict[str, Optional[int]] = {}
+        from kudio.effects.channel import _check_loss, apply_channel, channel_spec
+        headers: Dict[str, _Header] = {}
+        for _, cln, nos, *_ in entries:
+            for f, what in ((cln, 'clean'), (nos, 'noise')):
+                if str(f) not in headers:
+                    headers[str(f)] = _header(f, what)
+
         mixed: Set[int] = set()
         resampled = False
         for out, cln, nos, *_ in entries:
-            for f in (cln, nos):
-                if str(f) not in rates:
-                    rates[str(f)] = _own_rate(f)
-            own, noise_sr = rates[str(cln)], rates[str(nos)]
-            sr = own if target_sr is None else target_sr
-            if sr is None:
-                continue
+            own, noise = headers[str(cln)], headers[str(nos)]
+            sr = own.sr if target_sr is None else target_sr
+            _check_lengths(own, noise, sr, cln, nos)
             mixed.add(sr)
-            resampled = resampled or not {own, noise_sr} <= {sr, None}
+            resampled = resampled or {own.sr, noise.sr} != {sr}
             room = rooms.get(Path(out))
             if room is not None:
                 rt60_s, drr_db, room_seed = room
@@ -673,14 +866,77 @@ class Synthesizer:
                     rir(sr, rt60=rt60_s, drr_db=drr_db, seed=room_seed)
         if resampled:
             _optional.librosa()
-        spec = channel_spec(self.channel)
+
+        spec = channel_spec(self.channel) if channels else {}
         if spec:
-            # a loss of a half, so that packets are lost in a second of
-            # anything and the way they are lost is tried as well
-            trial = dict(spec, loss=0.5) if float(spec['loss']) else spec
+            # the band, the codec and the bits go by the rate
             for sr in sorted(mixed):
                 noise = 0.1 * np.random.default_rng(0).standard_normal(max(sr, 1000))
-                apply_channel(noise, sr, trial, seed=0)
+                apply_channel(noise, sr, dict(spec, loss=0.0), seed=0)
+        if spec and float(spec['loss']) > 0.5 and spec['burst'] is not None:
+            # The packets go by the length and the seed of every output. As
+            # long as a half of them or less are lost, any runs can be kept
+            # apart.
+            @lru_cache(maxsize=None)
+            def frames(cln: str) -> int:
+                own = headers[cln]
+                if own.frames is None:
+                    with warnings.catch_warnings(record=True):
+                        return len(_load(cln, target_sr, 'clean')[0])
+                return _resampled_length(own.frames, own.sr, target_sr or own.sr)
+
+            for out, cln, *_ in entries:
+                try:
+                    _check_loss(frames(str(cln)), target_sr or headers[str(cln)].sr,
+                                spec, channels[Path(out)][1])
+                except FeatureError as e:
+                    raise FeatureError(f"{out}: {e}") from e
+        return mixed
+
+    def _try_writing(self, files: Sequence[Path], rates: Iterable[int],
+                     copied: Sequence[Path] = ()) -> None:
+        """Write a sample at every one of *rates*, and one under the longest
+        names of *files*, as the run will write them but in a folder beside the
+        output one; then see that the output folder can be deleted. *copied*
+        are the inputs that are copied as they are.
+        """
+        taken = set(files)
+        for path in files:
+            for folder in path.parents:
+                if folder in taken:
+                    raise SynthesisError(f"{folder} would be a file and the folder of "
+                                         f"{path}. Give the clean files other names.")
+        for path in copied:
+            try:
+                with open(str(path), 'rb'):
+                    pass
+            except OSError as e:
+                raise SynthesisError(f"could not read clean file {path}: "
+                                     f"{_reason(e, path)}") from e
+
+        def long(text: str) -> int:
+            # Windows counts characters, the others bytes
+            return len(text) if os.name == 'nt' else len(os.fsencode(text))
+
+        target = _abspath(self.noisyDir)
+        names = [path.relative_to(self.noisyDir) for path in files]
+        longest = max(names, key=lambda p: long(str(p)))
+        widest = max(names, key=lambda p: max(long(part) for part in p.parts))
+        with _scratch_beside(target) as scratch:
+            for name, sr in [(widest, min(rates))] + [(longest, sr) for sr in sorted(rates)]:
+                try:
+                    save_wave(scratch / name, np.zeros(1), sr, subtype=self.subtype)
+                except AudioIOError as e:
+                    raise AudioIOError(str(e).replace(str(scratch),
+                                                      str(self.noisyDir))) from e
+                except OSError as e:                # of a folder on the way to it
+                    raise AudioIOError(f"Could not write audio file: {self.noisyDir / name} "
+                                       f"({e.strerror or type(e).__name__})") from e
+
+        why = _in_the_way(target)
+        if why is not None:
+            raise SynthesisError(f"refusing to empty {self.noisyDir} before synthesising: "
+                                 f"{why}.")
 
     @staticmethod
     def _seeds(entries, base: int, root) -> Dict[Path, int]:
@@ -732,21 +988,38 @@ class Synthesizer:
     def _check_clearable(self, *more: Sequence) -> None:
         """Refuse to empty the output folder when that would delete more than
         an earlier run of this class put there."""
+        @lru_cache(maxsize=None)
+        def real(folder: str) -> Path:
+            return Path(os.path.realpath(folder))
+
         target = _abspath(self.noisyDir)
+        # the two names of it, and of what may be in it: as they are spelled,
+        # and with every link on the way followed
+        targets = {target, real(str(target))}
+
+        def held(*places: Path) -> bool:
+            return any(t == p or t in p.parents for t in targets for p in places)
+
         why = None
-        if target == Path(target.anchor):
+        if any(t == Path(t.anchor) for t in targets):
             why = "it is the root of a filesystem"
+        elif _is_link(target):
+            why = f"it is a link to {real(str(target))}"
         for label, where in (("the working directory", Path.cwd),
                              ("the home directory", Path.home)):
             try:
                 place = _abspath(where())
             except (OSError, RuntimeError, KeyError):   # no home to find
                 continue
-            if why is None and (place == target or target in place.parents):
+            if why is None and held(place, real(str(place))):
                 why = f"it holds {label}"
         if why is None:
             for f in itertools.chain(self.cleanWaves, self.noiseWaves, *more):
-                if target in _abspath(f).parents:
+                path = _abspath(f)
+                places = [path.parent, real(str(path.parent))]
+                if os.path.islink(path):
+                    places.append(real(str(path)).parent)
+                if held(*places):
                     why = f"it holds the input {f}"
                     break
         if why is not None:
@@ -828,22 +1101,35 @@ class Synthesizer:
                 f"the clean level or write subtype='FLOAT'; they are listed in "
                 f".clipped.")
 
-    def __syn_pool(self, entries: list, *, is_pool: bool, subtype: str,
+    @staticmethod
+    @contextlib.contextmanager
+    def _workers(wanted: bool) -> Iterator[Any]:
+        """A process pool if one is *wanted*, else None. It has answered once by
+        the time it is handed out: a process that may not have children, or a
+        script without its ``if __name__ == '__main__':``, gets no further."""
+        if not wanted:
+            yield None
+            return
+        with Pool(8) as pool:
+            pool.apply(int)
+            yield pool
+
+    @staticmethod
+    def __syn_pool(entries: list, *, pool: Any, sr: Optional[int], subtype: str,
                    seeds: Optional[Dict[Path, int]] = None,
                    silent: Optional[Set[Path]] = None,
                    rooms: Optional[Dict[Path, tuple]] = None,
                    channels: Optional[Dict[Path, tuple]] = None,
                    targets: Optional[Dict[Path, Path]] = None) -> List[float]:
-        """Write *entries*; returns each one's peak, in order."""
+        """Write *entries*; returns each one's peak, in order. With *sr* None
+        each clean file keeps its own rate."""
         kwargs = dict(rooms=rooms or None, channels=channels or None,
                       targets=targets or None, seeds=seeds or None,
                       silent=silent or None, subtype=subtype)
-        sr_ = self.target_sr          # None -> keep each clean file's own rate
-        if is_pool and len(entries) > 200:
-            fcn = partial(Synthesizer.syn_waves, entries, False, sr_, **kwargs)
-            with Pool(8) as pool:
-                return pool.map(fcn, trange(len(entries), desc="[kudio] Audio synthesis"))
-        return [Synthesizer.syn_waves(wave, False, sr_, **kwargs)
+        if pool is not None:
+            fcn = partial(Synthesizer.syn_waves, entries, False, sr, **kwargs)
+            return pool.map(fcn, trange(len(entries), desc="[kudio] Audio synthesis"))
+        return [Synthesizer.syn_waves(wave, False, sr, **kwargs)
                 for wave in tqdm(entries, desc="[kudio] Audio synthesis")]
 
     @staticmethod
@@ -889,8 +1175,7 @@ class Synthesizer:
         y_clean, sr_clean = _load(clean_file, target_sr, "clean")
         y_noise, _ = _load(noise_file, sr_clean, "noise")
         if not len(y_noise):
-            raise SynthesisError(f"noise file is empty: {noise_file}. Drop it "
-                                 f"from the noise set.")
+            raise _empty_noise(noise_file)
 
         room = (rooms or {}).get(out)
         if room is not None:
@@ -913,9 +1198,7 @@ class Synthesizer:
         if not clean_pwr > 0.0:
             # the noise is scaled against the speech, so silent speech made a
             # silent mixture: a file of zeros labelled with an SNR
-            raise SynthesisError(
-                f"clean file has no signal to set an SNR against: {clean_file}. "
-                f"It is empty or digital silence. Drop it from the clean set.")
+            raise _silent_clean(clean_file)
         if len(y_noise) < len(y_clean):
             repeats = len(y_clean) // len(y_noise) + 1
             y_noise = np.tile(y_noise, repeats)[:len(y_clean)]

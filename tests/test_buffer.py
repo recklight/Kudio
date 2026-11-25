@@ -8,6 +8,21 @@ import pytest
 from kudio import AudioBuffer, FetchBuffer
 
 
+def _feed(buf, frames):
+    """Add *frames* from another thread once a capture waits for them. It takes
+    only what comes after it has started, which on a busy machine is late."""
+    def producer():
+        end = time.monotonic() + 30
+        while buf._capture is None and time.monotonic() < end:
+            time.sleep(0.001)
+        for frame in frames:
+            buf.add(frame)
+
+    thread = threading.Thread(target=producer, daemon=True)
+    thread.start()
+    return thread
+
+
 def test_add_get_fifo():
     buf = AudioBuffer(size=4)
     for i in range(3):
@@ -56,28 +71,16 @@ def test_clear():
 def test_get_fixed_size_data():
     buf = AudioBuffer(size=2)
     n_frames = 5
-
-    def producer():
-        for i in range(n_frames + 3):
-            buf.add(np.full(10, i))
-            time.sleep(0.005)
-
-    threading.Thread(target=producer, daemon=True).start()
+    _feed(buf, [np.full(10, i) for i in range(n_frames + 3)])
     data = buf.get_fixed_size_data(n_frames)
-    assert data.shape == (n_frames * 10,)
+    np.testing.assert_array_equal(data, np.repeat(np.arange(n_frames), 10))
 
 
 def test_fetch_buffer_thread():
     buf = AudioBuffer(size=2)
-
-    def producer():
-        for i in range(4):
-            buf.add(np.full(8, i))
-            time.sleep(0.005)
-
-    threading.Thread(target=producer, daemon=True).start()
+    _feed(buf, [np.full(8, i) for i in range(4)])
     data = FetchBuffer(buf).get_data(3)
-    assert data.shape == (24,)
+    np.testing.assert_array_equal(data, np.repeat(np.arange(3), 8))
 
 
 def _call_with_deadline(fn, *args, **kwargs):
@@ -158,14 +161,8 @@ def test_a_timed_out_capture_leaves_nothing_behind():
     buf = AudioBuffer(size=8)
     with pytest.raises(TimeoutError):
         FetchBuffer(buf).get_data(5, timeout=0.05)
-
-    def producer():
-        for i in range(3):
-            time.sleep(0.01)
-            buf.add(np.full(4, i))
-
-    threading.Thread(target=producer, daemon=True).start()
-    data = FetchBuffer(buf).get_data(3, timeout=2)
+    _feed(buf, [np.full(4, i) for i in range(3)])
+    data = FetchBuffer(buf).get_data(3, timeout=30)
     np.testing.assert_array_equal(data, np.repeat([0, 1, 2], 4))
 
 
@@ -197,8 +194,6 @@ def test_an_interrupted_capture_does_not_lock_the_buffer(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         buf.get_fixed_size_data(2, timeout=1)
     monkeypatch.undo()
-    feeder = threading.Thread(target=lambda: [buf.add(np.ones(2)) or time.sleep(0.02)
-                                              for _ in range(4)])
-    feeder.start()
-    assert buf.get_fixed_size_data(2, timeout=5).tolist() == [1, 1, 1, 1]
+    feeder = _feed(buf, [np.ones(2)] * 4)
+    assert buf.get_fixed_size_data(2, timeout=30).tolist() == [1, 1, 1, 1]
     feeder.join(5)
