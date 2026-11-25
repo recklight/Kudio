@@ -509,8 +509,10 @@ def test_every_reader_agrees_on_a_real_file(tmp_path, ffmpeg, played, extension)
     assert rate16 == 16000
     assert np.array_equal(at16, native if sr == 16000 else kudio.resample(native, sr, 16000))
 
-    # AAC and Opus pad; the sound itself is there, channel for channel
-    assert len(native) / sr == pytest.approx(2.0, abs=0.1)
+    # AAC and Opus pad, and by how much depends on the ffmpeg that encoded it:
+    # 0.112 s in a Matroska file from the ffmpeg 8.0.1 of Ubuntu 26.04. The sound
+    # itself is there, channel for channel
+    assert len(native) / sr == pytest.approx(2.0, abs=0.15)
     assert (info.frames, info.duration) == (len(native), len(native) / sr)
     assert info.peak == float(np.max(np.abs(native)))
     assert header.duration == pytest.approx(2.0, abs=0.15)
