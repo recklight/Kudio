@@ -20,7 +20,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from kudio._samples import as_float
+from kudio._samples import one_channel
+from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
 __all__ = ['Line', 'Comb', 'TonalLines', 'tonal_lines']
@@ -209,14 +210,14 @@ def tonal_lines(y: np.ndarray, sr: int, *, min_prominence_db: float = 20.0,
         resolution its length gives.
     :param max_lines: the most prominent this many are kept.
     :raises FeatureError: on non-mono audio, samples that are not finite, a
-        non-positive rate or resolution.
+        rate that is not a positive number, a non-positive resolution.
     """
-    if sr <= 0:
-        raise FeatureError(f"tonal_lines() needs a positive sample rate, got {sr}")
+    sr = sample_rate(sr, 'tonal_lines', FeatureError)
     if not resolution_hz > 0:
         raise FeatureError(f"tonal_lines() needs a positive resolution_hz, got "
                            f"{resolution_hz}")
-    y = np.ascontiguousarray(np.asarray(as_float(y), dtype=np.float64).squeeze())
+    y = one_channel(y, 'tonal_lines', FeatureError)
+    y = np.ascontiguousarray(np.asarray(y, dtype=np.float64).squeeze())
     if y.ndim != 1:
         raise FeatureError(f"tonal_lines() takes mono audio, got shape {y.shape}")
     if not np.all(np.isfinite(y)):

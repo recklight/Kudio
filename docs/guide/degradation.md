@@ -413,8 +413,9 @@ In the right order the 15 lost packets are 4800 samples of exact silence, 320
 to a packet; in the wrong order not one sample is zero.
 
 `channel_spec` refuses an unknown setting, codec or concealment, a loss
-outside 0 to 1, fewer than 2 bits, a `burst` under 1 and a `packet_ms` of zero
-or less. `apply_channel` and `Synthesizer` call it before any audio goes
+outside 0 to 1, bits that are not a whole number from 2 to 64, a `burst` under
+1 and a `packet_ms` of zero or less, and any of the four that is not one finite
+number: NaN, `True`, text. `apply_channel` and `Synthesizer` call it before any audio goes
 through, so a `Synthesizer` given a bad link fails when it is built, not on its
 first file. A spec's `band` is on or off; for other edges, call
 `telephone(..., band=)` yourself.

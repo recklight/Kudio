@@ -376,8 +376,8 @@ which is what [DNSMOS](#dnsmos-what-a-listener-would-say) is for.
 
 ### A folder at a time
 
-`file_load` raises [`AudioIOError`][kudio.exceptions.AudioIOError] on a file
-soundfile cannot open, and `audio_report` a `FeatureError` on an empty one.
+`file_load` raises [`AudioIOError`][kudio.exceptions.AudioIOError] on a file it
+cannot read, and `audio_report` a `FeatureError` on one without samples.
 Catch both, or the sweep stops at the first broken file:
 
 ```python
@@ -392,6 +392,12 @@ for path in sorted(Path("corpus").rglob("*.wav")):
     for problem in problems:
         print(f"{path.as_posix()}: {problem}")
 ```
+
+A take that was [cut short](audio-files.md#a-file-that-was-cut-short) is
+measured as far as it goes: the samples that are there are fine, and
+`audio_report` finds nothing in them. `file_load` warns about the file. With
+`warnings.filterwarnings("error", message=".*cut short")` before the loop the
+warning is an `AudioIOError`, and the take is listed with the rest.
 
 ## How loud it sounds
 
@@ -446,7 +452,9 @@ block gives a number, but not a BS.1770 one.
 
 [`normalize_lufs`][kudio.core.loudness.normalize_lufs] applies the one gain
 that brings a clip to a target, -23 LUFS by default (EBU R 128[^ebu]), and returns
-silence unchanged. It does nothing else. Samples the gain pushes past full
+silence unchanged. A clip that holds something but has no block above the
+-70 LUFS gate measures `-inf` as well, and comes back unchanged with a warning
+that says so. It does nothing else. Samples the gain pushes past full
 scale come back past 1.0, not limited, because limiting them would change the
 loudness you just asked for:
 
@@ -491,6 +499,8 @@ matched   -27.5 LUFS
 ```
 
 Unmatched, the noisy version would start any listening test 2.5 LU ahead.
+When either clip is silent there is nothing to match and the first comes back
+as it is; when one is under the -70 LUFS gate, a warning names it.
 Clips at different rates can be matched too, with `reference_sr=`, since
 loudness belongs to the sound, not the sampling.
 

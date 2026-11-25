@@ -12,7 +12,8 @@ from typing import Callable, Optional, Tuple
 import numpy as np
 
 from kudio import _optional
-from kudio._samples import to_float as _to_float
+from kudio._samples import channels_last, refuse_64_bit, to_float
+from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
 __all__ = [
@@ -37,6 +38,11 @@ def _each_channel(y: np.ndarray, fn: Callable[[np.ndarray], np.ndarray]) -> np.n
     return np.stack([fn(y[:, c]) for c in range(y.shape[1])], axis=1)
 
 
+def _read(y, name: str):
+    """*y* in kudio's layout and as float, and what puts a result back."""
+    return to_float(channels_last(y, name, FeatureError), name, FeatureError)
+
+
 def _quietly(fn: Callable, *args, **kwargs):
     """librosa 1.0's time_stretch and pitch_shift hand phase_vocoder its own
     deprecated arguments and warn about it twice a call. Nothing a caller does
@@ -56,7 +62,7 @@ def time_stretch(y: np.ndarray, rate: float) -> np.ndarray:
     if rate <= 0:
         raise ValueError(f"rate must be > 0, got {rate}")
     effects = _optional.librosa().effects
-    x, back = _to_float(y)
+    x, back = _read(y, 'time_stretch')
     return back(_each_channel(
         x, lambda c: _quietly(effects.time_stretch, c, rate=rate)))
 
@@ -67,8 +73,9 @@ def pitch_shift(y: np.ndarray, sr: int, n_steps: float) -> np.ndarray:
     A ``(frames, channels)`` array is shifted channel by channel, and integer
     audio comes back in its own type, as :func:`gain` does it.
     """
+    sr = sample_rate(sr, 'pitch_shift')
     effects = _optional.librosa().effects
-    x, back = _to_float(y)
+    x, back = _read(y, 'pitch_shift')
     return back(_each_channel(
         x, lambda c: _quietly(effects.pitch_shift, c, sr=sr, n_steps=n_steps)))
 
@@ -79,7 +86,7 @@ def gain(y: np.ndarray, db: float) -> np.ndarray:
     Integer audio stays in its type, rounded and clipped at full scale rather
     than wrapped round, which would turn an int16 20000 at +6 dB into -25631.
     """
-    x, back = _to_float(y)
+    x, back = _read(y, 'gain')
     return back(x * (10.0 ** (db / 20.0)))
 
 
@@ -93,8 +100,8 @@ def normalize(y: np.ndarray, peak: float = 0.99) -> np.ndarray:
     """
     if peak <= 0:
         raise ValueError(f"peak must be > 0, got {peak}")
-    y = np.asarray(y)
-    x, back = _to_float(y)
+    y = channels_last(y, 'normalize', FeatureError)
+    x, back = _read(y, 'normalize')
     current = float(np.max(np.abs(x))) if x.size else 0.0
     if current == 0.0:
         return y.copy()
@@ -131,7 +138,13 @@ def add_noise_snr(y: np.ndarray, noise: np.ndarray, snr_db: float,
         left to scale, and the result would be *y* back with no noise in it at
         any SNR. Synthesizer refuses the same file for the same reason.
     """
-    y, noise = np.asarray(y), np.asarray(noise)
+    # the noise as the numbers it is: its mean goes and its level is set, so
+    # its scale never comes into it
+    y = channels_last(refuse_64_bit(y, 'add_noise_snr', FeatureError),
+                      'add_noise_snr', FeatureError)
+    noise = channels_last(refuse_64_bit(noise, 'add_noise_snr', FeatureError),
+                          'add_noise_snr', FeatureError)
+    y, noise = (a[:, 0] if a.ndim == 2 and a.shape[1] == 1 else a for a in (y, noise))
     if y.ndim != 1 or noise.ndim != 1:
         raise FeatureError(f"add_noise_snr mixes mono signals, got shapes "
                            f"{y.shape} and {noise.shape}")
@@ -150,7 +163,7 @@ def add_noise_snr(y: np.ndarray, noise: np.ndarray, snr_db: float,
     if not np.ptp(noise) > 0:
         raise FeatureError("the noise has no variation (silence or a constant), "
                            "so there is nothing to mix in at any SNR")
-    x, back = _to_float(y)
+    x, back = to_float(y, 'add_noise_snr', FeatureError)
     noise = noise - np.mean(noise)
     sig_pwr = np.mean(x ** 2)
     noise_pwr = np.mean(noise ** 2) + 1e-12
@@ -168,6 +181,7 @@ def reverb(y: np.ndarray, sr: int, decay: float = 0.3,
     """
     from scipy.signal import fftconvolve
 
+    sr = sample_rate(sr, 'reverb', FeatureError)
     delay = max(1, int(sr * delay_ms / 1000.0))
     ir_len = delay * 8
     impulse = np.zeros(ir_len, dtype=np.float32)
@@ -179,7 +193,7 @@ def reverb(y: np.ndarray, sr: int, decay: float = 0.3,
         t += delay
     # integer audio in float first: abs(-32768) stays -32768 in int16, so a
     # sample pinned there was missed as the peak (20000 came back, not 32768)
-    x, back = _to_float(y)
+    x, back = _read(y, 'reverb')
     wet = _each_channel(x, lambda c: fftconvolve(c, impulse)[:len(c)])
     peak = np.max(np.abs(wet)) + 1e-12
     return back(wet / peak * np.max(np.abs(x)))

@@ -91,6 +91,13 @@ file name reads as the start of the suffix, and a room adds `_rt300ms`.
     leaves a non-empty folder alone, warns, and returns `None`, so check the
     return value in a script that carries on.
 
+    The settings are tried before anything is deleted: every room at the rate
+    of its file, the link, `target_sr=`, the seed, and librosa if a file has to
+    be resampled. One that cannot work raises,
+    and the corpus in the folder is still there, with `seed`, `rooms` and
+    `manifest()` describing it. A file that cannot be read is found when its
+    turn comes, after the folder was emptied.
+
 ## Which mode: `reg` or `inc`
 
 | `mode=` | Files written | Reach for it when |
@@ -372,7 +379,10 @@ the `data/rooms.json` written above:
 ```
 
 Only `noisy` and `clean` are required and unknown keys are dropped, so a JSON
-list written by another tool loads as long as each row has those two.
+list written by another tool loads as long as each row has those two. Pairs
+made by hand may hold a `Path` or a numpy number, which are written as the text
+and the number they are. A value JSON has no form for is a `ValueError` naming
+the row, and a manifest already at that path is left as it was.
 
 !!! note "Relative paths stay relative"
     Paths are written with forward slashes, which Windows reads as well as

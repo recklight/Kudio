@@ -64,7 +64,7 @@ Here a frame is one position of the STFT window, not a row of the
 `len(y) // 256 + 1`, 126 for this clip; `mel_frames` is the same count at the
 512-sample hop of [`mfcc`][kudio.core.feature.mfcc] and
 [`melspectrogram`][kudio.core.feature.melspectrogram], 63 here.
-`melspectrogram` takes `hop_length=`; `mfcc` does not.
+Both take `hop_length=`.
 
 ## One object for the STFT settings
 
@@ -174,12 +174,13 @@ that stay separate on the left merge into one band.
   cast.
 
 [`mfcc`][kudio.core.feature.mfcc] takes an array and its rate, no path, and
-returns `(1, mel_frames, n_mfcc)`; `[0]` drops the batch axis. Everything
-except `n_mfcc` is librosa's default: Hann window, `n_fft=2048`, a 512-sample
-hop and 128 mel bands. For MFCCs on the spectrogram's 256-sample grid, call
-librosa directly and transpose:
-`librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, n_fft=512, hop_length=256).T` is
-`(126, 13)`.
+returns `(1, mel_frames, n_mfcc)`; `[0]` drops the batch axis. `n_fft`,
+`hop_length`, `n_mels` and `fmax` are librosa's where they are left out: Hann
+window, `n_fft=2048`, a 512-sample hop and 128 mel bands. More coefficients
+than mel bands is a [`FeatureError`][kudio.exceptions.FeatureError], as
+`n_mfcc`, 40 by default, is beside `n_mels=32`. MFCCs on the spectrogram's
+256-sample grid: `kudio.mfcc(y, sr, n_mfcc=13, n_fft=512, hop_length=256)[0]`
+is `(126, 13)`.
 
 ## Context and windows
 

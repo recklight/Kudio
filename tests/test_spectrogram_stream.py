@@ -252,7 +252,7 @@ def test_impossible_settings_are_refused_at_construction(kwargs):
 
 
 def test_a_bad_rate_is_refused():
-    with pytest.raises(FeatureError, match="positive rate"):
+    with pytest.raises(FeatureError, match="positive sample rate"):
         kudio.SpectrogramStream(0)
 
 

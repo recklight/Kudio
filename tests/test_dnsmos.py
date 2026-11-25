@@ -103,6 +103,12 @@ def test_audio_is_resampled_to_the_model_rate():
     assert session.calls[0] == (1, int(SEGMENT_SECONDS * SR))
 
 
+def test_audio_at_a_rate_that_is_not_whole_is_resampled_too():
+    session = StubSession()
+    kudio.dnsmos(_noise(12, sr=22254), 22254.5, session=session)
+    assert session.calls[0] == (1, int(SEGMENT_SECONDS * SR))
+
+
 def test_summary_names_the_denoising_trade():
     over = kudio.DnsmosScore(sig=2.0, bak=4.0, ovrl=2.5, segments=1)
     assert "over-aggressive" in over.summary()

@@ -200,6 +200,16 @@ to stay below the share of the file in which a bin holds no speech: at
 drops to 12.87 dB. `noise_kwargs` goes to the estimator, and a key it does not
 take is refused with a `FeatureError` that lists the ones it does.
 
+`hop_length=` is a quarter of `n_fft` unless you pass it, and half of `n_fft`
+is as long as it wants to be for the usual windows. Each output sample is
+divided by the windows that overlap there, so where hardly any do, what a gain
+left at the edge of a frame is blown up: at `hop_length=512`, no overlap at
+all, a clip peaking at 0.404 came back at 18. A hop that lets the overlap fall
+under 9% of its peak is refused, 356 samples or more of a 512-sample Hann
+window. At the very end of a clip the last frame can be the only one. The
+samples under less than 3% of its window are faded, which for that window is
+none of them at a quarter or a third of `n_fft` and at most 69 at half.
+
 For a loop of your own,
 [`estimate_noise_psd`][kudio.enhance.spectral.estimate_noise_psd] runs any
 estimator over a `(frames, bins)` power spectrogram, and

@@ -757,3 +757,87 @@ def test_version_prints_the_installed_version(capsys):
         main(["--version"])
     assert done.value.code == 0
     assert capsys.readouterr().out == f"kudio {kudio.__version__}\n"
+
+
+# -- nothing left is not a result --------------------------------------------------
+@pytest.mark.parametrize("top_db", ["0", "-5", "nan", "inf"])
+@pytest.mark.parametrize("onto_itself", [False, True])
+def test_a_trim_that_leaves_nothing_leaves_the_file(tmp_path, capsys, top_db, onto_itself):
+    """The destination may be the source."""
+    src = tmp_path / "take.wav"
+    _write_speech(src)
+    before = src.read_bytes()
+    dst = src if onto_itself else tmp_path / "out.wav"
+    for argv in (["trim", str(src), str(dst), f"--top-db={top_db}"],
+                 ["convert", str(src), str(dst), f"--trim-db={top_db}"]):
+        assert main(argv) == 2
+        said = capsys.readouterr()
+        assert said.out == ""
+        assert said.err.startswith(f"kudio {argv[0]}: trim_silence(): top_db has to be a finite")
+        assert len(said.err.splitlines()) == 1
+    assert src.read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir()] == ["take.wav"]
+
+
+@pytest.mark.parametrize("argv", [["trim"], ["convert"], ["convert", "--trim-db", "30"]])
+def test_a_file_with_no_samples_is_not_written_out_again(tmp_path, capsys, argv):
+    """convert_folder counts it as a failure, and one file is no different."""
+    import soundfile as sf
+    src, dst = tmp_path / "empty.wav", tmp_path / "out.wav"
+    sf.write(str(src), np.zeros(0, dtype=np.float32), 16000)
+    _write(dst)
+    before = dst.read_bytes()
+    assert main([argv[0], str(src), str(dst)] + argv[1:]) == 2
+    assert capsys.readouterr().err == f"{src} holds no samples; nothing was written\n"
+    assert dst.read_bytes() == before
+
+
+def _write_quiet(path, sr=16000):
+    """Something is there, 94 dB down, and under the -70 LUFS gate."""
+    from conftest import make_speech
+    import kudio
+    y = make_speech(sr=sr)
+    y = (y * 2e-5 / np.sqrt(np.mean(np.square(y)))).astype(np.float32)
+    kudio.save_wave(str(path), y, sr, subtype="FLOAT")
+
+
+def test_normalize_does_not_say_it_normalised_what_it_could_not(tmp_path, capsys):
+    """Like digital silence, it is an error: there is no loudness to scale."""
+    src, dst = tmp_path / "quiet.wav", tmp_path / "out.wav"
+    _write_quiet(src)
+    assert main(["normalize", str(src), str(dst), "--subtype", "FLOAT"]) == 2
+    said = capsys.readouterr()
+    assert said.out == "" and not dst.exists()
+    warned, failed = said.err.splitlines()
+    assert warned.startswith("warning: normalize_lufs(): the clip has no 400 ms block above "
+                             "-70 LUFS")
+    assert failed == (f"{src} was not normalised and nothing was written; --peak scales it by "
+                      f"its peak instead")
+    assert main(["normalize", str(src), str(dst), "--peak", "0.5", "--subtype", "FLOAT"]) == 0
+    assert dst.exists()
+
+
+def test_convert_says_it_could_not_normalise(tmp_path, capsys):
+    """The rest of the conversion stands, so the file is written."""
+    src, dst = tmp_path / "quiet.wav", tmp_path / "out.wav"
+    _write_quiet(src)
+    assert main(["convert", str(src), str(dst), "--lufs", "-23", "--subtype", "FLOAT"]) == 0
+    said = capsys.readouterr()
+    assert "it was not normalised" in said.err
+    assert said.out == f"wrote {dst} (16000 Hz, FLOAT)\n"
+
+
+def test_loudness_tells_quiet_from_silent(tmp_path, capsys):
+    import kudio
+    quiet, silent = tmp_path / "quiet.wav", tmp_path / "silent.wav"
+    _write_quiet(quiet)
+    kudio.save_wave(str(silent), np.zeros(16000), 16000)
+    assert main(["loudness", str(quiet)]) == 0
+    out = capsys.readouterr().out
+    assert "silence" not in out
+    assert re.fullmatch(r"integrated      -inf LUFS — nothing in the file rises above the "
+                        r"-70 LUFS gate; its peak is -7\d\.\d dBFS\n", out)
+    assert main(["loudness", str(quiet), "--target", "-23"]) == 1
+    capsys.readouterr()
+    assert main(["loudness", str(silent)]) == 0
+    assert capsys.readouterr().out == "integrated      -inf LUFS — the file is digital silence\n"

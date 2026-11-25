@@ -876,8 +876,9 @@ PCM、uint8 和 float32 必須照常評分且沒有警告；複數、布林、�
 pystoi、mir_eval、pandas、matplotlib、onnxruntime、PyAudio 和 sounddevice 在
 `sys.modules` 裡設成 `None`，讓匯入其中任何一個都像缺少套件那樣失敗。在那個行程裡，
 每個指標模組都必須能匯入；每個不需要選用套件的指標，在所有警告都當成錯誤的情況下，
-都必須給出有限的數字；`score` 必須能跑每個不需要套件的名稱；每個建立在 librosa 上的
-功能，都必須引發寫出 librosa 的 `DependencyError`；`kudio report` 必須能跑；而且到最後
+都必須給出有限的數字；`score` 必須能跑每個不需要套件的名稱；檔案必須能以它本身的取樣率
+讀進來；每個建立在 librosa 上的功能，包括重新取樣，都必須引發寫出 librosa 的
+`DependencyError`；`kudio report` 必須能跑；而且到最後
 librosa 仍然沒有被載入。接著測試在自己的行程裡、librosa 已經載入的情況下，再算一次
 其中幾個指標，數字必須相同。`tests/test_package.py` 檢查 `import kudio` 不會載入
 matplotlib、pandas、librosa、scipy.signal、PyWavelets 和 tqdm 中的任何一個。另一個

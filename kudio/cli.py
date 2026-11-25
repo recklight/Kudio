@@ -33,6 +33,8 @@ import warnings
 from pathlib import Path
 from typing import Optional, Sequence
 
+from kudio._samples import layout_known
+
 log = logging.getLogger("kudio.cli")
 
 
@@ -342,7 +344,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not args.verbose:
             warnings.showwarning = _show_warning
         try:
-            return _run(args)
+            with layout_known():                 # a command reads files
+                return _run(args)
         # the tuple is built when something is raised, not before the command
         # runs, so a command that never touches librosa does not import it
         except _refusals() as e:
@@ -388,6 +391,14 @@ def _fail(message: str) -> int:
     """A refusal goes to stderr, so a redirected result stays clean."""
     print(message, file=sys.stderr)
     return 2
+
+
+def _nothing_to_write(src: str, loaded) -> str:
+    """Why no file is written, for a result with no samples in it. The
+    destination may be the source itself, and an empty file put over it is the
+    recording gone; convert_folder counts the same two cases as failures."""
+    return (f"{src} is empty after trimming; nothing was written" if loaded.size
+            else f"{src} holds no samples; nothing was written")
 
 
 def _cmd_score(kudio, args) -> int:
@@ -446,7 +457,8 @@ def _run(args) -> int:
         print(f"samplerate: {info.sr} Hz")
         print(f"channels  : {info.channels}")
         print(f"duration  : {info.duration:.3f} s ({info.frames} samples)")
-        print(f"encoding  : {info.format} / {info.subtype}")
+        print("encoding  : " + (f"{info.format} / {info.subtype}" if info.format
+                                else "not read by soundfile, decoded with audioread"))
         print(f"peak      : {info.peak:.4f}")
 
     elif args.command == "report":
@@ -475,7 +487,11 @@ def _run(args) -> int:
             return _fail(f"{args.file} has samples that are not finite, so its "
                          f"loudness is undefined; repair it first")
         if integrated == float("-inf"):
-            print("integrated      -inf LUFS — the file is digital silence")
+            peak = float(np.max(np.abs(y)))
+            print("integrated      -inf LUFS — " + (
+                f"nothing in the file rises above the -70 LUFS gate; its peak "
+                f"is {20 * np.log10(peak):.1f} dBFS" if peak
+                else "the file is digital silence"))
             return 1 if args.target is not None else 0
         print(f"integrated  {integrated:8.2f} LUFS")
         window = kudio.MOMENTARY if args.momentary else kudio.SHORT_TERM
@@ -532,6 +548,9 @@ def _run(args) -> int:
         else:
             lufs = -23.0 if args.lufs is None else args.lufs
             out = kudio.normalize_lufs(y, sr, lufs=lufs)
+            if out is y:                  # handed back: too quiet to have a loudness
+                return _fail(f"{args.src} was not normalised and nothing was "
+                             f"written; --peak scales it by its peak instead")
             what = f"{lufs} LUFS"
         kudio.save_wave(args.dst, out, sr, subtype=args.subtype)
         print(f"wrote {args.dst} normalised to {what}")
@@ -815,10 +834,13 @@ def _run(args) -> int:
             if len(result.failed) > 10:
                 print(f"  … and {len(result.failed) - 10} more")
             return 1 if result.failed else 0
-        y, sr = kudio.file_load(args.src, sr=args.rate, mono=True)
+        loaded, sr = kudio.file_load(args.src, sr=args.rate, mono=True)
+        y = loaded
         # the folder options apply to one file too, rather than being dropped
         if args.trim_db is not None:
             y = kudio.trim_silence(y, top_db=args.trim_db)[0]
+        if y.size == 0:
+            return _fail(_nothing_to_write(args.src, loaded))
         if args.lufs is not None:
             y = kudio.normalize_lufs(y, sr, lufs=args.lufs)
         kudio.save_wave(args.dst, y, sr, subtype=args.subtype)
@@ -862,6 +884,8 @@ def _run(args) -> int:
     elif args.command == "trim":
         y, sr = kudio.file_load(args.src, sr=None, mono=True)
         trimmed, (a, b) = kudio.trim_silence(y, top_db=args.top_db)
+        if trimmed.size == 0:
+            return _fail(_nothing_to_write(args.src, y))
         kudio.save_wave(args.dst, trimmed, sr)
         print(f"trimmed [{a}:{b}] -> {args.dst} ({len(trimmed)} samples)")
     return 0

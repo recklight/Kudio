@@ -28,7 +28,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from kudio._samples import as_float, to_float
+from kudio._samples import as_float, channels_last, to_float
+from kudio.core._policy import sample_rate, warn
 from kudio.exceptions import FeatureError
 
 __all__ = ['loudness', 'normalize_lufs', 'match_loudness',
@@ -131,15 +132,16 @@ def _k_weighting(sr: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarra
     return b1, a1, b2, a2
 
 
-def _as_channels(y: np.ndarray) -> np.ndarray:
+def _as_channels(y: np.ndarray, name: str = 'loudness') -> np.ndarray:
     """``(samples,)`` or ``(samples, channels)`` -> ``(samples, channels)``,
     integer audio on its own full scale."""
-    y = np.asarray(as_float(y), dtype=np.float64)
+    y = channels_last(as_float(y, name, FeatureError), name, FeatureError)
+    y = np.asarray(y, dtype=np.float64)
     if y.ndim == 1:
         return y[:, np.newaxis]
     if y.ndim == 2:
         return y
-    raise FeatureError(f"loudness() takes mono or (samples, channels), got {y.shape}")
+    raise FeatureError(f"{name}() takes mono or (samples, channels), got {y.shape}")
 
 
 def _block_power(data: np.ndarray, sr: int, block: int, step: int) -> np.ndarray:
@@ -186,13 +188,26 @@ def _unmeasured(lufs: np.ndarray) -> int:
     return int(np.count_nonzero(~np.isfinite(lufs) & (lufs != -np.inf)))
 
 
+def _why_not_scaled(what: str, y, block_size: float) -> Optional[str]:
+    """Why *what*, a clip that measured -inf, has no loudness to scale from or
+    to, or None for digital silence, which nobody expects to have one."""
+    data = _as_channels(y)
+    peak = float(np.max(np.abs(data))) if data.size else 0.0
+    if peak == 0.0:
+        return None
+    return (f"the {what} has no {block_size * 1000:g} ms block above "
+            f"{_ABSOLUTE_GATE:g} LUFS, the absolute gate of BS.1770, and so no "
+            f"loudness (its peak is {20.0 * np.log10(peak):.1f} dBFS)")
+
+
 def loudness(y: np.ndarray, sr: int, block_size: float = BLOCK_SIZE) -> float:
     """Gated integrated loudness of *y*, in LUFS.
 
     Mono, or ``(samples, channels)`` -- **channels last**, the layout
-    ``soundfile`` returns. Digital silence measures ``-inf``; a clip with NaN
-    or inf in it measures ``nan``, with a warning, rather than reading as
-    silence.
+    ``soundfile`` returns. Digital silence measures ``-inf``, and so does a
+    clip with something in it but no block above the standard's absolute gate,
+    -70 LUFS. A clip with NaN or inf in it measures ``nan``, with a warning,
+    rather than reading as silence.
 
     *block_size* is the gating block in seconds. The standard says 400 ms and
     that is what you want; lowering it is the only way to measure something
@@ -201,8 +216,7 @@ def loudness(y: np.ndarray, sr: int, block_size: float = BLOCK_SIZE) -> float:
     >>> kudio.loudness(y, sr)                       # doctest: +SKIP
     -19.4
     """
-    if sr <= 0:
-        raise FeatureError(f"loudness() needs a positive sample rate, got {sr}")
+    sr = sample_rate(sr, 'loudness', FeatureError)
     data = _as_channels(y)
     if _corrupt(data, "loudness()"):
         return float('nan')
@@ -405,12 +419,11 @@ def loudness_over_time(y: np.ndarray, sr: int, *,
     >>> curve.quietest()                                     # doctest: +SKIP
     (12.4, -38.2)
     """
-    if sr <= 0:
-        raise FeatureError(f"loudness_over_time() needs a positive rate, got {sr}")
+    sr = sample_rate(sr, 'loudness_over_time', FeatureError)
     if window <= 0 or hop <= 0:
         raise FeatureError(f"window and hop must be positive, got "
                            f"window={window}, hop={hop}")
-    data = _as_channels(y)
+    data = _as_channels(y, 'loudness_over_time')
     n_channels = data.shape[1]
     if n_channels > len(_CHANNEL_WEIGHTS):
         raise FeatureError(f"loudness_over_time() handles up to "
@@ -459,6 +472,7 @@ def loudness_range(y: np.ndarray, sr: int) -> float:
     >>> kudio.loudness_range(y, sr)                          # doctest: +SKIP
     5.7
     """
+    sr = sample_rate(sr, 'loudness_range', FeatureError)
     curve = loudness_over_time(y, sr, window=SHORT_TERM, hop=CURVE_HOP)
     return float('nan') if _unmeasured(curve.lufs) else curve.range_lu
 
@@ -482,9 +496,8 @@ def true_peak(y: np.ndarray, sr: int, *,
     >>> kudio.true_peak(y, sr)                               # doctest: +SKIP
     0.8
     """
-    if sr <= 0:
-        raise FeatureError(f"true_peak() needs a positive sample rate, got {sr}")
-    data = _as_channels(y)
+    sr = sample_rate(sr, 'true_peak', FeatureError)
+    data = _as_channels(y, 'true_peak')
     if data.shape[0] == 0:
         return float('-inf')
     if _corrupt(data, "true_peak()", "true peak"):
@@ -524,7 +537,9 @@ def _oversampled_peak(data: np.ndarray, factor: int) -> float:
 
 def normalize_lufs(y: np.ndarray, sr: int, lufs: float = -23.0,
                    block_size: float = BLOCK_SIZE) -> np.ndarray:
-    """Scale *y* to *lufs* integrated loudness. Silence is returned unchanged.
+    """Scale *y* to *lufs* integrated loudness. Silence is returned unchanged,
+    and so, with a warning, is a clip too quiet to have a loudness: one with no
+    block above the -70 LUFS gate.
 
     -23 LUFS is the EBU R 128 broadcast target. This applies a gain and nothing
     else, so the result can exceed full scale; that is warned about rather than
@@ -537,13 +552,19 @@ def normalize_lufs(y: np.ndarray, sr: int, lufs: float = -23.0,
 
     >>> quiet = kudio.normalize_lufs(y, sr, lufs=-23.0)      # doctest: +SKIP
     """
+    sr = sample_rate(sr, 'normalize_lufs', FeatureError)
+    y = channels_last(y, 'normalize_lufs', FeatureError)
+    x, back = to_float(y, 'normalize_lufs', FeatureError)
     current = loudness(y, sr, block_size=block_size)
     if np.isnan(current):
         raise FeatureError("normalize_lufs() got a clip with samples that are "
                            "not finite; repair it first")
     if not np.isfinite(current):
-        return np.asarray(y)
-    x, back = to_float(y)
+        why = _why_not_scaled("clip", y, block_size)
+        if why:
+            warn(f"normalize_lufs(): {why}; it was not normalised and comes back "
+                 f"as it was")
+        return y
     out = x * float(10 ** ((lufs - current) / 20.0))
     peak = float(np.max(np.abs(out))) if out.size else 0.0
     if peak > 1.0:
@@ -565,7 +586,8 @@ def match_loudness(y: np.ndarray, reference: np.ndarray, sr: int,
     source tells you about the processing only once the level difference is
     out of the way, since the louder of two clips is reliably preferred
     regardless of quality. Returns *y* unchanged when either side is silent,
-    and integer audio in its own type, rounded and clipped.
+    and with a warning when either has no block above the -70 LUFS gate.
+    Integer audio comes back in its own type, rounded and clipped.
 
     :raises FeatureError: when either clip has NaN or inf in it, and so no
         loudness to match.
@@ -576,13 +598,26 @@ def match_loudness(y: np.ndarray, reference: np.ndarray, sr: int,
 
     >>> fair = kudio.match_loudness(enhanced, original, sr)  # doctest: +SKIP
     """
-    target = loudness(reference, reference_sr or sr, block_size=block_size)
+    sr = sample_rate(sr, 'match_loudness', FeatureError)
+    reference_sr = sr if reference_sr is None else \
+        sample_rate(reference_sr, 'match_loudness', FeatureError, 'reference_sr')
+    y = channels_last(y, 'match_loudness', FeatureError)
+    reference = channels_last(reference, 'match_loudness', FeatureError)
+    x, back = to_float(y, 'match_loudness', FeatureError)
+    target = loudness(reference, reference_sr, block_size=block_size)
     current = loudness(y, sr, block_size=block_size)
     if np.isnan(target) or np.isnan(current):
         side = "reference" if np.isnan(target) else "clip"
         raise FeatureError(f"match_loudness() got a {side} with samples that "
                            f"are not finite; repair it first")
     if not (np.isfinite(target) and np.isfinite(current)):
-        return np.asarray(y)
-    x, back = to_float(y)
+        why = [_why_not_scaled(what, clip, block_size)
+               for what, clip, level in (("reference", reference, target),
+                                         ("clip", y, current))
+               if not np.isfinite(level)]
+        said = [reason for reason in why if reason]
+        if said:
+            warn(f"match_loudness(): {'; '.join(said)}; the two were not matched "
+                 f"and the clip comes back as it was")
+        return y
     return back(x * float(10 ** ((target - current) / 20.0)))

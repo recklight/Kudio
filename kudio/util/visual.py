@@ -137,7 +137,7 @@ class Common:
         """Waveform + two mel spectrograms (full band vs. ``sub_mfe_fq``)."""
         f = Path(f)
         librosa = _librosa()
-        y, sr = librosa.load(str(f), sr=None, mono=True)
+        y, sr = file_load(f)
 
         plt.figure(figsize=(12, 10), dpi=200)
 

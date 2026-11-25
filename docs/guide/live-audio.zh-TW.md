@@ -324,8 +324,9 @@ sounddevice 時，陣列會交給它，它在背景播放並立刻回傳，所�
 陣列改走 PyAudio，它會阻塞到播完。不論走哪一邊，`(frames, channels)` 的陣列
 都會用同樣數量的聲道播放。兩個都沒裝時，`play_audio` 會引發 `DependencyError`。
 
-路徑用 soundfile 讀取，所以 `file_load` 打得開的都能播，包括 FLAC 和 FLOAT WAV，
-讀不了的檔案則回傳訊息。開啟中的 `wave.Wave_read` 會原樣交給 PyAudio；32 位元
+路徑的讀法和 `file_load` 一樣，所以它打得開的都能播：FLAC 和 FLOAT WAV，
+[有 ffmpeg 的話](audio-files.md#formats-soundfile-does-not-read)還有 m4a 和 webm。讀不了
+的檔案則回傳訊息，原因寫進記錄。開啟中的 `wave.Wave_read` 會原樣交給 PyAudio；32 位元
 整數的檔案在那裡會照 32 位元整數播放，雖然讓 PyAudio 自己判斷的話，它會把這個
 樣本寬度當成 float32。
 

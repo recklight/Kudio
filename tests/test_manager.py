@@ -2,6 +2,7 @@
 import logging
 
 import numpy as np
+import pytest
 
 import kudio
 from kudio import AudioDataManager, file_load
@@ -137,3 +138,61 @@ def test_play_volume_clips_integer_audio_rather_than_wrapping(monkeypatch):
     m.play_audio("take", volume=2.0)
     assert played["wav"].dtype == np.int16
     assert played["wav"].tolist() == [32767, -32768, 2000]
+
+
+# -- override replaces a clip with a clip ----------------------------------------
+@pytest.mark.parametrize("wave, said", [
+    (np.zeros(1600, dtype=np.float32), r"^add_new_file\(\): wave has to be a list holding one "
+                                       r"waveform, got an array of shape \(1600,\)"),
+    (np.zeros(1, dtype=np.float32), r"got an array of shape \(1,\)"),
+    ([], r"got list \[\]"),
+    ([np.zeros(8), np.zeros(8)], r"got list "),
+    (0.5, r"got float 0\.5"),
+])
+def test_a_refused_override_keeps_the_clip_that_was_there(sine, wave, said):
+    """A bare array is the likely slip, and the clip it was to replace may be
+    the only copy of a take that was just recorded."""
+    mgr = AudioDataManager()
+    mgr.add_new_file("take", wave=[sine], sr=16000, ch=1)
+    with pytest.raises(ValueError, match=said):
+        mgr.add_new_file("take", wave=wave, sr=8000, ch=1, override=True)
+    assert mgr.get_wave("take")[0] is not None and len(mgr.get_wave("take")[0]) == len(sine)
+    assert mgr.get_sample("take") == 16000
+    with pytest.raises(ValueError):
+        mgr.add_new_file("new", wave=wave, sr=8000, ch=1)
+    assert list(mgr.get_names()) == ["take"]
+
+
+def test_a_channel_count_of_zero_keeps_the_clip_too(sine):
+    mgr = AudioDataManager()
+    mgr.add_new_file("take", wave=[sine], sr=16000, ch=1)
+    with pytest.raises(ValueError, match="channels must be >= 1"):
+        mgr.add_new_file("take", wave=[sine], sr=16000, ch=0, override=True)
+    assert len(mgr.get_wave("take")[0]) == len(sine)
+
+
+def test_override_replaces_the_clip(sine):
+    mgr = AudioDataManager()
+    mgr.add_new_file("take", wave=[sine], sr=16000, ch=1)
+    mgr.add_new_file("take", wave=[sine[:100]], sr=8000, ch=1)          # without override
+    assert len(mgr.get_wave("take")[0]) == len(sine)
+    mgr.add_new_file("take", wave=[sine[:100]], sr=8000, ch=2, override=True)
+    assert [len(w) for w in mgr.get_wave("take")] == [50, 50]
+    assert mgr.get_sample("take") == 8000
+    mgr.add_new_file("row", wave=sine[None, :64], sr=16000, ch=1)       # a list of one, as (1, n)
+    assert [len(w) for w in mgr.get_wave("row")] == [64]
+
+
+# -- a file that cannot be read --------------------------------------------------------
+def test_a_file_that_cannot_be_read_leaves_no_clip(tmp_path):
+    """An empty clip under its name would turn the next call away as one that
+    is already there."""
+    bad = tmp_path / "take.wav"
+    bad.write_bytes(b"not a wave file")
+    mgr = AudioDataManager()
+    with pytest.raises(kudio.AudioIOError):
+        mgr.add_local_file(bad)
+    assert len(mgr) == 0
+    kudio.save_wave(bad, 0.1 * np.ones(1600), 16000)
+    mgr.add_local_file(bad)
+    assert len(mgr.get_wave("take")[0]) == 1600

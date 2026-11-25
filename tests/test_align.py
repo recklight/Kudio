@@ -227,7 +227,7 @@ def test_empty_audio_is_refused():
 
 def test_a_bad_rate_is_refused():
     clean = make_speech()
-    with pytest.raises(FeatureError, match="positive rate"):
+    with pytest.raises(FeatureError, match="positive sample rate"):
         kudio.find_delay(clean, clean, 0)
 
 

@@ -459,3 +459,40 @@ def test_file_to_spectrogram_takes_the_window(tmp_path):
     assert not np.array_equal(hann, kudio.file_to_spectrogram(path))
     stacked = kudio.logspec_from_files([path, path], False, 0, False, window="hann")
     np.testing.assert_array_equal(stacked, np.vstack([hann, hann]))
+
+
+# -- more coefficients than mel bands -----------------------------------------------
+@pytest.mark.parametrize("seconds", [0.768, 1.0])        # 25 frames, and 32
+def test_mfcc_refuses_more_coefficients_than_mel_bands(seconds):
+    """25 frames of 32 coefficients are 800 numbers, which reshape to 20 frames
+    of 40: the default n_mfcc beside n_mels=32."""
+    y = 0.1 * np.random.default_rng(0).standard_normal(int(seconds * 16000))
+    with pytest.raises(kudio.FeatureError, match=r"^mfcc\(\): n_mfcc=40 asks for more coefficients "
+                                                 r"than 32 mel bands have"):
+        kudio.mfcc(y, 16000, n_mels=32)
+    with pytest.raises(kudio.FeatureError, match="n_mfcc=129 .* than 128 mel bands"):
+        kudio.mfcc(y, 16000, n_mfcc=129)
+    for n_mfcc in (0, -3):
+        with pytest.raises(kudio.FeatureError, match="n_mfcc must be >= 1"):
+            kudio.mfcc(y, 16000, n_mfcc=n_mfcc)
+    frames = 1 + len(y) // 512
+    assert kudio.mfcc(y, 16000, n_mfcc=32, n_mels=32).shape == (1, frames, 32)
+    assert kudio.mfcc(y, 16000, n_mfcc=128).shape == (1, frames, 128)
+    assert kudio.mfcc(y, 16000).shape == (1, frames, 40)
+
+
+def test_mfcc_from_files_refuses_them_too(wav_file):
+    """It came back 128 wide, whatever was asked for."""
+    with pytest.raises(kudio.FeatureError, match=r"^mfcc_from_files\(\): n_mfcc=200"):
+        kudio.mfcc_from_files([wav_file], n_mfcc=200)
+    assert kudio.mfcc_from_files([wav_file, wav_file], n_mfcc=13).shape == (2, 32, 13)
+
+
+def test_an_unsigned_reference_gives_the_phase_of_the_audio():
+    """128 is an offset, and a big one in the first bins."""
+    t = np.arange(16000) / 16000
+    y = 0.4 * np.sin(2 * np.pi * 30 * t) + 0.1 * np.sin(2 * np.pi * 700 * t)
+    as_u8 = np.round(y * 128 + 128).astype(np.uint8)
+    spec = kudio.waveform_to_spectrogram(as_u8)
+    back = kudio.spectrogram_to_waveform(as_u8, spec)
+    assert np.max(np.abs(back - (as_u8 / 128.0 - 1.0))) < 1e-3

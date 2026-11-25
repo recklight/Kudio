@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
-import soundfile as sf
 
+from kudio._samples import channels_last
 from kudio.core.buffer import AudioBuffer
-from kudio.core.io import PathLike, check_file
+from kudio.core.io import PathLike, _read_native, _reason, check_file
 from kudio.exceptions import DependencyError, DeviceError
 from kudio.util.check import CheckDevice
 
@@ -83,8 +83,12 @@ def wave_decode(in_data: bytes, channels: int) -> np.ndarray:
 
 
 def wave_encode(signal: np.ndarray) -> bytes:
-    """Multi-channel array -> interleaved int16 bytes."""
-    return signal.flatten().astype(np.int16).tobytes()
+    """Array ``(frames, channels)`` -> interleaved int16 bytes.
+
+    :raises ValueError: for an array that is channels first, which would come
+        out with the channels one after the other.
+    """
+    return channels_last(signal, 'wave_encode').flatten().astype(np.int16).tobytes()
 
 
 def play_audio(wav: Union[str, Path, wave.Wave_read, np.ndarray],
@@ -93,7 +97,8 @@ def play_audio(wav: Union[str, Path, wave.Wave_read, np.ndarray],
 
     ndarray input must be int16 or float32; *rate* is required in that case,
     and a ``(frames, channels)`` array plays on as many channels. A path is
-    read with soundfile, so any format :func:`kudio.file_load` reads plays.
+    read the way :func:`kudio.file_load` reads one, so whatever that opens
+    plays, at its own rate and with all its channels.
     Returns an error message string when the audio cannot be played, else
     ``None``.
 
@@ -103,9 +108,9 @@ def play_audio(wav: Union[str, Path, wave.Wave_read, np.ndarray],
         if not Path(wav).is_file():
             return "input file can't be played"
         try:
-            data, file_rate = sf.read(str(wav), dtype='float32', always_2d=False)
+            data, file_rate = _read_native(wav)
         except Exception as e:                                # noqa: BLE001
-            log.error("play_audio: %s", e)
+            log.error("play_audio: %s: %s", wav, _reason(e, wav))
             return "input file can't be played"
         return play_audio(data, file_rate)
 

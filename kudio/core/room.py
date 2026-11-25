@@ -42,7 +42,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from kudio._samples import as_float
+from kudio._samples import one_channel
+from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
 __all__ = ['Reverberation', 'rir', 'apply_rir', 'rt60', 'schroeder_curve',
@@ -189,8 +190,7 @@ def rir(sr: int, rt60: float = 0.5, *, drr_db: float = 0.0,
     >>> round(room.t30, 2), round(room.drr, 1)               # doctest: +SKIP
     (0.6, 6.0)
     """
-    if sr <= 0:
-        raise FeatureError(f"rir() needs a positive rate, got {sr}")
+    sr = sample_rate(sr, 'rir', FeatureError)
     if rt60 <= 0:
         raise FeatureError(f"rt60 must be positive, got {rt60}")
 
@@ -240,8 +240,8 @@ def apply_rir(y: np.ndarray, ir: np.ndarray, *,
         with a loud direct path has a gain, and an augmentation pipeline that
         also changes the level is measuring two things at once.
     """
-    y = _mono("apply_rir()", y, "audio")
-    ir = _mono("apply_rir()", ir, "impulse response")
+    y = _mono("apply_rir", y, "audio")
+    ir = _mono("apply_rir", ir, "impulse response")
     if y.size == 0 or ir.size == 0:
         raise FeatureError("apply_rir() needs audio and an impulse response, "
                            f"got {y.size} and {ir.size} samples")
@@ -269,7 +269,7 @@ def schroeder_curve(ir: np.ndarray) -> np.ndarray:
     values from the end backwards (his eq. 6). It is what makes a single
     measurement readable.
     """
-    ir = _mono("schroeder_curve()", ir, "impulse response")
+    ir = _mono("schroeder_curve", ir, "impulse response")
     if ir.size == 0:
         raise FeatureError("schroeder_curve() needs an impulse response")
     energy = np.cumsum((ir ** 2)[::-1])[::-1]
@@ -287,11 +287,9 @@ def _mono(where: str, x, what: str) -> np.ndarray:
     out of apply_rir twice as long, and a two-column copy of a 0.6 s response
     would measure 1.2 s with a perfect fit.
     """
-    x = np.asarray(as_float(x), dtype=np.float64)
-    if x.ndim > 1 and x.shape[1] == 1:
-        x = x[:, 0]
+    x = np.asarray(one_channel(x, where, FeatureError), dtype=np.float64)
     if x.ndim != 1:
-        raise FeatureError(f"{where} takes mono {what}, got shape {x.shape}; "
+        raise FeatureError(f"{where}() takes mono {what}, got shape {x.shape}; "
                            f"pass one channel at a time")
     return x
 
@@ -366,9 +364,8 @@ def rt60(ir: np.ndarray, sr: int) -> Reverberation:
     >>> room.seconds, room.reliable()                        # doctest: +SKIP
     (0.6, True)
     """
-    if sr <= 0:
-        raise FeatureError(f"rt60() needs a positive rate, got {sr}")
-    ir = _mono("rt60()", ir, "impulse response")
+    sr = sample_rate(sr, 'rt60', FeatureError)
+    ir = _mono("rt60", ir, "impulse response")
     if ir.size < 2:
         raise FeatureError(f"rt60() needs an impulse response, got {ir.size} "
                            f"sample(s)")

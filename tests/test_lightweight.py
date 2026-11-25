@@ -98,6 +98,7 @@ LONG = ('siib', 'siib_gauss')
 #: naming librosa; ``wav`` is a 16 kHz file holding ``clip`` and ``dst`` a
 #: folder to write to. The two folder functions raise it as well rather than
 #: record it once for every file, since it would fail each of them the same way.
+#: Reading a file is not one of them, unless it has to be resampled.
 NEEDS_LIBROSA = {
     'melspectrogram': 'kudio.melspectrogram(clip, sr=sr)',
     'mfcc': 'kudio.mfcc(clip, sr)',
@@ -109,10 +110,21 @@ NEEDS_LIBROSA = {
     'time_stretch': 'kudio.time_stretch(clip, 1.1)',
     'STFT': 'kudio.STFT(sr=sr).analyse(clip)',
     'SpectrogramStream with mel bands': 'kudio.SpectrogramStream(sr, n_mels=40)',
-    'Synthesizer reading a file': 'kudio.core.synth._load(wav, None, "clean")',
+    'Synthesizer resampling a file': 'kudio.core.synth._load(wav, 8000, "clean")',
     'convert_folder at another rate': 'kudio.convert_folder(wav, dst, sr=8000)',
     'convert_folder trimming': 'kudio.convert_folder(wav, dst, trim_db=40)',
     'enhance_folder': 'kudio.enhance_folder(wav, dst)',
+}
+
+#: every way to read ``wav`` that resamples nothing, as an expression that has
+#: to give its 32000 samples
+READS = {
+    'file_load': 'kudio.file_load(wav)[0].size',
+    'file_load at its own rate': 'kudio.file_load(wav, sr=sr)[0].size',
+    'audio_info': 'kudio.audio_info(wav).frames',
+    'Synthesizer': 'kudio.core.synth._load(wav, None, "clean")[0].size',
+    'Synthesizer at its own rate': 'kudio.core.synth._load(wav, sr, "clean")[0].size',
+    'convert_folder at its own rate': '32000 * kudio.convert_folder(wav, dst, sr=sr).written',
 }
 
 #: the signals SCORES and NEEDS_LIBROSA are given, built from numpy alone
@@ -182,6 +194,8 @@ out["scores"] = {name: outcome(lambda: eval(expr, scope))
 out["score"] = outcome(lambda: {
     **kudio.score(ref, deg, sr, config["no_package"]),
     **kudio.score(scope["talk"], scope["heard"], sr, config["long"])}, each=True)
+out["reads"] = {name: outcome(lambda: eval(expr, scope))
+                for name, expr in config["reads"].items()}
 out["needs_librosa"] = {name: outcome(lambda: eval(expr, scope))
                         for name, expr in config["needs_librosa"].items()}
 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -210,7 +224,7 @@ def blocked(tmp_path_factory):
     """What the subprocess found, as a dict."""
     config = dict(blocked=BLOCKED, modules=MODULES, scores=SCORES,
                   no_package=[m for m in NO_PACKAGE if m not in LONG], long=LONG,
-                  needs_librosa=NEEDS_LIBROSA,
+                  needs_librosa=NEEDS_LIBROSA, reads=READS,
                   signals=_SIGNALS, folder=str(tmp_path_factory.mktemp("lightweight")))
     done = subprocess.run([sys.executable, "-c", _SCRIPT], input=json.dumps(config),
                           capture_output=True, text=True,
@@ -240,6 +254,11 @@ def test_score_runs_every_metric_that_needs_no_package(blocked, name):
     scores = _outcome(blocked, "score")
     assert isinstance(scores, dict), f"kudio.score raised {scores}"
     assert isinstance(scores[name], float), f"{name} scored {scores[name]}"
+
+
+@pytest.mark.parametrize("name", READS)
+def test_a_file_at_its_own_rate_is_read_without_librosa(blocked, name):
+    assert _outcome(blocked, "reads", name) == 32000
 
 
 @pytest.mark.parametrize("name", NEEDS_LIBROSA)

@@ -189,6 +189,13 @@ minimum   6.86 dB
 這段片段就掉到 12.87 dB。`noise_kwargs` 是傳給估計器的，
 它不接受的鍵會以 `FeatureError` 拒絕，訊息裡會列出它接受的鍵。
 
+`hop_length=` 沒有給時是 `n_fft` 的四分之一，對常用的窗來說，最長到 `n_fft` 的一半
+就好。每個輸出樣本都要除以那裡重疊的窗，所以在幾乎沒有重疊的地方，增益留在音框邊緣的
+東西會被放大：`hop_length=512`、完全不重疊時，峰值 0.404 的片段變成 18。重疊最薄的地方
+低於最厚處 9% 的位移會被拒絕，以 512 個樣本的 Hann 窗來說是 356 個樣本以上。片段最尾端
+可能只有最後一個音框蓋得到，落在它的窗 3% 以下的樣本會淡出：同樣的窗，位移是 `n_fft` 的
+四分之一或三分之一時一個都沒有，是一半時最多 69 個。
+
 要自己寫迴圈時，[`estimate_noise_psd`][kudio.enhance.spectral.estimate_noise_psd]
 可以在 `(frames, bins)` 的功率頻譜圖上執行任何估計器，
 [`make_noise_tracker`][kudio.enhance.spectral.make_noise_tracker] 則把 `quantile`

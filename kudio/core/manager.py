@@ -11,6 +11,7 @@ from typing import KeysView, List, Optional, Union, ValuesView
 import numpy as np
 
 from kudio._samples import to_float
+from kudio.core._policy import sample_rate
 from kudio.core.feature import wave_separate
 from kudio.core.io import PathLike, file_load, save_wave
 from kudio.core.stream import play_audio
@@ -39,8 +40,7 @@ class AudioDataManager:
     reset = reset_defaults
 
     def set_params(self, sr: int, ch: int) -> None:
-        if sr <= 0:
-            raise ValueError(f"sample rate must be > 0, got {sr}")
+        sr = sample_rate(sr, 'set_params')
         self.ch_ = ch if 0 < ch < 3 else 1
         self.rate_ = sr
         self.default_dict = {"dir": None, "wave": [], "sr": sr, "ch": self.ch_}
@@ -73,7 +73,7 @@ class AudioDataManager:
     def add_local_file(self, dir: PathLike, name: Optional[str] = None) -> None:
         """Load *dir* into the manager as a mono downmix (``ch`` 1), whatever
         :meth:`set_params` says, so :meth:`save_all` writes it back as mono.
-        Any format soundfile reads is fine."""
+        Any format :func:`kudio.file_load` opens is fine."""
         dir = Path(dir)
         if not dir.is_file():
             raise FileNotFoundError(f"File not found: {dir}")
@@ -81,17 +81,29 @@ class AudioDataManager:
         if name in self.get_names():
             log.warning("Manager: name %r already exists", name)
             return
-        self.audios_[name] = deepcopy(self.default_dict)
-        self.audios_[name]["dir"] = str(dir)
+        # read first: a file that cannot be read leaves no empty clip behind
+        # it, which the next call would take for one already loaded
         wave_, rate_ = file_load(dir, mono=True)
-        self.audios_[name]["wave"].append(wave_)
-        self.audios_[name]["sr"] = rate_
-        self.audios_[name]["ch"] = 1
+        item = deepcopy(self.default_dict)
+        item["dir"] = str(dir)
+        item["wave"].append(wave_)
+        item["sr"] = rate_
+        item["ch"] = 1
+        self.audios_[name] = item
 
     def add_new_file(self, name: Optional[str] = None, dir: Optional[PathLike] = None,
                      wave: Optional[List[np.ndarray]] = None,
                      sr: Optional[int] = None, ch: Optional[int] = None,
                      override: bool = False) -> None:
+        """Add a clip. *wave* is a list holding one waveform, the *ch* channels
+        of it interleaved; left out, the clip starts empty.
+
+        A name already taken keeps its clip unless *override* is set, and then
+        only a clip that can be built takes its place.
+
+        :raises ValueError: for a *wave* that is not a list of one waveform, a
+            bare array among them.
+        """
         if name is None:
             if dir is None:
                 log.warning("Manager: please provide a name or dir")
@@ -100,21 +112,25 @@ class AudioDataManager:
         if name in self.get_names() and not override:
             log.warning("Manager: name %r already exists", name)
             return
-        sr = self.rate_ if sr is None else sr
+        sr = self.rate_ if sr is None else sample_rate(sr, 'add_new_file')
         ch = self.ch_ if ch is None else ch
-        self.audios_[name] = deepcopy(self.default_dict)
+        item = deepcopy(self.default_dict)
         if dir is not None:
-            self.audios_[name]["dir"] = str(dir)
+            item["dir"] = str(dir)
         if wave is not None:
-            if len(wave) == 1 and ch > 0:
-                for channel_wave in wave_separate(wave[0], ch):
-                    self.audios_[name]["wave"].append(channel_wave)
-            else:
-                self.del_element(name)
-                log.warning("Manager: unexpected wave or channel count")
-                return
-        self.audios_[name]["sr"] = sr
-        self.audios_[name]["ch"] = ch
+            try:
+                waveform, = wave
+            except (TypeError, ValueError):      # not a sequence, or not of one
+                waveform = None
+            if np.ndim(waveform) == 0:           # one number is not a waveform
+                got = (f"an array of shape {wave.shape}" if isinstance(wave, np.ndarray)
+                       else f"{type(wave).__name__} {wave!r}"[:60])
+                raise ValueError(f"add_new_file(): wave has to be a list holding one "
+                                 f"waveform, got {got}; the manager is as it was")
+            item["wave"].extend(wave_separate(waveform, ch))
+        item["sr"] = sr
+        item["ch"] = ch
+        self.audios_[name] = item
 
     def add_name(self, name: str) -> None:
         self.audios_[name] = deepcopy(self.default_dict)
@@ -126,7 +142,7 @@ class AudioDataManager:
         self.audios_[name]["wave"].append(wave)
 
     def add_sr(self, name: str, sr: int) -> None:
-        self.audios_[name]["sr"] = sr
+        self.audios_[name]["sr"] = sample_rate(sr, 'add_sr')
 
     def add_ch(self, name: str, ch: int) -> None:
         self.audios_[name]["ch"] = ch

@@ -18,6 +18,8 @@ from typing import Sequence, Tuple, Union
 
 import numpy as np
 
+from kudio._samples import channels_last, refuse_64_bit, to_float
+from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
 __all__ = ['highpass', 'lowpass', 'bandpass', 'bandstop', 'band_filter']
@@ -69,10 +71,12 @@ def band_filter(y: np.ndarray, sr: int, cutoff: Union[float, Sequence[float]],
     if order < 1:
         raise FeatureError(f"order must be >= 1, got {order}")
 
+    sr = sample_rate(sr, btype, FeatureError)
     wn = _check_cutoff(cutoff, sr, btype)
-    y = np.asarray(y)
+    y = channels_last(y, btype, FeatureError)
     if y.ndim > 2:
         raise FeatureError(f"expected (frames,) or (frames, channels), got shape {y.shape}")
+    x, back = to_float(y, btype, FeatureError)
     if y.size == 0:
         return y.copy()
 
@@ -84,7 +88,7 @@ def band_filter(y: np.ndarray, sr: int, cutoff: Union[float, Sequence[float]],
     # channels-last array is the channel axis
     sos = butter(order, wn, btype=btype, fs=sr, output='sos')
     if not zero_phase:
-        return _back(sosfilt(sos, y, axis=0), y.dtype)
+        return back(sosfilt(sos, x, axis=0))
 
     # sosfiltfilt reflects the signal at both ends by 3 * n_sections * 2
     # samples; a clip shorter than that cannot be padded and scipy raises.
@@ -93,16 +97,7 @@ def band_filter(y: np.ndarray, sr: int, cutoff: Union[float, Sequence[float]],
     if padlen < 1:
         raise FeatureError(
             f"clip is too short to filter ({y.shape[0]} samples)")
-    return _back(sosfiltfilt(sos, y, axis=0, padlen=padlen), y.dtype)
-
-
-def _back(out: np.ndarray, dtype) -> np.ndarray:
-    """The filtered signal in the input's type, rounded and clipped for an
-    integer one rather than truncated and wrapped."""
-    if np.issubdtype(dtype, np.integer):
-        limits = np.iinfo(dtype)
-        return np.clip(np.round(out), limits.min, limits.max).astype(dtype)
-    return np.asarray(out, dtype=dtype)
+    return back(sosfiltfilt(sos, x, axis=0, padlen=padlen))
 
 
 def highpass(y: np.ndarray, sr: int, cutoff: float = 80.0, order: int = 4,
@@ -123,8 +118,10 @@ def lowpass(y: np.ndarray, sr: int, cutoff: float = 8000.0, order: int = 4,
     back unchanged (a copy). That is also what the 8 kHz default does to audio
     at 16 kHz and below.
     """
+    sr = sample_rate(sr, 'lowpass', FeatureError)
     if not isinstance(cutoff, (tuple, list)) and cutoff >= sr / 2.0:
-        return np.array(y, copy=True)
+        return channels_last(refuse_64_bit(y, 'lowpass', FeatureError),
+                             'lowpass', FeatureError).copy()
     return band_filter(y, sr, cutoff, 'lowpass', order, zero_phase)
 
 

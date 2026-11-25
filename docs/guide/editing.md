@@ -253,6 +253,9 @@ it.
 
 Empty parts are skipped, so a cut at the very start or end leaves no seam with
 nothing on one side, and a crossfade longer than a part shrinks to fit it.
+Parts of different types are read each on its own scale and the result is of
+the first one's, so an int16 take from a recorder and a float clip from a file
+keep the levels they were recorded at.
 
 ### Linear or equal-power
 
@@ -281,7 +284,9 @@ ends and returns the clip with the sample range it kept.
 silent gap and returns the pieces, without their positions.
 
 Both decide on level alone. A frame counts as silent when its RMS is `top_db`
-(30 by default) or more below the loudest frame's. Frames are `frame_length=2048`
+(30 by default) or more below the loudest frame's. `top_db` has to be a finite
+number above 0, since at 0 the loudest frame would be silent too and nothing
+would be left. Frames are `frame_length=2048`
 samples with a hop of `hop_length=512`, counted in samples rather than seconds:
 128 ms and 32 ms at 16 kHz. The boundaries land on the hop grid and lean
 outwards, so a trimmed clip keeps a little of the silence on each side:
@@ -348,7 +353,10 @@ as 32159.999…, which `int` makes 32159, one sample short.
 
 A track exported from Audacity reads back the same way. A label with a
 frequency range gets a second row from Audacity, starting with a backslash;
-`load_labels` skips it, since a `Label` holds times only.
+`load_labels` skips it, since a `Label` holds times only. A row that is not a
+label, after a slip of the hand in an editor, is a `ValueError` that says which
+line it is, or in JSON which row of the list. So is a time that is not finite,
+and an end before its start, which `save_labels` does not write either.
 
 ## Level
 

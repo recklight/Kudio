@@ -25,6 +25,10 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from kudio import _optional
+from kudio._numbers import whole
+from kudio.core._framing import overlapped
+from kudio.core._policy import sample_rate
+from kudio.exceptions import FeatureError
 
 __all__ = ['STFT']
 
@@ -37,6 +41,8 @@ class STFT:
         geometry can be checked against the audio it is applied to; the
         transforms themselves do not resample.
     :param win_length: defaults to *n_fft*.
+    :raises ValueError: for an *sr* that is not a positive rate, and for a
+        size that is not a whole number of 1 or more.
     """
 
     sr: int = 16000
@@ -46,13 +52,18 @@ class STFT:
     window: str = 'hamming'
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, 'sr', sample_rate(self.sr, 'STFT'))
         if self.win_length is None:
             object.__setattr__(self, 'win_length', self.n_fft)
+        for name in ('n_fft', 'hop_length', 'win_length'):
+            size = whole(getattr(self, name))
+            if size is None or size < 1:
+                raise ValueError(f"STFT(): {name} must be >= 1, a whole number of "
+                                 f"samples, got {getattr(self, name)!r}")
+            object.__setattr__(self, name, size)
         if self.win_length > self.n_fft:
             raise ValueError(f"win_length ({self.win_length}) cannot exceed "
                              f"n_fft ({self.n_fft})")
-        if self.hop_length < 1:
-            raise ValueError(f"hop_length must be >= 1, got {self.hop_length}")
 
     # --------------------------------------------------------------- shape
 
@@ -105,7 +116,7 @@ class STFT:
         """
         from kudio.core.feature import _mono
         librosa = _optional.librosa()
-        spec = librosa.stft(np.asarray(_mono(y, "STFT.analyse()"), dtype=np.float32),
+        spec = librosa.stft(np.asarray(_mono(y, "STFT.analyse"), dtype=np.float32),
                             n_fft=self.n_fft, hop_length=self.hop_length,
                             win_length=self.win_length, window=self.window)
         return spec.T                              # (frames, bins), as kudio speaks
@@ -117,12 +128,42 @@ class STFT:
         *length* trims (or pads) to an exact sample count. Pass the input
         length and the round trip is sample-aligned, which is what an A/B or a
         training target needs.
+
+        :raises FeatureError: for anything but a complex ``(frames, bins)`` of
+            at least one frame, and for a geometry whose hop steps over samples
+            no window covers.
         """
+        spec = np.asarray(spec)
+        if spec.ndim != 2 or spec.shape[1] != self.n_bins or not len(spec):
+            raise FeatureError(f"STFT.synthesise() takes (frames, {self.n_bins}), the "
+                               f"layout analyse() gives, and got shape {spec.shape}")
+        if not np.iscomplexobj(spec):
+            raise FeatureError(f"STFT.synthesise() takes the complex spectrum analyse() "
+                               f"gives, and got {spec.dtype}: a magnitude has no phase "
+                               f"to rebuild a waveform from")
+        if not np.all(self._overlap() > 1e-10):     # scipy.signal.check_NOLA's bound
+            raise FeatureError(f"STFT.synthesise(): with hop_length={self.hop_length} some "
+                               f"samples are under no part of a {self.win_length}-sample "
+                               f"{self.window!r} window, so nothing is left to rebuild "
+                               f"them from")
         librosa = _optional.librosa()
-        out = librosa.istft(np.asarray(spec).T, hop_length=self.hop_length,
+        out = librosa.istft(spec.T, hop_length=self.hop_length,
                             win_length=self.win_length, window=self.window,
                             n_fft=self.n_fft, length=length)
         return np.asarray(out, dtype=np.float32)
+
+    def _window_energy(self) -> np.ndarray:
+        """The window squared, centred in the frame as librosa centres it."""
+        energy = np.zeros(self.n_fft)
+        start = (self.n_fft - self.win_length) // 2
+        energy[start:start + self.win_length] = _optional.librosa().filters.get_window(
+            self.window, self.win_length, fftbins=True) ** 2
+        return energy
+
+    def _overlap(self) -> np.ndarray:
+        """The window energy over a sample in the middle of a clip, which the
+        inverse divides by."""
+        return overlapped(self._window_energy(), self.hop_length)
 
     # ------------------------------------------------------------ storage
 
@@ -153,4 +194,4 @@ class STFT:
 
     def matches(self, sr: int) -> bool:
         """Is *sr* the rate this geometry was configured for?"""
-        return int(sr) == int(self.sr)
+        return sample_rate(sr, 'STFT.matches') == self.sr

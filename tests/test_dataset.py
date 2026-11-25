@@ -345,3 +345,185 @@ def test_audacity_frequency_rows_are_skipped(tmp_path):
     labels = kudio.load_labels(path)
     assert [(lab.start, lab.end, lab.text) for lab in labels] == [
         (0.5, 1.5, "speech"), (2.0, 2.5, "click")]
+
+
+# -- a write that is refused leaves the file that was there ---------------------
+def test_a_manifest_takes_numpy_numbers_and_paths(tmp_path):
+    """An SNR out of np.arange and a path out of glob are what a caller has."""
+    from pathlib import Path, PureWindowsPath
+
+    import numpy as np
+    plain = [kudio.Pair(noisy="mix/a.wav", clean="clean/a.wav", noise="n/fan.wav",
+                        snr_db=snr, rt60=0.5) for snr in (5, 2.5, -5, 0)]
+    numpys = [kudio.Pair(noisy=Path("mix") / "a.wav", clean=PureWindowsPath("clean", "a.wav"),
+                         noise=PureWindowsPath("n", "fan.wav"), snr_db=snr,
+                         rt60=np.float32(0.5))
+              for snr in (np.int64(5), np.float32(2.5), np.array(-5), np.int8(0))]
+    assert (kudio.save_manifest(tmp_path / "n.json", numpys).read_bytes()
+            == kudio.save_manifest(tmp_path / "p.json", plain).read_bytes())
+    assert kudio.load_manifest(tmp_path / "n.json") == plain
+
+
+@pytest.mark.parametrize("bad, said", [
+    (kudio.Pair("a.wav", "b.wav", snr_db={1, 2}), r"^save_manifest\(\): row 2 holds "
+                                                  r"\{1, 2\}, .* a set$"),
+    (kudio.Pair("a.wav", "b.wav", snr_db=2 + 1j), r"^save_manifest\(\): row 2 .* complex$"),
+    (kudio.Pair("bad\ud800.wav", "b.wav"), "surrogates not allowed"),
+])
+def test_a_manifest_that_cannot_be_written_leaves_the_one_there(tmp_path, bad, said):
+    """A file opened for writing is empty before the first row goes in."""
+    path = kudio.save_manifest(tmp_path / "m.json", _pairs())
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match=said):
+        kudio.save_manifest(path, _pairs(1) + [bad])
+    assert path.read_bytes() == before
+    with pytest.raises(ValueError):
+        kudio.save_manifest(tmp_path / "new" / "m.json", [bad])
+    assert not (tmp_path / "new").exists()
+
+
+@pytest.mark.parametrize("name", ["a.json", "a.txt"])
+def test_labels_take_numpy_times(tmp_path, name):
+    """np.float32(0.1) is 0.10000000149011612, and it is the same boundary."""
+    import numpy as np
+    plain = [kudio.Label(0.1, 0.7, "a"), kudio.Label(2, 3.5, "b"), kudio.Label(1.0, 1.25, "c")]
+    numpys = [kudio.Label(np.float32(0.1), np.float32(0.7), "a"),
+              kudio.Label(np.int64(2), np.array(3.5), np.str_("b")),
+              kudio.Label(np.float64(1.0), np.float16(1.25), "c")]
+    (tmp_path / "p").mkdir()
+    assert (kudio.save_labels(tmp_path / name, numpys).read_bytes()
+            == kudio.save_labels(tmp_path / "p" / name, plain).read_bytes())
+
+
+@pytest.mark.parametrize("name", ["a.json", "a.txt"])
+@pytest.mark.parametrize("bad, said", [
+    (kudio.Label(None, 1.0), r"^save_labels\(\): label 2: start has to be a number of "
+                             r"seconds, got None$"),
+    (kudio.Label(0.5, "1.0"), r"label 2: end .* got '1\.0'$"),
+    (kudio.Label(True, 2.0), r"label 2: start .* got True$"),
+    (kudio.Label(0.5, 1.0, "bad \ud800"), "surrogates not allowed"),
+])
+def test_labels_that_cannot_be_written_leave_the_file_there(tmp_path, name, bad, said):
+    path = kudio.save_labels(tmp_path / name, _labels())
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match=said):
+        kudio.save_labels(path, _labels()[:1] + [bad])
+    assert path.read_bytes() == before
+
+
+def test_a_label_text_that_is_not_text_is_refused_where_it_has_to_be(tmp_path):
+    """JSON has a null for it; three columns of text do not."""
+    path = kudio.save_labels(tmp_path / "a.txt", _labels())
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match=r"the text of label 1 has to be a string, got None$"):
+        kudio.save_labels(path, [kudio.Label(0.0, 1.0, None)])
+    assert path.read_bytes() == before
+    kudio.save_labels(tmp_path / "a.json", [kudio.Label(0.0, 1.0, None)])
+    assert kudio.load_labels(tmp_path / "a.json")[0].text is None
+
+
+@pytest.mark.parametrize("text", ["one\rtwo", "one\r\ntwo", "one\ntwo"])
+def test_a_line_break_inside_a_label_does_not_break_the_row(tmp_path, text):
+    """A carriage return ends a line when the file is read back."""
+    path = kudio.save_labels(tmp_path / "a.txt", [kudio.Label(0.0, 1.0, text)])
+    assert kudio.load_labels(path) == [kudio.Label(0.0, 1.0, "one two")]
+
+
+# -- a byte-order mark, and rows that are not rows --------------------------------
+def test_a_byte_order_mark_changes_nothing(tmp_path):
+    """Notepad's "UTF-8 with BOM", after a hand edit."""
+    import codecs
+
+    def marked(path):
+        path.write_bytes(codecs.BOM_UTF8 + path.read_bytes())
+        return path
+
+    for name in ("a.json", "a.txt"):
+        path = kudio.save_labels(tmp_path / name, _labels())
+        assert kudio.load_labels(marked(path)) == _labels()
+    path = kudio.save_manifest(tmp_path / "m.json", _pairs())
+    assert kudio.load_manifest(marked(path)) == _pairs()
+
+
+@pytest.mark.parametrize("row, said", [
+    ({"end": 2.0, "text": "x"}, r"row 2 has no start; every row needs both 'start' and 'end'$"),
+    ({"text": "x"}, r"row 2 has no start or end; "),
+    ([0.5, 1.0, "x"], r"row 2 is not an object: \[0\.5, 1\.0, 'x'\]$"),
+    ("0.5 1.0", r"row 2 is not an object: "),
+    (None, r"row 2 is not an object: None$"),
+    ({"start": "0.5", "end": 1.0}, r"row 2: start has to be a number of seconds, got '0\.5'$"),
+    ({"start": 0.5, "end": None}, r"row 2: end has to be a number of seconds, got None$"),
+    ({"start": False, "end": 1.0}, r"row 2: start has to be a number of seconds, got False$"),
+])
+def test_a_malformed_json_row_is_named(tmp_path, row, said):
+    path = tmp_path / "a.json"
+    path.write_text(json.dumps([{"start": 0.5, "end": 1.0, "text": "fine"}, row]),
+                    encoding="utf-8")
+    with pytest.raises(ValueError, match=said):
+        kudio.load_labels(path)
+
+
+def test_a_json_row_of_whole_seconds_is_fine(tmp_path):
+    path = tmp_path / "a.json"
+    path.write_text('[{"start": 1, "end": 2}]', encoding="utf-8")
+    assert kudio.load_labels(path) == [kudio.Label(1, 2, "")]
+
+
+# -- times that are none, and which file it was -------------------------------------
+NOT_TIMES = [
+    (float("nan"), 1.0, "start has to be a finite number of seconds, got nan"),
+    (0.0, float("inf"), "end has to be a finite number of seconds, got inf"),
+    (float("-inf"), 1.0, "start has to be a finite number of seconds, got -inf"),
+    (2.0, 1.5, "ends at 1.5 s, before it starts at 2 s"),
+]
+
+
+@pytest.mark.parametrize("start, end, said", NOT_TIMES)
+@pytest.mark.parametrize("name", ["a.json", "a.txt"])
+def test_a_label_that_cannot_be_is_not_written(tmp_path, name, start, end, said):
+    path = kudio.save_labels(tmp_path / name, _labels())
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match=rf"^save_labels\(\): label 2:? {said}$"):
+        kudio.save_labels(path, _labels()[:1] + [kudio.Label(start, end)])
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("start, end, said", NOT_TIMES)
+def test_a_label_that_cannot_be_is_not_read(tmp_path, start, end, said):
+    """float() reads nan and inf, and so does Python's json."""
+    text, js = tmp_path / "a.txt", tmp_path / "a.json"
+    text.write_text(f"0.0\t1.0\tfine\n{start}\t{end}\tbad\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=rf"a\.txt line 2:? {said}$"):
+        kudio.load_labels(text)
+    js.write_text(json.dumps([{"start": 0.0, "end": 1.0}, {"start": start, "end": end}]),
+                  encoding="utf-8")
+    with pytest.raises(ValueError, match=rf"a\.json: row 2:? {said}$"):
+        kudio.load_labels(js)
+
+
+def test_a_point_is_a_label(tmp_path):
+    for name in ("a.json", "a.txt"):
+        path = kudio.save_labels(tmp_path / name, [kudio.Label(2.0, 2.0, "click")])
+        assert kudio.load_labels(path) == [kudio.Label(2.0, 2.0, "click")]
+
+
+@pytest.mark.parametrize("load, name, what", [
+    (kudio.load_labels, "a.json", "label file"), (kudio.load_manifest, "m.json", "manifest")])
+def test_a_file_that_is_not_json_is_named(tmp_path, load, name, what):
+    path = tmp_path / name
+    path.write_text('[{"start": 1.0,}]', encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError, match=r": line 1 column \d+") as refused:
+        load(path)
+    assert str(refused.value).startswith(f"{what} {path} is not JSON: ")
+    path.write_bytes(b"\xff\xfe\x00[")
+    with pytest.raises(ValueError) as refused:
+        load(path)
+    assert str(refused.value).startswith(f"{what} {path} is not UTF-8 text: ")
+
+
+def test_a_text_track_that_is_not_utf_8_is_named(tmp_path):
+    path = tmp_path / "a.txt"
+    path.write_bytes("0.0\t1.0\t語音\n".encode("cp950"))
+    with pytest.raises(ValueError) as refused:
+        kudio.load_labels(path)
+    assert str(refused.value).startswith(f"label file {path} is not UTF-8 text: ")

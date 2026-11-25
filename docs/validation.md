@@ -1112,8 +1112,9 @@ onnxruntime, PyAudio and sounddevice, which makes importing any of them fail
 the way a missing package does, before it imports kudio. In that process
 every metric module has to import, every metric that needs no optional
 package has to give a finite number with every warning raised as an error,
-`score` has to run every name that needs no package, every feature built on
-librosa has to raise `DependencyError` naming it, `kudio report` has to run,
+`score` has to run every name that needs no package, a file has to be read at
+its own rate, every feature built on librosa, resampling among them, has to
+raise `DependencyError` naming it, `kudio report` has to run,
 and librosa must still be unloaded at the end. The test then computes some of
 the metrics again in its own process, librosa loaded, and they have to be the
 same numbers. `tests/test_package.py` checks that `import kudio` loads none

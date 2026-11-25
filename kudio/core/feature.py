@@ -32,9 +32,10 @@ import numpy as np
 from kudio import _optional
 from kudio._deprecation import alias
 from kudio._progress import tqdm
-from kudio._samples import as_float
-from kudio.core.io import PathLike, file_load, save_wave
-from kudio.exceptions import FeatureError
+from kudio._samples import as_float, channels_last, one_channel, refuse_64_bit
+from kudio.core._policy import sample_rate
+from kudio.core.io import PathLike, _read_mono, _reason, file_load, save_wave
+from kudio.exceptions import AudioIOError, FeatureError
 
 __all__ = [
     # canonical
@@ -65,17 +66,24 @@ def _mono(y, where: str) -> np.ndarray:
     FeatureError. librosa reads the last axis as time, so a (frames, channels)
     array would be analysed as thousands of two-sample signals and come back
     the wrong shape without an error."""
-    y = as_float(y)
+    return _one_axis(one_channel(y, where, FeatureError), where)
+
+
+def _one_axis(y: np.ndarray, where: str) -> np.ndarray:
     if y.ndim != 1:
-        raise FeatureError(f"{where} takes a mono waveform (n,), got shape {y.shape}; "
+        raise FeatureError(f"{where}() takes a mono waveform (n,), got shape {y.shape}; "
                            f"pick a channel or mix down first")
     return y
 
 
 def wave_separate(wave: np.ndarray, channels: int) -> list:
-    """Split an interleaved multi-channel waveform into per-channel arrays."""
+    """Split an interleaved multi-channel waveform into per-channel arrays,
+    each a view of *wave*. A row ``(1, n)`` is the waveform it holds, and an
+    array that is channels first is refused."""
     if channels < 1:
         raise FeatureError(f"channels must be >= 1, got {channels}")
+    if np.ndim(wave) == 2:
+        wave = channels_last(wave, 'wave_separate', FeatureError)
     return [wave[c::channels] for c in range(channels)]
 
 
@@ -104,7 +112,7 @@ def waveform_to_spectrogram(y: np.ndarray,
         ``(frames, channels)`` array would be read as one short frame per
         sample, so pick a channel or mix down first.
     """
-    y = _mono(y, "waveform_to_spectrogram()")
+    y = _mono(y, "waveform_to_spectrogram")
     if desired_length and desired_length < len(y):
         y = y[:desired_length]
     librosa = _optional.librosa()
@@ -149,6 +157,14 @@ def spectrogram_to_waveform(y: np.ndarray, enhanced_spec: np.ndarray,
     """
     if sequence:
         enhanced_spec = enhanced_spec.squeeze()
+    y = channels_last(refuse_64_bit(y, "spectrogram_to_waveform", FeatureError),
+                      "spectrogram_to_waveform", FeatureError)
+    y = _one_axis(y[:, 0] if y.ndim == 2 and y.shape[1] == 1 else y,
+                  "spectrogram_to_waveform")
+    if np.issubdtype(y.dtype, np.unsignedinteger):
+        # only the phase is taken from *y*, which no scale changes; the
+        # midpoint unsigned audio sits on is an offset, which does
+        y = as_float(y)
     librosa = _optional.librosa()
     D = librosa.stft(np.asarray(y, dtype=np.float32), hop_length=hop_length,
                      n_fft=n_fft, win_length=win_length, window=window)
@@ -197,7 +213,11 @@ def save_spectrogram_as_wave(wave_out_dir: PathLike, noisy_file: PathLike,
                              window: str = 'hamming') -> None:
     """Reconstruct a waveform from *enhanced_spec* (phase from *noisy_file*)
     and write it to *wave_out_dir* as 16-bit PCM, clipped at full scale."""
-    y, rate = _optional.librosa().load(str(noisy_file), sr=None)
+    try:
+        y, rate = _read_mono(noisy_file)
+    except Exception as e:
+        raise AudioIOError(f"Could not load audio file: {noisy_file} "
+                           f"({_reason(e, noisy_file)})") from e
     y_out = spectrogram_to_waveform(y, enhanced_spec, squeeze, hop_length,
                                     n_fft, win_length, window)
     save_wave(wave_out_dir, y_out, rate)
@@ -213,13 +233,29 @@ def mfcc(y: np.ndarray, sr: int, n_mfcc: int = 40, *,
     Nyquist in librosa 0.11 and 1.0). At 192 kHz those defaults leave 3 of the
     128 bands without a single FFT bin, which librosa warns about; an *n_fft*
     of 8192, or 64 bands, leaves none empty.
+
+    :raises FeatureError: for an *n_mfcc* above the number of mel bands, which
+        is all the coefficients a DCT of them has.
     """
-    y = _mono(y, "mfcc()")
-    librosa = _optional.librosa()
+    sr = sample_rate(sr, "mfcc", FeatureError)
+    y = _mono(y, "mfcc")
     given = {name: value for name, value in (("n_fft", n_fft), ("hop_length", hop_length),
                                              ("n_mels", n_mels), ("fmax", fmax))
              if value is not None}
-    return librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc, **given).T.reshape(1, -1, n_mfcc)
+    return _mfcc(y, sr, n_mfcc, "mfcc", **given)[np.newaxis]
+
+
+def _mfcc(y: np.ndarray, sr: int, n_mfcc: int, name: str, **given) -> np.ndarray:
+    """``(frames, n_mfcc)``. librosa gives as many rows as there are mel bands
+    where *n_mfcc* asks for more, so the rows are counted rather than taken to
+    be *n_mfcc*: 25 frames of 32 coefficients are 20 of 40 to reshape."""
+    if n_mfcc < 1:
+        raise FeatureError(f"{name}(): n_mfcc must be >= 1, got {n_mfcc}")
+    coefficients = _optional.librosa().feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc, **given)
+    if len(coefficients) != n_mfcc:
+        raise FeatureError(f"{name}(): n_mfcc={n_mfcc} asks for more coefficients than "
+                           f"{len(coefficients)} mel bands have; raise n_mels or lower n_mfcc")
+    return coefficients.T
 
 
 def mfcc_from_files(wav_list: Sequence, n_mfcc: int = 40,
@@ -231,7 +267,6 @@ def mfcc_from_files(wav_list: Sequence, n_mfcc: int = 40,
     :param desired_length: cut each file to this many **seconds** (the
         spectrogram functions' ``desired_length`` counts samples).
     """
-    librosa = _optional.librosa()
     mfcc_list = []
     for wav_dir in tqdm(wav_list, desc="[kudio] MFCC"):
         y, sr = file_load(wav_dir)
@@ -239,8 +274,7 @@ def mfcc_from_files(wav_list: Sequence, n_mfcc: int = 40,
             y = y[:int(round(sr * desired_length))]
         if desired_samples and desired_samples < len(y):
             y = y[:desired_samples]
-        m = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc).T
-        mfcc_list.append(m.reshape(1, m.shape[0], -1))
+        mfcc_list.append(_mfcc(y, sr, n_mfcc, "mfcc_from_files")[np.newaxis])
     return np.vstack(mfcc_list)
 
 
@@ -288,7 +322,8 @@ def melspectrogram(source: Union[PathLike, np.ndarray], n_mels: int = 64,
     else:
         if sr is None:
             raise FeatureError("melspectrogram() needs sr= when given a waveform")
-        y = np.asarray(_mono(source, "melspectrogram()"), dtype=np.float32)
+        sr = sample_rate(sr, "melspectrogram", FeatureError)
+        y = np.asarray(_mono(source, "melspectrogram"), dtype=np.float32)
     librosa = _optional.librosa()
     mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft,
                                          hop_length=hop_length, n_mels=n_mels,
@@ -312,7 +347,7 @@ def denoise_wav2spec(waveform: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
     :raises FeatureError: for a silent clip, which has no peak to normalise by.
     """
-    waveform = _mono(waveform, "denoise_wav2spec()")
+    waveform = _mono(waveform, "denoise_wav2spec")
     peak = float(np.max(np.abs(waveform))) if waveform.size else 0.0
     if not peak > 0:
         raise FeatureError("denoise_wav2spec() got a silent clip; there is no "
@@ -567,6 +602,7 @@ class Standardizer:
 def wave_slicing(y: np.ndarray, frame_length: int = 2048,
                  hop_length: int = 512, is_reshape: bool = True) -> np.ndarray:
     """Slice a waveform into overlapping frames (flattened if *is_reshape*)."""
+    y = channels_last(y, "wave_slicing", FeatureError)
     frame_stack = _optional.librosa().util.frame(y, frame_length=frame_length,
                                      hop_length=hop_length)
     if is_reshape:

@@ -4,6 +4,223 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.0] - 2026-11-25
+
+### Changed
+
+- `FeatureError` is a `ValueError` as well as a `KudioError`. `vad` refuses a
+  bad rate with a `FeatureError` and `lsd` with a plain `ValueError`, and one
+  `except ValueError` catches both. `except FeatureError` and
+  `except KudioError` catch what they did.
+- A sample rate is one positive number wherever a function takes one, and a
+  file's is a whole number. 16000.0, `np.int32(16000)` and a 0-d array are the
+  int they equal; `True`, text, NaN, inf, 0 and negative numbers are refused
+  with a `ValueError` that names the function or the argument. An array can be
+  at 22254.5 Hz, so `resample` and whatever takes a rate beside an array take
+  that too. `save_wave` raised `AudioIOError` for a bad `sr`, and so did
+  `file_load` for NaN and inf, as if the file were bad, and `TypeError` for
+  text. `convert_folder` and `enhance_folder` made *dst* and went through the
+  files one by one; they stop before the first.
+- A 2-D array is `(frames, channels)`. With two rows or more and more columns
+  than rows it is channels first, and a `ValueError` says to transpose it:
+  `remove_dc` gave half the difference of the channels, `reverse` swapped them,
+  `trim_silence` and `resample` cut across them, and `audio_info` counted 16000
+  channels. `(1, n)` is one channel everywhere, where `remove_dc` gave zeros,
+  `speech_ratio` 1.0 and `save_wave` a file of n channels, and so is `(n, 1)`
+  in a function that takes one channel, some of which refused it. A file says
+  how many channels it has, and `convert_folder` and the command line keep them
+  however few frames it holds.
+- 64-bit integers are refused by whatever measures, changes or writes samples,
+  as the metrics refuse them. A list of ints or `astype(int)` gives them, and
+  16-bit samples among them came back as zeros from `mu_law`, as -inf from
+  `loudness` and as no speech from `vad`, and `save_wave` wrote a silent file.
+- `save_wave` refuses an array that is neither `(frames,)` nor `(frames,
+  channels)` with 1 to 1024 channels with a `ValueError`; it was an
+  `AudioIOError`.
+- `save_wave` writes beside the file and replaces it with `os.replace` when the
+  new one is whole. Windows does not replace a file that another program has
+  open; after 0.3 s of trying, the finished one is copied over it if it opens
+  for writing, and is an `AudioIOError` if it does not. Only then can a disk
+  error damage the file. A link stays one, the permissions of the file
+  are kept, and a file that may not be written is not replaced. MPC2K, SD2 and
+  SVX, which libsndfile writes the file's name into or as two files, are written
+  in place.
+- Reading does not go through `librosa.load`. A file at the rate asked for,
+  and `Synthesizer` without resampling, need no librosa. Of 8883 calls on 249
+  files soundfile reads, each gives the same bits as with librosa 0.11. With
+  librosa 1.0 ten differ, in the sign of a zero: its mono mix turned -0.0 into
+  0.0, which the samples keep.
+- A file soundfile recognises and cannot read is not handed to ffmpeg. With
+  librosa 0.11, `file_load(sr=...)` and `Synthesizer` tried audioread after
+  any error of soundfile's, and a FLAC file cut to half came back as 8192 of
+  its 17647 frames without a word. It is an `AudioIOError` with soundfile's
+  reason, as it is with `sr=None`. What ffmpeg does read is a format soundfile
+  does not recognise, or an encoding it does not support, like ALAC in a CAF
+  file.
+- `crossfade` and `splice` give a result of the first part's type and read each
+  part on its own scale. A float clip after an int16 one came out as zeros, and
+  an int16 one after float 32768 times too loud.
+- `trim_silence` and `split_on_silence` refuse a `top_db` that is not a finite
+  number above 0. At 0, below it and at NaN the loudest frame is silence too,
+  and they returned an empty array and an empty list.
+- `vad_trim` and `vad_split` return copies, as `trim_silence` and
+  `split_on_silence` do. Writing into a cut wrote into the clip it came from.
+- `normalize_lufs` and `match_loudness` warn when a clip that is not silent
+  measures -inf, which is any clip with no block above the -70 LUFS gate, and
+  hand it back as it was. `kudio normalize` of such a file is an error, as it
+  is for digital silence: it wrote the file unchanged and said "normalised to
+  -23.0 LUFS". `kudio loudness` gives its peak where it said "the file is
+  digital silence".
+- `kudio trim` and `kudio convert` exit 2 when nothing is left to write, as
+  `convert_folder` counts it a failure. `kudio trim take.wav take.wav --top-db
+  0` put an empty file over the recording and exited 0, and a file with no
+  samples was written out again.
+- `mfcc` and `mfcc_from_files` refuse an `n_mfcc` above the number of mel bands.
+  `mfcc(y, sr, n_mels=32)` with the default 40 reshaped 25 frames of 32 into 20
+  of 40, and any number of frames not a multiple of 5 was a reshape error.
+- `spectral_enhance` and `StreamEnhancer` refuse a `hop_length` at which the
+  overlapping windows fall under 9% of their peak: 18.1 came out of 0.404 at
+  512. `STFT.synthesise` refuses one that leaves samples under no window, and
+  anything but a complex `(frames, bins)`: a librosa-shaped spectrum came out
+  as a burst of noise and a magnitude as a waveform with every phase zero.
+- `STFT` refuses an `n_fft`, `hop_length` or `win_length` that is not a whole
+  number of 1 or more and keeps numpy's as Python ints. `matches(16000.9)` cut
+  its argument to 16000 and was True for it.
+- `channel_spec`, `dropouts`, `mu_law`, `a_law` and `bit_depth` refuse bits that
+  are not a whole number from 2 to 64, and a loss, `burst` or `packet_ms` that
+  is not one finite number. 8.9 bits were 8, 8.5 were 361 levels, a `burst` of
+  NaN lost packets one at a time and a loss of `True` lost them all.
+- `Synthesizer` takes `rt60` and `drr_db` that are finite, and `rt60` that is
+  not `True`, and raises `ValueError` when it is built with anything else.
+  `background_snr` of `syn_extra_mode` has to be finite as well.
+- `load_labels` names the row of a JSON label file that is not an object, has
+  no `start` or `end`, or has one that is not a number, with a `ValueError`.
+  The first two were an `AttributeError` and a `TypeError` about `__init__`; a
+  time held as text or null was read as it stood. A time that is not finite
+  and an end before its start are refused by it and by `save_labels`, and by
+  `load_rttm` with a negative duration. What is not JSON or not UTF-8 is named
+  with its file, in `load_manifest` too.
+- `AudioDataManager.add_new_file` raises `ValueError` for a `wave` that is not
+  a list of one waveform, where it logged a warning behind kudio's
+  `NullHandler` and returned.
+
+### Added
+
+- m4a, mp4, aac, webm, 3gp, amr, wma and whatever else ffmpeg decodes, wherever
+  kudio reads a file and with or without `sr`: `file_load`, `audio_info`,
+  `play_audio`, `Synthesizer`, `save_spectrogram_as_wave`, `plot_stft_w_2mfe`,
+  the command line and the paths of a `score_dataset` list. It takes audioread
+  (`pip install audioread`) and ffmpeg on the PATH; neither comes with kudio.
+  `file_load(sr=...)` and `Synthesizer` read these through librosa 0.11, and
+  nothing else did. librosa 1.0, which a new install gets on Python 3.12 and
+  later, has no audioread and reads none of them, ffmpeg or not. Where
+  librosa 0.11 read a file, what comes back is the same to the bit: 475 calls
+  on 25 files with ten extensions, whole and cut short.
+- Two warnings about a file ffmpeg read. One that gives less than its header
+  promises: ffmpeg decodes as far as a file goes without an error, and half of
+  an m4a made for streaming, or of a webm, came back as half the clip.
+  Containers that store their length (MP4, Matroska) are held to it; a bare AAC
+  or AMR stream has none. And one whose name ends in a format soundfile reads
+  and which soundfile does not recognise, a FLAC that lost its beginning or an
+  m4a called `.mp3`. Of the last libsndfile says that it does not exist.
+- A warning about a WAV that ends before its header says, with the two lengths:
+  half of a 6 s take was read as a take of 3 s. `file_load`, `audio_info`,
+  `peak=False` included, and whatever else reads a file give it, and return
+  what they returned. It is judged by the header and the size of the file. A
+  length of 0 or of 0x7FFFF000 and up, which a program that streams its output
+  leaves there, is not held to, and neither is RF64, W64, AIFF or any other
+  container. 876 whole files in every subtype of WAV are not warned about.
+
+### Fixed
+
+- `save_wave` emptied the file it could not write: libsndfile opens it first,
+  which truncates it, and refuses then. Nine channels of FLAC, three of MP3,
+  FLAC at 1 MHz and an array of three dimensions each left 0 or 44 bytes of the
+  recording that was there, as a full disk or Ctrl-C left half of the new one.
+- `Synthesizer.syn` emptied the output folder and then found that a setting
+  cannot work: `rt60=nan`, `drr_db=-99`, a telephone band under a rate of
+  500 Hz, a negative seed, a noise to resample without librosa. The corpus was
+  gone and nothing was written. Every room at the rate of its file, the link,
+  the rates, the seed and librosa, if anything has to be resampled, are tried
+  first, and a run that is refused leaves the folder and `seed`, `target_sr`,
+  `rooms` and `manifest()` as they were. A run that is not refused writes the
+  same files. `syn_extra_mode` looks at `background_snr`, the seed and librosa
+  first.
+- A file with NaN or inf in it could be read with `sr=None` alone; any `sr`,
+  the file's own included, raised "Audio buffer is not finite everywhere". At
+  its own rate it is read, with the warning. At another it is an
+  `AudioIOError` that counts the samples and says to read it with `sr=None`,
+  since a resampler spreads each one over its neighbours. `Synthesizer` and
+  `save_spectrogram_as_wave` count them too.
+- `True` was a rate of 1 Hz: `rt60` read 6424 s off a room of 0.4 s,
+  `file_load(sr=True)` gave 2 samples for 2 s of audio, and `save_wave(sr=True)`
+  wrote a file at 1 Hz. `file_load(sr=16000.5)` resampled to that and
+  reported 16000, and `Synthesizer.syn(target_sr=8000.5)` wrote files that say
+  8000. A rate of 0 was "above Nyquist" to `lowpass`, which handed the clip
+  back, a duration of 0 to `audio_info` and "not given" to
+  `match_loudness(reference_sr=0)`; `audio_info(y, sr=-1)` on 32000 samples gave
+  -32000 s. `resample` with a source rate of inf did not return.
+  `save_wave(sr=16000.0)` failed with "an integer is required".
+- `file_load`, `audio_info` and the other readers say when a path does not
+  exist, when it is a folder and when the file is empty, and for a file that
+  will not open what the operating system says. libsndfile says
+  `System error.` for all of them but the empty one, and with librosa 0.11
+  two warnings about audioread came first.
+- With librosa 0.11, an m4a read with `sr=...` ended in `()` when there was no
+  ffmpeg, when ffmpeg could not decode the file, and when the file was empty.
+  A missing audioread, a missing ffmpeg and a file that cannot be decoded are
+  told apart, and any other error without text is named by its type.
+- `play_audio` said it plays what `file_load` reads and played what soundfile
+  reads. It reads the file the same way.
+- `vad`, `vad_split`, `vad_trim`, `vad_frames` and `speech_ratio` judge a clip
+  of any length. From 0.04 to 0.43 s, at every rate, they raised "operands
+  could not be broadcast together", since `np.convolve` in its `same` mode
+  answers with the longer of the clip and the 41 frames a fricative reaches.
+  With `band=`, a clip under 30 ms raised an `IndexError`, as `vad_frames` did
+  for one sample.
+- `spectral_enhance` with `spectral_gate` takes every clip of one frame or
+  more and the whole range of its smoothing. By default 512 to 639 samples
+  raised the same error, and so did `time_smooth_ms=500` on 0.48 s and
+  `freq_smooth_hz=4000` at 6 kHz.
+- With `hop_length` near half of `n_fft`, `spectral_enhance` divided the last
+  samples of a clip by next to nothing: with a Hann window and a hop of 256, a
+  clip that ends 255 samples past the last frame's centre came out at 109 times
+  its own peak. The samples under 3% of the last frame's window are faded. With
+  the default window there are none at a quarter or a third of `n_fft`, and
+  every other sample is the same to the bit.
+- The fades, `crossfade`, `splice`, `remove_dc`, the filters, `resample` and the
+  reference of `spectrogram_to_waveform` read uint8 and uint16 around their
+  midpoint, as everything else did. A fade took uint8 silence, 128, to 0, which
+  is full scale, and resampled it swung by up to a quarter of that at both ends.
+  Signed integers and floats come out the same to the bit.
+- `resample` holds an int32 to its range. The largest one is not a float32, and
+  a peak clipped there came back as full scale of the other sign.
+- `wave_encode` refuses an array that is channels first, which it wrote out one
+  channel after the other, and `wave_separate` splits a row `(1, n)`, whose
+  second channel came back empty.
+- `save_manifest`, `save_labels` and `KudioConfig.write_config` finish the text
+  before they open the file. A value JSON or YAML has no form for left a
+  manifest cut off partway and a config of 0 bytes where a good one was. It is
+  a `ValueError`, which for a manifest or labels names the row, and the file
+  stays as it was.
+- The same three take numpy numbers and `Path`s: an `np.int64` SNR, an
+  `np.float32` time, a path out of `glob`. A path is written with forward
+  slashes.
+- `KudioConfig.to_dict` reaches dicts inside lists inside lists, which
+  `write_config` could not write.
+- `load_rttm`, `load_labels` and `load_manifest` read a file that starts with
+  a byte-order mark. `load_rttm` took the first SPEAKER line for one of
+  another type and skipped it, so a perfect system scored a DER of 1.0 on a
+  reference of two turns; the other two refused the file.
+- A carriage return in a label's text ends up a space in an Audacity track, as
+  a newline does. Written as it was, it split the row, and `load_labels` could
+  not read the file back.
+- `AudioDataManager.add_new_file(override=True)` builds the new clip before it
+  gives up the old one. A bare array passed for `wave` removed the clip it was
+  to replace.
+- `AudioDataManager.add_local_file` reads the file before it adds the clip. One
+  that could not be read left an empty clip under its name.
+
 ## [4.2.0] - 2026-11-20
 
 ### Changed

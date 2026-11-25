@@ -260,8 +260,9 @@ kudio warns or refuses instead of handing one back:
   spectrogram at once, instead of running something that only shares their
   name.
 
-A `ValueError` is not a [`KudioError`][kudio.exceptions.KudioError], so
-`except kudio.KudioError` lets those through. A missing extra raises a
+A plain `ValueError` is not a [`KudioError`][kudio.exceptions.KudioError], so
+`except kudio.KudioError` lets those through; a `FeatureError` is both, and
+`except ValueError` catches it too. A missing extra raises a
 [`DependencyError`][kudio.exceptions.DependencyError], which is an
 `ImportError` as well, naming the `pip install` to run.
 [Getting started](getting-started.md) has every exception class and what

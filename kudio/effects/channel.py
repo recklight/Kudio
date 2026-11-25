@@ -47,7 +47,9 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 
-from kudio._samples import as_float
+from kudio._numbers import real, whole
+from kudio._samples import one_channel
+from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
 __all__ = ['mu_law', 'a_law', 'bit_depth', 'dropouts', 'telephone',
@@ -151,13 +153,55 @@ def _burst_runs(packets: int, n_lost: int, burst: float,
 
 
 def _mono(name: str, y: np.ndarray) -> np.ndarray:
-    y = as_float(y)
+    y = one_channel(y, name, FeatureError)
     if y.ndim > 1:
         raise FeatureError(
-            f"{name} takes mono audio, got shape {y.shape}. A channel degrades "
+            f"{name}() takes mono audio, got shape {y.shape}. A channel degrades "
             f"each channel differently and mixing down first is a decision, "
             f"not a detail.")
     return y.astype(np.float64, copy=False).reshape(-1)
+
+
+#: The most bits a code word is taken to have. float64 has a step of 2**-52 at
+#: full scale, so nothing past it is quantised any more, and 2**bits has to
+#: stay a number.
+_MAX_BITS = 64
+
+
+def _bits(bits, name: str) -> int:
+    """*bits* as an int, or a FeatureError. 8.5 bits gives 361 levels, which is
+    no code word's count."""
+    value = whole(bits)
+    if value is None or not 2 <= value <= _MAX_BITS:
+        raise FeatureError(f"{name}(): bits must be >= 2, a whole number of at most "
+                           f"{_MAX_BITS}, got {bits!r}")
+    return value
+
+
+def _loss(loss, name: str) -> float:
+    value = real(loss)
+    if value is None or not 0.0 <= value <= 1.0:
+        raise FeatureError(f"{name}(): loss must be a fraction in [0, 1], got {loss!r}")
+    return value
+
+
+def _packet_ms(packet_ms, name: str) -> float:
+    value = real(packet_ms)
+    if value is None or value <= 0:
+        raise FeatureError(f"{name}(): packet_ms must be a finite number > 0, got "
+                           f"{packet_ms!r}")
+    return value
+
+
+def _burst(burst, loss: float, name: str) -> Optional[float]:
+    value = None if burst is None else real(burst)
+    if burst is not None and (value is None or value < 1.0):
+        raise FeatureError(
+            f"{name}(): burst is a mean run length in packets, a finite number that "
+            f"cannot be under 1, got {burst!r}. Independent loss is burst=None, and "
+            f"already runs to {independent_burst(min(loss, 0.999)):.2f} packets at this "
+            f"rate.")
+    return value
 
 
 def _quantise(values: np.ndarray, bits: int) -> np.ndarray:
@@ -189,9 +233,8 @@ def mu_law(y: np.ndarray, *, bits: int = 8) -> np.ndarray:
 
     >>> kudio.mu_law(speech)                                 # doctest: +SKIP
     """
-    y = _mono("mu_law()", y)
-    if bits < 2:
-        raise FeatureError(f"bits must be >= 2, got {bits}")
+    y = _mono("mu_law", y)
+    bits = _bits(bits, "mu_law")
     y = np.clip(y, -1.0, 1.0)
 
     compressed = np.sign(y) * np.log1p(MU_LAW_MU * np.abs(y)) \
@@ -211,9 +254,8 @@ def a_law(y: np.ndarray, *, bits: int = 8) -> np.ndarray:
     4.29%). The difference is audible only on very quiet material; it is here
     because a corpus recorded off a European line went through this one.
     """
-    y = _mono("a_law()", y)
-    if bits < 2:
-        raise FeatureError(f"bits must be >= 2, got {bits}")
+    y = _mono("a_law", y)
+    bits = _bits(bits, "a_law")
     y = np.clip(y, -1.0, 1.0)
 
     magnitude = np.abs(y)
@@ -247,9 +289,8 @@ def bit_depth(y: np.ndarray, bits: int = 8, *,
     A full-scale sine comes back at about ``6.02 * bits + 1.76`` dB of SNR,
     which is the textbook figure and what the tests assert.
     """
-    y = _mono("bit_depth()", y)
-    if bits < 2:
-        raise FeatureError(f"bits must be >= 2, got {bits}")
+    y = _mono("bit_depth", y)
+    bits = _bits(bits, "bit_depth")
     y = np.clip(y, -1.0, 1.0)
 
     if dither:
@@ -301,22 +342,15 @@ def dropouts(y: np.ndarray, sr: int, *, loss: float = 0.05,
     >>> lossy, gaps = kudio.dropouts(speech, sr, loss=0.05, seed=0,
     ...                              return_spans=True)         # doctest: +SKIP
     """
-    y = _mono("dropouts()", y)
-    if sr <= 0:
-        raise FeatureError(f"dropouts() needs a positive rate, got {sr}")
-    if not 0.0 <= loss <= 1.0:
-        raise FeatureError(f"loss must be a fraction in [0, 1], got {loss}")
-    if packet_ms <= 0:
-        raise FeatureError(f"packet_ms must be positive, got {packet_ms}")
+    y = _mono("dropouts", y)
+    sr = sample_rate(sr, "dropouts", FeatureError)
+    loss = _loss(loss, "dropouts")
+    packet_ms = _packet_ms(packet_ms, "dropouts")
     if conceal not in CONCEALMENT:
         raise FeatureError(
             f"unknown concealment {conceal!r}; choose from "
             f"{', '.join(CONCEALMENT)}")
-    if burst is not None and burst < 1.0:
-        raise FeatureError(
-            f"burst is a run length in packets and cannot be under 1, got "
-            f"{burst}. Independent loss is burst=None, and already runs to "
-            f"{independent_burst(min(loss, 0.999)):.2f} packets at this rate.")
+    burst = _burst(burst, loss, "dropouts")
 
     size = max(1, int(round(packet_ms / 1000.0 * sr)))
     packets = int(np.ceil(len(y) / size))
@@ -368,9 +402,8 @@ def telephone(y: np.ndarray, sr: int, *, codec: str = 'mu_law',
 
     >>> kudio.telephone(speech, 16000)                       # doctest: +SKIP
     """
-    y = _mono("telephone()", y)
-    if sr <= 0:
-        raise FeatureError(f"telephone() needs a positive rate, got {sr}")
+    y = _mono("telephone", y)
+    sr = sample_rate(sr, "telephone", FeatureError)
     if codec not in ('mu_law', 'a_law', 'none'):
         raise FeatureError(
             f"unknown codec {codec!r}; choose mu_law, a_law or none")
@@ -481,18 +514,13 @@ def channel_spec(spec: Optional[Union[str, dict]]) -> dict:
         raise FeatureError(
             f"unknown concealment {out['conceal']!r}; choose from "
             f"{', '.join(CONCEALMENT)}")
-    if not 0.0 <= float(out['loss']) <= 1.0:
-        raise FeatureError(
-            f"loss must be a fraction in [0, 1], got {out['loss']}")
-    if out['bits'] is not None and int(out['bits']) < 2:
-        raise FeatureError(f"bits must be >= 2, got {out['bits']}")
-    # checked here rather than on the first file, so Synthesizer(channel=...)
+    # all of it here rather than on the first file, so Synthesizer(channel=...)
     # refuses a bad link when it is built
-    if out['burst'] is not None and float(out['burst']) < 1:
-        raise FeatureError(f"burst is a mean run length in packets, at least 1, "
-                           f"got {out['burst']}")
-    if not float(out['packet_ms']) > 0:
-        raise FeatureError(f"packet_ms must be > 0, got {out['packet_ms']}")
+    loss = _loss(out['loss'], 'channel_spec')
+    if out['bits'] is not None:
+        _bits(out['bits'], 'channel_spec')
+    _burst(out['burst'], loss, 'channel_spec')
+    _packet_ms(out['packet_ms'], 'channel_spec')
 
     # Nothing asked for is not a channel. Saying so here means one falsy
     # check downstream instead of five truthy ones.
@@ -548,8 +576,9 @@ def apply_channel(y: np.ndarray, sr: int, spec: Optional[Union[str, dict]],
     >>> kudio.apply_channel(mix, sr, {'preset': 'voip', 'loss': 0.1}, seed=7)
     ...                                                    # doctest: +SKIP
     """
+    sr = sample_rate(sr, 'apply_channel', FeatureError)
     spec = channel_spec(spec)
-    out = _mono("apply_channel()", y).astype(np.float32)
+    out = _mono("apply_channel", y).astype(np.float32)
     if not spec:
         return out
     if spec['band']:

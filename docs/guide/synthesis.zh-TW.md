@@ -86,6 +86,11 @@ data/mixed/f01/sa1_hum_n5.wav <- sa1.wav hum.wav -5
     `overwrite=False` 則不動非空的資料夾，只發出警告並回傳 `None`，
     所以後面還要繼續跑的腳本，請檢查回傳值。
 
+    刪除之前會先把設定試過一遍：每個房間在它那個檔案的取樣率下、線路、
+    `target_sr=`、種子，有檔案要重新取樣時還有 librosa。行不通的會引發例外，資料夾裡的語料庫還在，
+    `seed`、`rooms` 和 `manifest()` 描述的仍是它。讀不了的檔案則要輪到它時
+    才會發現，那時資料夾已經清空了。
+
 ## 用哪種模式：`reg` 還是 `inc` {#which-mode-reg-or-inc}
 
 | `mode=` | 寫出的檔案 | 什麼時候用 |
@@ -356,6 +361,8 @@ when written as PCM_16 (worst peak 2.07, +6.3 dBFS)」，
 
 只有 `noisy` 和 `clean` 是必要的，不認得的鍵會被丟掉，
 所以其他工具寫的 JSON list，只要每一列都有這兩個欄位就能載入。
+自己建立的 `Pair` 可以放 `Path` 或 numpy 數字，寫出來就是那段文字和那個數字。
+JSON 寫不出來的值會引發 `ValueError` 並指出是第幾列，原本就在那個路徑的 manifest 不會被動到。
 
 !!! note "相對路徑維持相對"
     路徑以正斜線寫入，Windows 和 Linux、macOS 一樣讀得懂，

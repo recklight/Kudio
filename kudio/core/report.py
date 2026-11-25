@@ -22,8 +22,9 @@ from typing import List, Tuple
 
 import numpy as np
 
-from kudio._samples import as_float
+from kudio._samples import one_channel
 from kudio.core._framing import frame_view as _frame
+from kudio.core._policy import sample_rate
 from kudio.core.loudness import loudness
 from kudio.exceptions import FeatureError
 
@@ -502,12 +503,12 @@ def audio_report(y: np.ndarray, sr: int, *, clip_run: int = _CLIP_RUN) -> AudioR
     :raises FeatureError: on a non-mono array, a non-positive rate, or a
         *clip_run* that is not a whole number of 1 or more.
     """
-    if sr <= 0:
-        raise FeatureError(f"audio_report() needs a positive sample rate, got {sr}")
+    sr = sample_rate(sr, 'audio_report', FeatureError)
     if int(clip_run) != clip_run or clip_run < 1:
         raise FeatureError(f"audio_report() needs a whole clip_run of 1 or more, "
                            f"got {clip_run}")
-    y = np.ascontiguousarray(np.asarray(as_float(y), dtype=np.float64).squeeze())
+    y = one_channel(y, 'audio_report', FeatureError)
+    y = np.ascontiguousarray(np.asarray(y, dtype=np.float64).squeeze())
     if y.ndim != 1:
         raise FeatureError(f"audio_report() takes mono audio, got shape {y.shape}")
     if y.size == 0:

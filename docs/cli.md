@@ -40,8 +40,10 @@ python -m kudio.cli info take.wav   # when the kudio script is not on PATH
   the channels as they are, and `loudness` and `normalize` keep them, since
   BS.1770 weights and sums the channels and a mono mix of a stereo file reads
   3 LU low.
-- A single input can be anything libsndfile reads, FLAC as well as WAV. The
-  folder modes and `synth` collect files ending in `.wav`, in every subfolder,
+- A single input can be anything libsndfile reads, FLAC as well as WAV, and
+  with audioread and ffmpeg installed
+  [m4a, aac, webm and the like](guide/audio-files.md#formats-soundfile-does-not-read).
+  The folder modes and `synth` collect files ending in `.wav`, in every subfolder,
   whatever the case of the suffix, so a recorder's `ZOOM0001.WAV` is found on
   every system.
 - Output is 16-bit PCM unless the command has a `--subtype`, and fixed-point
@@ -178,6 +180,8 @@ encoding  : WAV / PCM_24
 peak      : 0.2922
 ```
 
+Of an m4a the encoding is `not read by soundfile, decoded with audioread`.
+
 ### report
 
 A health check that needs no clean reference: level, clipping, DC offset,
@@ -263,7 +267,9 @@ loudness and true peak, and the range line says it could not fill the window;
 with `--momentary` it also gets its 400 ms extremes, and the range line says
 it needs 3 s. Below 400 ms, one BS.1770 block, there is no integrated loudness
 either, and the command stops with an error. A file of digital silence prints
-`-inf` and says so, and a stereo file is measured as stereo.
+`-inf` and says so. So does one that has something in it and never rises above
+the -70 LUFS gate, and that line gives its peak. A stereo file is measured as
+stereo.
 
 `--target` checks a delivery level:
 
@@ -368,7 +374,10 @@ wrote mic_a.wav (16000 Hz, PCM_16)
 the way in. With `--recursive` the two arguments are folders and the work goes
 to [`convert_folder`][kudio.core.io.convert_folder], which mirrors the layout
 below the source folder. `--lufs` loudness-normalises and `--trim-db` trims
-silence, both after the resample, on a single file as well as a folder.
+silence, both after the resample, on a single file as well as a folder. A file
+too quiet to have a loudness is written without the gain, and standard error
+says so. A single file with no samples in it is an error, and nothing is
+written.
 
 ```bash
 kudio convert raw/ 16k/ --rate 16000 --recursive --lufs -23
@@ -388,7 +397,9 @@ reports. Empty the folder first when the point is to redo it.
 Scale a file to a loudness, `--lufs` (-23 when nothing is given), or to a
 peak, `--peak`, but not both. The peak is a linear amplitude above 0 and at
 most 1, such as 0.99, not dBFS; anything else stops with an error, and so does
-a file of digital silence, which has no level to scale. The channels are kept.
+a file of digital silence, which has no level to scale. With a loudness target
+a file that never rises above the -70 LUFS gate is an error as well, since it
+has no loudness; `--peak` still scales it. The channels are kept.
 Loudness is the one to use before comparing two files by ear, since the louder
 of two versions tends to win whatever else is different about them.
 
@@ -423,7 +434,9 @@ change the loudness that was asked for.
 
 Cut leading and trailing silence with
 [`trim_silence`][kudio.effects.silence.trim_silence]. `--top-db` (default 30)
-is measured down from the loudest frame, not from full scale.
+is measured down from the loudest frame, not from full scale. It has to be a
+finite number above 0: at 0 the loudest frame is silence too. A file with no
+samples in it stops with an error, and nothing is written.
 
 ```bash
 kudio trim take.wav take_trim.wav --top-db 30
@@ -915,7 +928,8 @@ named. A file with two or more channels is averaged to one, as the other
 commands read audio, and its row says so in `note`.
 Instead of a folder, a side can be a list: one `id path` per line, as a Kaldi
 `wav.scp` has it, or a `.csv` file with `id` and `path` columns. A relative
-path in a list is read from the working directory. An id missing from one
+path in a list is read from the working directory. A list can name an m4a, which
+audioread and ffmpeg decode; a folder is not searched for one. An id missing from one
 side, an id given twice, two files that come to one id (`001.wav` and
 `001.flac`) and a listed file that does not exist stop the command with exit 2
 before anything is scored, with the first five ids named and the rest counted.
@@ -1117,7 +1131,7 @@ The commands that can find something wrong exit 1 when they do:
 | Command | Exits 1 when |
 |---|---|
 | `report` | It has any finding: clipping, a peak within 0.5 dB of full scale or past it, a peak under -30 dBFS, a DC offset above 0.01, content stopping below 90% of Nyquist, more than 60% silence, an estimated SNR under 10 dB, digital silence, or NaN and inf samples |
-| `loudness --target` | The integrated loudness is more than 1 LU from the target, or the file is silent |
+| `loudness --target` | The integrated loudness is more than 1 LU from the target, or the file is silent or never above the -70 LUFS gate |
 | `vad` | No speech is found |
 | `pitch` | No frame is voiced |
 | `align` | The correlation is below 0.5: not the same recording |

@@ -224,8 +224,9 @@ pip install "kudio[eval,viz]"    # extras go in brackets, by name
   [`FeatureError`][kudio.exceptions.FeatureError]。這幾個要一次看整張頻譜圖，
   與其執行一個只是同名的東西，不如直接拒絕。
 
-`ValueError` 不是 [`KudioError`][kudio.exceptions.KudioError]，所以
-`except kudio.KudioError` 不會攔到它們。缺少選用套件組時會引發
+單純的 `ValueError` 不是 [`KudioError`][kudio.exceptions.KudioError]，所以
+`except kudio.KudioError` 不會攔到它們；`FeatureError` 兩者都是，`except ValueError`
+也攔得到。缺少選用套件組時會引發
 [`DependencyError`][kudio.exceptions.DependencyError]，它同時也是 `ImportError`，
 訊息裡會寫出要執行的 `pip install`。每個例外類別以及由誰引發，都列在[入門](getting-started.md)。
 

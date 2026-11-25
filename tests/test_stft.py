@@ -114,3 +114,61 @@ def test_inverse_refuses_a_spectrogram_of_the_wrong_shape():
     y = make_sine(seconds=1.0)
     with pytest.raises(FeatureError, match="one row per frame"):
         stft.inverse(y, stft.forward(y, context=2))
+
+
+# -- settings that are none, and spectra that cannot be inverted --------------------
+@pytest.mark.parametrize("bad", [
+    dict(n_fft=0), dict(n_fft=-512), dict(n_fft=512.5), dict(n_fft=True), dict(n_fft='512'),
+    dict(n_fft=None), dict(n_fft=float('nan')), dict(hop_length=0), dict(hop_length=-1),
+    dict(hop_length=128.5), dict(hop_length=None), dict(hop_length=float('inf')),
+    dict(win_length=0), dict(win_length=-5), dict(win_length=100.5), dict(win_length='400')])
+def test_a_size_that_is_not_a_whole_number_of_samples_is_refused(bad):
+    name, = bad
+    with pytest.raises(ValueError, match=rf"^STFT\(\): {name} must be >= 1, a whole number"):
+        STFT(**bad)
+
+
+def test_numpy_sizes_are_stored_as_the_ints_they_are():
+    """The dict goes beside a checkpoint, as JSON or YAML."""
+    import json
+    stft = STFT(sr=np.float64(16000), n_fft=np.int64(512), hop_length=np.int32(128),
+                win_length=400.0)
+    assert stft == STFT(16000, 512, 128, 400)
+    assert json.loads(json.dumps(stft.to_dict())) == STFT(16000, 512, 128, 400).to_dict()
+
+
+def test_synthesise_rebuilds_what_analyse_gave(sine):
+    for hop, window in ((128, 'hann'), (256, 'hamming'), (512, 'hamming'), (512, 'boxcar')):
+        stft = STFT(sr=SR, n_fft=512, hop_length=hop, window=window)
+        back = stft.synthesise(stft.analyse(sine[:512 * 30]), length=512 * 30)
+        assert np.max(np.abs(back - sine[:512 * 30])) < 1e-3
+
+
+@pytest.mark.parametrize("wrong, said", [
+    (lambda s: s.T, r"takes \(frames, 257\), the layout analyse\(\) gives, and got shape"),
+    (lambda s: s[:0], r"takes \(frames, 257\)"),
+    (lambda s: s[:, :-1], r"got shape \(63, 256\)"),
+    (lambda s: s[0], r"got shape \(257,\)"),
+    (lambda s: s[None], r"got shape \(1, 63, 257\)"),
+    (np.abs, "takes the complex spectrum .* got float32: a magnitude has no phase"),
+    (lambda s: s.real, "takes the complex spectrum"),
+])
+def test_a_spectrum_of_the_wrong_kind_is_not_inverted(sine, wrong, said):
+    """The librosa layout came out as a burst of noise, and a magnitude as a
+    waveform with every phase zero."""
+    from kudio.exceptions import FeatureError
+    stft = STFT(sr=SR, n_fft=512, hop_length=256)
+    spec = stft.analyse(sine)
+    with pytest.raises(FeatureError, match=r"^STFT\.synthesise\(\) .*" + said):
+        stft.synthesise(wrong(spec), length=len(sine))
+
+
+@pytest.mark.parametrize("hop", [512, 513, 1000])
+def test_samples_under_no_window_cannot_be_rebuilt(sine, hop):
+    """A Hann window is zero at its first sample, and past its length there is
+    no window at all."""
+    from kudio.exceptions import FeatureError
+    stft = STFT(sr=SR, n_fft=512, hop_length=hop, window='hann')
+    with pytest.raises(FeatureError, match=f"with hop_length={hop} some samples are under no part"):
+        stft.synthesise(stft.analyse(sine), length=len(sine))
+    assert len(stft.forward(sine)) == stft.n_frames(len(sine)), "a feature need not be invertible"

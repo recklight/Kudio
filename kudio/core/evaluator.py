@@ -926,8 +926,8 @@ class AudioEvaluate:
 
     File lists must be aligned: ``clean_list[i]`` / ``noisy_list[i]`` /
     ``enhanced_list[i]`` refer to the same utterance. Files are read with
-    :func:`kudio.file_load` -- float, mono, and any format soundfile reads,
-    NIST SPHERE included.
+    :func:`kudio.file_load` -- float, mono, and any format that opens, NIST
+    SPHERE included.
 
     :param pesq_mode, pesq_scale: as in :func:`kudio.pesq`. The defaults give
         MOS-LQO, wideband at 16 kHz and narrowband at 8 kHz;

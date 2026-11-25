@@ -223,13 +223,18 @@ def load_rttm(path) -> Dict[str, List[Turn]]:
     Each line ``SPEAKER <file> <channel> <onset> <duration> <NA> <NA>
     <speaker> ...`` becomes ``Turn(onset, onset + duration, speaker)`` under
     ``<file>``; lines of other types are skipped, and so are blank lines and
-    lines starting with ``;;``.
+    lines starting with ``;;``. The file is UTF-8, with or without a byte-order
+    mark.
 
-    :raises ValueError: for a SPEAKER line with fewer than 8 fields, or an
-        onset or duration that is not a number, naming the line.
+    :raises ValueError: for a SPEAKER line with fewer than 8 fields, an onset
+        or duration that is not a finite number, or a negative duration,
+        naming the line.
     """
     out: Dict[str, List[Turn]] = {}
-    for number, line in enumerate(Path(path).read_text(encoding='utf-8').splitlines(), 1):
+    # -sig: with the mark on it the first line's type reads "\ufeffSPEAKER",
+    # which is a line of another type, and its turn would be skipped
+    text = Path(path).read_text(encoding='utf-8-sig')
+    for number, line in enumerate(text.splitlines(), 1):
         fields = line.split()
         if not fields or fields[0].startswith(';;') or fields[0] != 'SPEAKER':
             continue
@@ -242,6 +247,13 @@ def load_rttm(path) -> Dict[str, List[Turn]]:
             raise ValueError(f"load_rttm(): line {number} of {path}: the onset "
                              f"and duration have to be numbers, got "
                              f"{fields[3]!r} and {fields[4]!r}") from None
+        if not (math.isfinite(onset) and math.isfinite(duration)):
+            raise ValueError(f"load_rttm(): line {number} of {path}: the onset and "
+                             f"duration have to be finite, got {fields[3]!r} and "
+                             f"{fields[4]!r}")
+        if duration < 0:
+            raise ValueError(f"load_rttm(): line {number} of {path}: the duration "
+                             f"cannot be negative, got {fields[4]!r}")
         out.setdefault(fields[1], []).append(Turn(onset, onset + duration, fields[7]))
     return out
 

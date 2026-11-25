@@ -36,11 +36,14 @@ from typing import Optional
 
 import numpy as np
 
-from kudio._samples import as_float
+from kudio._samples import one_channel
+from kudio.core._framing import overlapped
+from kudio.core._policy import sample_rate
 from kudio.enhance.spectral import (
     METHODS,
     RECURSIVE_METHODS,
     DecisionDirected,
+    _check_overlap,
     make_gain_rule,
     make_noise_tracker,
 )
@@ -64,7 +67,8 @@ class StreamEnhancer:
     :param noise: ``'mcra'``, ``'initial'`` or ``'minimum'`` — see
         :func:`kudio.make_noise_tracker`. ``'quantile'`` cannot stream.
     :param n_fft: analysis frame; also the latency.
-    :param hop_length: defaults to ``n_fft // 4``.
+    :param hop_length: defaults to ``n_fft // 4``. One too long for the window
+        is refused, as :func:`kudio.spectral_enhance` refuses it.
     :param params: method parameters, defaulted from ``METHODS[method]``.
     """
 
@@ -74,8 +78,7 @@ class StreamEnhancer:
                  window: str = 'hann',
                  noise_kwargs: Optional[dict] = None,
                  **params):
-        if sr <= 0:
-            raise FeatureError(f"StreamEnhancer needs a positive rate, got {sr}")
+        sr = sample_rate(sr, 'StreamEnhancer', FeatureError)
         if method not in STREAMABLE_METHODS:
             offline = "" if method not in METHODS else \
                 f" It works offline: kudio.spectral_enhance(y, sr, {method!r})."
@@ -103,7 +106,11 @@ class StreamEnhancer:
         self._noise_kwargs = dict(noise_kwargs or {})
         self._g_min = 10.0 ** (settings.get('gain_floor_db', -25.0) / 20.0)
 
+        if self.hop_length < 1:
+            raise FeatureError(f"StreamEnhancer(): hop_length must be >= 1, got {hop_length}")
         self._window = _get_window(window, self.n_fft)
+        _check_overlap(overlapped(self._window ** 2, self.hop_length), self.n_fft,
+                       self.hop_length, 'StreamEnhancer')
         # Analysis and synthesis both apply the window (WOLA), so what has to
         # sum to a constant is w^2, not w. Measuring it beats assuming it: an
         # untested COLA assumption shows up as a periodic amplitude ripple at
@@ -166,12 +173,10 @@ class StreamEnhancer:
         at the end; sample *i* of that concatenation lines up with sample *i*
         of the input.
         """
-        block = np.asarray(as_float(block), dtype=np.float64)
-        if block.ndim > 1 and block.shape[1] == 1:
-            block = block[:, 0]
+        block = np.asarray(one_channel(block, 'StreamEnhancer.process', FeatureError),
+                           dtype=np.float64)
         if block.ndim != 1:
-            # reshape(-1) used to read a stereo block as one interleaved
-            # signal twice as long
+            # flattened, a stereo block is one interleaved signal twice as long
             raise FeatureError(f"StreamEnhancer takes mono blocks, got shape "
                                f"{block.shape}")
         self._input = np.concatenate([self._input, block])

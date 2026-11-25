@@ -238,3 +238,116 @@ def test_a_band_that_is_not_one_is_refused(speech, band):
     as no speech with a numpy warning about an empty mean."""
     with pytest.raises(FeatureError, match="band"):
         kudio.vad(speech, SR, band=band)
+
+
+# -- short clips ------------------------------------------------------------------
+def _hiss(seconds, sr=SR, seed=7):
+    return 0.001 * np.random.default_rng(seed).standard_normal(int(round(seconds * sr)))
+
+
+def _word(seconds, sr=SR):
+    t = np.arange(int(round(seconds * sr))) / sr
+    return 0.4 * np.sin(2 * np.pi * 220 * t + 0.3)
+
+
+@pytest.mark.parametrize("sr", [8000, 16000, 44100, 48000])
+@pytest.mark.parametrize("band", [None, (100, 3500)])
+def test_a_clip_of_any_length_is_judged(sr, band):
+    """The reach of a fricative, 41 frames of 10 ms, is wider than a clip
+    under 0.43 s, and np.convolve answers with the longer of the two."""
+    word = _word(0.5, sr)
+    for seconds in (0.19, 0.0, 2.0 / sr, 0.001, 0.01, 0.0299, 0.03, 0.0399, 0.04, 0.05,
+                    0.1, 0.3, 0.42, 0.43, 0.44, 0.5):
+        y = word[:int(round(seconds * sr))]
+        assert kudio.vad(y, sr, band=band) == [], "nothing in it is quieter than the rest"
+        assert kudio.vad_split(y, sr, band=band) == []
+        trimmed, span = kudio.vad_trim(y, sr, band=band)
+        assert span == (0, len(y)) and len(trimmed) == len(y)
+        assert kudio.speech_ratio(y, sr, band=band) == 0.0
+        mask = kudio.vad_frames(y, sr, band=band)
+        assert mask.dtype == bool and len(mask) == 1 + len(y) // 256 and not mask.any()
+
+
+@pytest.mark.parametrize("lead, word", [(0.1, 0.1), (0.1, 0.2), (0.1, 0.3), (0.05, 0.15)])
+def test_a_word_in_a_short_clip_is_found(lead, word):
+    """What it takes is room tone for the floor: 15% of the frames."""
+    y = np.concatenate([_hiss(lead), _word(word) + _hiss(word, seed=8)])
+    (start, end), = kudio.vad(y, SR, pad=0.0)
+    # a frame that holds the first 10 ms of the word is loud already
+    assert start == pytest.approx(lead - 0.02, abs=0.0101)
+    assert end == pytest.approx(lead + word, abs=0.0101)
+    assert kudio.speech_ratio(y, SR, pad=0.0) == pytest.approx((end - start) / (lead + word))
+    piece, = kudio.vad_split(y, SR, pad=0.0)
+    assert len(piece) == pytest.approx((end - start) * SR, abs=1)
+
+
+def test_a_fricative_joins_a_vowel_in_a_short_clip():
+    """Every frame of a clip this short is in reach of every other."""
+    vowel = _word(0.1)
+    hiss = 0.2 * np.random.default_rng(9).standard_normal(int(0.1 * SR))
+    clip = np.concatenate([_hiss(0.08), vowel, hiss])
+    assert len(clip) / SR < 0.43
+    (start, end), = kudio.vad(clip, SR, pad=0.0)
+    assert end == pytest.approx(len(clip) / SR, abs=0.0101), "the hiss is part of the word"
+    alone = np.concatenate([_hiss(0.08), np.zeros(len(vowel)), hiss]) + _hiss(0.28, seed=10)
+    assert kudio.vad(alone, SR, pad=0.0) == [], "and on its own it is not"
+
+
+def test_a_frame_of_its_own_is_its_own_floor():
+    """Under 40 ms there is one frame, and it is never above itself, unless
+    the threshold says it need not be."""
+    for seconds in (0.001, 0.02, 0.0399):
+        y = _word(seconds)
+        assert kudio.vad(y, SR, min_speech=0.0, pad=0.0) == []
+        found = kudio.vad(y, SR, threshold_db=-1.0, min_speech=0.0, pad=0.0)
+        assert found == [(0.0, len(y) / SR)]
+        assert kudio.vad(y, SR, threshold_db=-1.0, min_speech=0.0, pad=0.0,
+                         band=(100, 4000)) == found
+
+
+def test_one_sample_has_no_spectrum(recwarn):
+    for y in (np.array([0.3]), np.array([[0.3]]), [0.3]):
+        assert kudio.vad(y, SR) == []
+        assert kudio.vad(y, SR, band=(100, 4000)) == []
+        assert kudio.vad_frames(y, SR).tolist() == [False]
+        assert kudio.vad_frames(y, SR, center=False).tolist() == []
+    assert not recwarn.list
+
+
+@pytest.mark.parametrize("m", [1, 2, 3, 6, 40, 41, 62])
+def test_the_smoothing_has_one_answer_per_frame(m):
+    """Against the sum written out, for a kernel shorter than the values and
+    for one longer."""
+    from kudio.core._framing import convolve_same
+    rng = np.random.default_rng(m)
+    kernel = rng.integers(0, 5, m).astype(float)
+    reach = (m - 1) // 2
+    for n in (1, 2, 3, 5, 16, 41, 60):
+        values = rng.integers(0, 5, n).astype(float)
+        by_hand = [sum(values[j] * kernel[i + reach - j]
+                       for j in range(n) if 0 <= i + reach - j < m) for i in range(n)]
+        out = convolve_same(values, kernel)
+        assert out.tolist() == by_hand
+        if m <= n:
+            assert out.tolist() == np.convolve(values, kernel, mode='same').tolist()
+
+
+# -- what comes back is the caller's to write into --------------------------------
+def test_the_cuts_are_copies(speech):
+    """As trim_silence's and split_on_silence's are: silencing a cut must not
+    silence the recording it came from."""
+    before = speech.copy()
+    trimmed, _ = kudio.vad_trim(speech, SR)
+    untouched, _ = kudio.vad_trim(np.zeros(SR, dtype=np.float32), SR)
+    for piece in [trimmed, untouched] + kudio.vad_split(speech, SR):
+        assert not np.shares_memory(piece, speech)
+        piece[:] = 0.0
+    assert np.array_equal(speech, before)
+
+
+@pytest.mark.parametrize("kind", [np.int16, np.float32, np.float64])
+def test_a_cut_keeps_its_type_and_its_channel_axis(speech, kind):
+    y = (speech * 30000).astype(kind) if kind is np.int16 else speech.astype(kind)
+    assert kudio.vad_trim(y, SR)[0].dtype == kind
+    assert all(piece.dtype == kind for piece in kudio.vad_split(y, SR))
+    assert kudio.vad_trim(y[:, None], SR)[0].shape[1:] == (1,)

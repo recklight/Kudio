@@ -37,8 +37,9 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from kudio._samples import as_float
-from kudio.core._framing import frame_view
+from kudio._samples import channels_last, one_channel
+from kudio.core._framing import convolve_same, frame_view
+from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
 __all__ = ['vad', 'vad_split', 'vad_trim', 'vad_frames', 'speech_ratio']
@@ -81,6 +82,14 @@ def _flatness(frames: np.ndarray, keep: Optional[np.ndarray] = None) -> np.ndarr
     return geometric / np.maximum(arithmetic, 1e-20)
 
 
+def _band_bins(size: int, sr: int, low: float, high: float
+               ) -> Tuple[np.ndarray, float]:
+    """Which bins of a *size*-sample frame lie in the band, DC left out, and
+    how many hertz apart they are."""
+    freqs = np.fft.rfftfreq(size, 1.0 / sr)
+    return (freqs >= max(low, freqs[1])) & (freqs <= high), float(freqs[1])
+
+
 def _zcr(frames: np.ndarray) -> np.ndarray:
     return np.mean(np.diff(np.signbit(frames), axis=-1), axis=-1)
 
@@ -116,6 +125,13 @@ def vad(y: np.ndarray, sr: int, *,
     [(0.31, 1.84), (2.42, 3.97)]
     ```
 
+    A clip of any length is judged, and a short one by the same rules, which
+    leave it less to go by. The noise floor is the level its own quietest 15%
+    of frames stay under, so speech is found where the clip holds something
+    quieter as well: one cut to the word, speech from end to end, comes back
+    empty. So does a clip shorter than *min_speech*, and one that holds a
+    single frame (under 40 ms by default), which is its own floor.
+
     :param threshold_db: how far above the estimated noise floor a frame must
         sit. Lower it for a very quiet talker, raise it for a noisy room.
     :param flatness_max: spectral flatness above which a loud frame is judged
@@ -134,14 +150,14 @@ def vad(y: np.ndarray, sr: int, *,
         nothing in the clip looks like speech.
 
     :raises FeatureError: on non-mono audio, samples that are not finite, a
-        non-positive sample rate, or a *band* that is not ``low < high`` with
-        *low* under Nyquist. A clip with NaN or inf in it is refused,
-        as :func:`kudio.f0` and :func:`kudio.spectral_enhance` refuse it,
-        rather than judged with those frames left out.
+        rate that is not a positive number, or a *band* that is not ``low <
+        high`` with *low* under Nyquist. A clip with NaN or inf in it is
+        refused, as :func:`kudio.f0` and :func:`kudio.spectral_enhance` refuse
+        it, rather than judged with those frames left out.
     """
-    if sr <= 0:
-        raise FeatureError(f"vad() needs a positive sample rate, got {sr}")
-    y = np.ascontiguousarray(np.asarray(as_float(y), dtype=np.float64).squeeze())
+    sr = sample_rate(sr, 'vad', FeatureError)
+    y = one_channel(y, 'vad', FeatureError)
+    y = np.ascontiguousarray(np.asarray(y, dtype=np.float64).squeeze())
     if y.ndim != 1:
         raise FeatureError(f"vad() takes mono audio, got shape {y.shape}")
     if y.size == 0:
@@ -150,6 +166,8 @@ def vad(y: np.ndarray, sr: int, *,
         raise FeatureError(f"vad() got {int(np.count_nonzero(~np.isfinite(y)))} "
                            f"sample(s) that are not finite (NaN or inf); repair "
                            f"the clip first")
+    if y.size == 1:                            # DC alone: no spectrum to judge
+        return []
 
     keep = None
     if band is not None:
@@ -169,12 +187,15 @@ def vad(y: np.ndarray, sr: int, *,
     step = max(1, int(round(hop * sr)))
     frames = frame_view(y, size, step)
     if band is not None:
-        freqs = np.fft.rfftfreq(size, 1.0 / sr)
-        keep = (freqs >= max(low, freqs[1])) & (freqs <= high)
+        keep, apart = _band_bins(size, sr, low, high)
         if np.count_nonzero(keep) < 2:
             raise FeatureError(f"vad() band {band} holds {np.count_nonzero(keep)} of the "
-                               f"bins of a {size}-sample frame, {freqs[1]:.1f} Hz apart; "
+                               f"bins of a {size}-sample frame, {apart:.1f} Hz apart; "
                                f"widen it")
+        if frames.shape[1] < size:             # a clip under one frame has its own bins
+            keep, _ = _band_bins(frames.shape[1], sr, low, high)
+            if np.count_nonzero(keep) < 2:     # nothing to be flat or peaky across
+                return []
     n_frames = frames.shape[0]
     duration = len(y) / sr
 
@@ -197,8 +218,7 @@ def vad(y: np.ndarray, sr: int, *,
     # a hissy frame joins only if it is next to one of those. Zero-crossing
     # rate cannot tell an /s/ from a burst of white noise -- position can.
     reach = max(1, int(round(FRICATIVE_REACH / hop)))
-    near_core = np.convolve(core.astype(np.float64),
-                            np.ones(2 * reach + 1), mode='same') > 0
+    near_core = convolve_same(core.astype(np.float64), np.ones(2 * reach + 1)) > 0
     speech = core | (active & (_zcr(frames) > ZCR_MIN) & near_core)
 
     if not speech.any():
@@ -226,9 +246,11 @@ def vad_split(y: np.ndarray, sr: int, **kwargs) -> List[np.ndarray]:
     """The speech segments themselves, as waveforms.
 
     The noise-adaptive counterpart of :func:`kudio.split_on_silence`; takes the
-    same keyword arguments as :func:`vad`.
+    same keyword arguments as :func:`vad`. Each segment is a copy.
     """
-    return [y[int(round(a * sr)):int(round(b * sr))]
+    sr = sample_rate(sr, 'vad_split', FeatureError)
+    y = channels_last(y, 'vad_split', FeatureError)
+    return [y[int(round(a * sr)):int(round(b * sr))].copy()
             for a, b in vad(y, sr, **kwargs)]
 
 
@@ -236,18 +258,20 @@ def vad_trim(y: np.ndarray, sr: int, **kwargs
              ) -> Tuple[np.ndarray, Tuple[int, int]]:
     """Trim to the first and last speech, keeping whatever is between them.
 
-    Returns ``(trimmed, (start_sample, end_sample))``, matching
-    :func:`kudio.trim_silence`. A clip with no detected speech comes back
-    untouched with its full span, rather than as an empty array — deleting the
+    Returns ``(trimmed, (start_sample, end_sample))``, the waveform a copy, as
+    :func:`kudio.trim_silence` does. A clip with no detected speech comes back
+    whole with its full span, rather than as an empty array — deleting the
     audio is never the safer reading of "nothing found".
     """
+    sr = sample_rate(sr, 'vad_trim', FeatureError)
+    y = channels_last(y, 'vad_trim', FeatureError)
     spans = vad(y, sr, **kwargs)
     if not spans:
         log.info("vad_trim: no speech detected, returning the clip unchanged")
-        return np.asarray(y), (0, int(np.asarray(y).shape[0]))
+        return y.copy(), (0, int(y.shape[0]))
     start = int(round(spans[0][0] * sr))
-    end = min(int(round(spans[-1][1] * sr)), np.asarray(y).shape[0])
-    return np.asarray(y)[start:end], (start, end)
+    end = min(int(round(spans[-1][1] * sr)), y.shape[0])
+    return y[start:end].copy(), (start, end)
 
 
 def vad_frames(y: np.ndarray, sr: int, *, hop_length: int = 256,
@@ -277,8 +301,9 @@ def vad_frames(y: np.ndarray, sr: int, *, hop_length: int = 256,
     if hop_length < 1 or n_fft < 1:
         raise FeatureError(f"hop_length and n_fft must be >= 1, got "
                            f"{hop_length} and {n_fft}")
+    sr = sample_rate(sr, 'vad_frames', FeatureError)
     spans = vad(y, sr, pad=pad, **kwargs)
-    n = np.asarray(y).squeeze().shape[0] if np.asarray(y).size else 0
+    n = np.asarray(y).size                     # vad takes one channel, whichever way up
     if center:
         # the count librosa gives after padding n_fft // 2 each side, which is
         # one frame short of 1 + n // hop for an odd n_fft
@@ -302,7 +327,8 @@ def speech_ratio(y: np.ndarray, sr: int, **kwargs) -> float:
     comes from the quietest 15% of the clip, though, so a clip cut tight
     around speech, with no room tone left in it, reads near 0 as well.
     """
-    y = np.asarray(y)
+    sr = sample_rate(sr, 'speech_ratio', FeatureError)
+    y = channels_last(y, 'speech_ratio', FeatureError)
     if y.size == 0:
         return 0.0
     total = sum(b - a for a, b in vad(y, sr, **kwargs))

@@ -61,7 +61,7 @@ librosa 回傳的是 `(bins, frames)`。這一頁的每個函式都回傳
 `len(y) // 256 + 1`，這段片段是 126；`mel_frames` 是同樣的算法，只是換成
 [`mfcc`][kudio.core.feature.mfcc] 和
 [`melspectrogram`][kudio.core.feature.melspectrogram] 的 512 個樣本位移，
-這裡是 63。`melspectrogram` 接受 `hop_length=`，`mfcc` 不接受。
+這裡是 63。兩個都接受 `hop_length=`。
 
 ## 用一個物件存放 STFT 設定 {#one-object-for-the-stft-settings}
 
@@ -164,11 +164,12 @@ aligned = kudio.melspectrogram(y, sr=sr, n_frames=1,
 - 結果和頻譜圖一樣是 float32，所以兩者可以直接堆疊，不必轉型。
 
 [`mfcc`][kudio.core.feature.mfcc] 接受陣列和它的取樣率，不接受路徑，
-回傳 `(1, mel_frames, n_mfcc)`；用 `[0]` 去掉批次軸。除了 `n_mfcc`，
-其他都是 librosa 的預設：Hann 窗、`n_fft=2048`、512 個樣本的位移和
-128 個梅爾頻帶。要在頻譜圖的 256 樣本格點上算 MFCC，請直接呼叫 librosa
-再轉置：
-`librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, n_fft=512, hop_length=256).T`
+回傳 `(1, mel_frames, n_mfcc)`；用 `[0]` 去掉批次軸。`n_fft`、`hop_length`、`n_mels` 和
+`fmax` 沒給時都是 librosa 的預設：Hann 窗、`n_fft=2048`、512 個樣本的位移和
+128 個梅爾頻帶。係數比梅爾頻帶還多會引發
+[`FeatureError`][kudio.exceptions.FeatureError]，例如 `n_mels=32` 卻沒有調低
+預設 40 的 `n_mfcc`。要在頻譜圖的 256 樣本格點上算 MFCC：
+`kudio.mfcc(y, sr, n_mfcc=13, n_fft=512, hop_length=256)[0]`
 是 `(126, 13)`。
 
 ## 前後文與視窗 {#context-and-windows}

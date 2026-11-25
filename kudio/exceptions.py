@@ -12,7 +12,9 @@ extra derives from :class:`KudioError`, so callers can::
 A wrong argument -- a negative rate, an unknown metric, two signals too
 different in length to compare -- raises ``ValueError`` or ``TypeError`` as the
 standard library would, and a buffer that waited too long raises
-``TimeoutError``.
+``TimeoutError``. :class:`FeatureError` is a ``ValueError`` as well, so
+``except ValueError`` catches what an effect or a measurement refuses along
+with what a metric does; ``except KudioError`` catches the first alone.
 """
 from __future__ import annotations
 
@@ -38,8 +40,8 @@ class AudioIOError(KudioError):
 class UnsupportedFormatError(AudioIOError):
     """The file type / dtype is not supported.
 
-    Not raised by kudio itself at present: a file soundfile cannot read comes
-    back as a plain :class:`AudioIOError`. Catch that one.
+    Not raised by kudio itself at present: a file that cannot be read or
+    decoded comes back as a plain :class:`AudioIOError`. Catch that one.
     """
 
 
@@ -52,10 +54,15 @@ class DeviceError(KudioError, RuntimeError):
     """
 
 
-class FeatureError(KudioError):
+class FeatureError(KudioError, ValueError):
     """A feature, effect, room, channel or enhancement step refused its input
     or its settings: the wrong shape of audio, a parameter out of range, a
-    clip too short to frame."""
+    clip too short to frame.
+
+    Also a ``ValueError``, the one a metric raises for input it refuses: which
+    of the two a function raises depends on the module it lives in, and a
+    caller should not have to know that.
+    """
 
 
 class SynthesisError(KudioError):

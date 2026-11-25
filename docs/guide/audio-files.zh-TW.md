@@ -1,7 +1,8 @@
 # 音訊檔案 {#audio-files}
 
 這一頁的函式都透過
-[soundfile](https://python-soundfile.readthedocs.io/) 讀寫，載入的波形
+[soundfile](https://python-soundfile.readthedocs.io/) 讀寫，
+[它不讀的格式](#formats-soundfile-does-not-read)則交給 ffmpeg，載入的波形
 一律是 float32 NumPy 陣列，±1.0 是滿刻度。單聲道音訊是一維陣列。聲道
 不只一個時，形狀是 `(frames, channels)`，一個 frame 就是每個聲道各取
 一個樣本：這是 soundfile 的排列方式，也是
@@ -88,6 +89,7 @@ clip.wav: 3.500s, 16000 Hz, 1ch, PCM_16, peak 0.4641
 需要讀樣本，每次讀 2^20 個 frame，所以再長的檔案也不會整個放進記憶體；
 `peak=False` 會跳過這次讀取，適合快速掃過大型語料庫，這時 `peak` 是
 `None`，印出來是「peak not measured」。
+比檔頭說的還短的 WAV 會[在警告裡寫出來](#a-file-that-was-cut-short)。
 [`audio_info`][kudio.core.io.audio_info] 也接受陣列，以聲道在後的方式
 解讀，而且要傳入 `sr=`，因為波形本身不帶取樣率。在 shell 裡
 `kudio info clip.wav` 會印出同樣的內容（[命令列](../cli.md)）；樣本透露
@@ -103,16 +105,15 @@ print(y8.shape, y8.dtype, sr8)                    # (28000,) float32 8000
 ```
 
 預設 `sr=None` 時，[`file_load`][kudio.core.io.file_load] 保留檔案本身
-的取樣率，只透過 soundfile 讀取。指定取樣率的話，檔案改走 librosa，用它
-的 `soxr_hq` 重新取樣器重新取樣。搭配 librosa 1.0 時，兩條路徑都能開啟
-已安裝的 libsndfile 開得了的任何格式；`soundfile.available_formats()`
+的取樣率。指定別的取樣率，就用 librosa 的 `soxr_hq` 重新取樣器重新取樣；
+檔案本來就是那個取樣率，則照原樣回傳。不論哪一種，檔案都用 soundfile
+讀，已安裝的 libsndfile 開得了的都開得了；`soundfile.available_formats()`
 會列出這些格式，soundfile 0.14 包括 WAV、FLAC、OGG、MP3、AIFF 和
-NIST SPHERE。kudio 仍然接受的 librosa 0.10 和 0.11，在 `sr=` 這條路徑上
-遇到 soundfile 打不開的檔案時，會退回去用 audioread，所以用這兩版時，
-同一個檔案可能加了 `sr=` 載得進來，不加反而失敗。
+NIST SPHERE。m4a、aac 和 webm 不在裡面，
+[還需要兩樣東西](#formats-soundfile-does-not-read)。
 
 預設的 `mono=True` 會把各聲道平均。`mono=False` 則保留各聲道，聲道在後，
-不論檔案走的是哪一條路徑：
+指定取樣率與否都一樣：
 
 ```python
 y, sr = kudio.file_load("stereo.wav", mono=False)
@@ -126,13 +127,73 @@ print(y.shape, y8.shape)                          # (16000, 2) (8000, 2)
     的第一個 frame，照 librosa 的方式取索引的程式碼照樣能執行，不會引發錯誤，
     只是讀到的是兩個樣本。
 
+每個量測、處理或寫出音訊的函式，收的都是 `(frames,)` 或 `(frames, channels)`。有兩列
+以上、而且欄數比列數多的陣列是聲道在前，會引發 `ValueError`，訊息會說要先轉置；
+因為沿著錯的軸濾波或裁切，出來的東西看起來仍然像音訊。只有一列的 `(1, n)`
+是一個聲道、`n` 個樣本，只有一欄的 `(n, 1)` 也是。
+
 `file_load` 讀不了檔案時，會改成引發寫明路徑的
 [`AudioIOError`][kudio.exceptions.AudioIOError]，所以一個
-`except kudio.AudioIOError` 就能攔下所有載入失敗。它和 kudio 的每個錯誤
-類別一樣，繼承自 [`KudioError`][kudio.exceptions.KudioError]。參數錯誤
-是呼叫寫錯，不是檔案有問題，所以是單純的 `ValueError`：例如這裡的
-`sr=0`、給 `resample` 的取樣率為零、給 `convert_folder` 同時傳 `peak=`
-和 `lufs=`。
+`except kudio.AudioIOError` 就能攔下所有載入失敗。訊息會說明路徑出了什麼
+問題：檔案不存在、它是資料夾、檔案是空的，或 soundfile、作業系統給的原因。
+它和 kudio 的每個錯誤類別一樣，繼承自
+[`KudioError`][kudio.exceptions.KudioError]。參數錯誤是呼叫寫錯，不是檔案
+有問題，所以是單純的 `ValueError`：例如取樣率是零、NaN、文字或 `True`，
+給檔案的取樣率是 16000.5，給 `convert_folder` 同時傳 `peak=` 和 `lufs=`。
+
+### soundfile 不讀的格式 {#formats-soundfile-does-not-read}
+
+m4a、mp4、aac、webm、3gp、amr 和 wma 由
+[audioread](https://github.com/beetbox/audioread) 和
+[ffmpeg](https://ffmpeg.org/) 解碼，kudio 每個讀檔的地方都一樣：
+`file_load`、`audio_info`、[`play_audio`][kudio.core.stream.play_audio]、
+[`Synthesizer`][kudio.core.synth.Synthesizer] 和命令列。這兩樣都不隨
+kudio 安裝。ffmpeg 要在 PATH 上找得到，audioread 則是一個套件：
+
+```bash
+pip install audioread
+```
+
+librosa 0.10 和 0.11 會自己裝 audioread，所以 Python 3.11 以下已經有了。
+Python 3.12 以上 pip 會選 librosa 1.0，它不裝。兩樣缺一，`AudioIOError`
+會寫出缺的是哪一樣。
+
+解出來的是 16 位元的樣本，而且編碼器會把最後一個區塊補滿。2 秒的聲音，
+從 AAC 裸流讀回來是 2.043 秒，AMR 是 2.020 秒，WMA 是 1.997 秒；m4a 的
+容器會記錄補了多少，讀回來是 2.000 秒。這種檔案要兩兩逐點比較之前，
+請先[對齊](metrics.md#finding-the-delay)。`audio_info` 量峰值時，frames
+是實際解出的數量；`peak=False` 則取檔頭的長度，只準到 0.1 秒。
+`subtype` 和 `format` 是 `None`。
+
+ffmpeg 解到哪裡算哪裡，就當那是整個檔案，所以有兩種檔案會讀進來並發出
+警告：
+
+- 解出來的比檔頭說的少，例如串流用的 m4a 只剩一半。MP4 和 Matroska 會記
+  錄長度，對得出來；AAC 和 AMR 裸流沒有，截斷了就只是一段比較短的錄音。
+- 副檔名是 soundfile 讀的格式，soundfile 卻認不得：掉了開頭的 FLAC，或
+  被取名成 `.mp3` 的 m4a。
+
+soundfile 認得的檔案就留在 soundfile。截成一半的 FLAC 會引發寫出 soundfile
+原因的 `AudioIOError`；同一個檔案 ffmpeg 只解得出 17647 個 frame 裡的
+8192 個。
+
+### 截斷的檔案 {#a-file-that-was-cut-short}
+
+複製到一半中斷的 WAV，檔頭寫的還是完整的長度。soundfile 有多少讀多少，6 秒的
+錄音讀回來就成了 3 秒：
+
+```text
+take.wav: the header says 6.00 s and 3.00 s are there, 96022 bytes fewer. The file may have been cut short.
+```
+
+`file_load`、`audio_info` 和其他會讀檔的地方都會這樣警告，並回傳讀得到的部分。
+看檔頭和檔案大小就夠了，所以 `audio_info(path, peak=False)` 不讀任何樣本也會
+警告。程式邊算邊輸出、回不去改檔頭時留下的長度，也就是 0 或 0x7FFFF000 以上，
+不代表什麼，不拿來判斷；只差一個區塊也不算。
+
+只有 RIFF WAV 會拿檔頭來核對。截斷的 FLAC 會引發例外，m4a 的警告
+[如上](#formats-soundfile-does-not-read)；AIFF、MP3、Ogg、RF64 和 W64 則是有多少
+回傳多少，不會有任何提示。
 
 ## 寫入檔案 {#writing-a-file}
 
@@ -148,6 +209,10 @@ kudio.save_wave("out/clip8k.wav", y, sr, d_sample=8000)       # resampled first
 [`save_wave`][kudio.core.io.save_wave] 會建立不存在的資料夾，已經存在的
 檔案則直接取代，不會先問；要找沒被佔用的檔名，請用
 [`check_file`][kudio.core.io.check_file]（[見下文](#picking-a-name-that-is-free)）。
+陣列如果不是 `(frames,)`，也不是 1 到 1024 聲道的 `(frames, channels)`，會是
+`ValueError`。檔案會先寫在旁邊，寫完整了才取代舊檔，所以寫入失敗時舊檔不動：
+9 聲道的 FLAC、磁碟滿了、按了 Ctrl-C 都一樣。在 Windows 上，別的程式開著的檔案
+無法取代，改為把寫好的內容覆蓋進去；只有這種情況，磁碟出錯時舊檔會受損。
 soundfile 依副檔名決定容器格式，subtype 必須是那個容器接受的：FLAC
 接受 `PCM_16` 和 `PCM_24`，不接受 `FLOAT`。
 
@@ -203,11 +268,17 @@ soundfile 0.13.1 和 0.14 都會把削峰打開，但我不想依賴特定版本
 float32；編輯函式和 `normalize_lufs` 則回傳和輸入相同的型別，經過捨入，
 並在滿刻度削峰。
 
+64 位元整數會引發 `ValueError`。沒有音檔存 64 位元整數；整數的 list 和
+`astype(int)` 在 numpy 裡會變成這種型別，而以它的滿刻度來看，16-bit 樣本低了
+288 dB，量起來就是靜音。請照讀進來時的型別傳樣本，或傳浮點數。
+
 ### NaN 和 inf {#nan-and-inf}
 
-含有 NaN 或 inf 樣本的檔案還是載得進來，因為修復語料庫得先從讀取開始；
-同時會有一則警告寫出檔名和這種樣本的數量。之後從這個片段量出的大部分
-數值都會是 `nan`。對這種檔案或陣列，`audio_info` 給的峰值是 `nan` 並
+含有 NaN 或 inf 樣本的檔案，以它本身的取樣率還是載得進來，因為修復語料庫
+得先從讀取開始；同時會有一則警告寫出檔名和這種樣本的數量。指定別的取樣率
+則是寫出數量的 `AudioIOError`：重新取樣器會把每個這種樣本抹到前後的樣本，
+所以請先修好，再用 [`resample`][kudio.core.io.resample]。從這種片段量出的
+大部分數值都會是 `nan`。對這種檔案或陣列，`audio_info` 給的峰值是 `nan` 並
 發出警告，用 `math.isfinite(info.peak)` 就能抓到。響度函式也會警告，
 [`audio_report`][kudio.core.report.audio_report] 則把這些壞樣本當成唯一
 的問題回報（[檢查錄音](inspection.md)）。
@@ -230,12 +301,13 @@ print(len(y), len(y8), same is y)                 # 56000 28000 True
 記憶體中的對應版本，用的是同一個 `soxr_hq` 重新取樣器；拿 1 秒的純音
 測試，兩者得到的樣本完全相同。取樣率相同時，它回傳的就是你傳進去的那個
 陣列，而不是複本，所以可以不加判斷直接呼叫；不過如果原本的陣列還要用，
-就地修改結果之前請先複製一份。
+就地修改結果之前請先複製一份。這裡的取樣率不必是整數，例如 22254.5 Hz，
+因為陣列可以是任何取樣率；檔案的取樣率則必須是整數。
 
 `(frames, channels)` 陣列是沿著 frames 軸重新取樣，所以 16 kHz、1 秒
 的立體聲片段，重新取樣到 8 kHz 會得到 `(8000, 2)`，
 `save_wave(..., d_sample=)` 也一樣。整數陣列回傳時維持原本的型別，捨入
-到最接近的值，而不是往零截斷。
+到最接近的值，而不是往零截斷，並限制在該型別的範圍內。
 
 ## 蒐集檔案 {#gathering-files}
 
@@ -364,7 +436,9 @@ ITU-R BS.1770 方式量測的整合響度；-23 LUFS 是 EBU R 128 的廣播目�
 
 響度是以 400 ms 的區塊量測，所以用 `lufs=` 時，短於 0.4 秒的檔案（不論
 是裁切前還是裁切後）會帶著 `FeatureError` 進到 `failed`；`peak=` 沒有
-最短長度的限制。數位靜音不論用哪一種都照原樣寫出。另外，響度正規化只是
+最短長度的限制。數位靜音不論用哪一種都照原樣寫出；用 `lufs=` 時，從頭到尾
+沒有高過 BS.1770 那道 -70 LUFS 閘門的檔案也照原樣寫出並發出警告，因為它沒有
+響度可以拿來換算。另外，響度正規化只是
 套用一個增益，不做別的，所以一個很安靜、卻有一個大聲暫態的檔案，可能會
 被推過滿刻度：`normalize_lufs` 會警告，預設的 `PCM_16` 輸出會把它削掉，
 所以請寫成 `FLOAT`，或把目標訂低一點。量測工具在[檢查錄音](inspection.md)，
@@ -483,6 +557,11 @@ take.v2_2.wav
 清單背後維護的登錄表：每個名稱對應到它的來源檔案、以清單形式存放的波形
 （每個聲道一個陣列；用 `add_local_file` 加入的檔案則是一個單聲道陣列）、
 取樣率和聲道數。在腳本裡，直接用陣列和 `save_wave` 比較簡單。
+
+`add_new_file(name, wave=[y], sr=sr, ch=1)` 加入一個片段，波形放在只有一個
+陣列的清單裡，各聲道交錯排列。名稱已經被佔用時會保留原本的片段，加上
+`override=True` 才會換成新的。沒有放進清單、直接給陣列會引發 `ValueError`，
+原本的片段不受影響。
 
 `save_all(dst_path="session/")` 會把每個片段寫進那個資料夾，名為
 `clip.quiet` 的片段寫成 `session/clip.quiet.wav`。沒有 `dst_path` 時，

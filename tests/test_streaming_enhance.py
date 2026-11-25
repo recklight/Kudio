@@ -187,7 +187,7 @@ def test_an_unknown_method_or_parameter_is_refused():
         kudio.StreamEnhancer(SR, 'telepathy')
     with pytest.raises(FeatureError, match="does not take"):
         kudio.StreamEnhancer(SR, 'wiener', q=0.4)
-    with pytest.raises(FeatureError, match="positive rate"):
+    with pytest.raises(FeatureError, match="positive sample rate"):
         kudio.StreamEnhancer(0)
 
 

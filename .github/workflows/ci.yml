@@ -61,6 +61,32 @@ jobs:
       - name: Run tests
         run: pytest -q
 
+  compressed:
+    # m4a, aac, webm and the rest of what soundfile does not read, against a
+    # real ffmpeg. On the legs above the tests of it run on a stand-in for
+    # audioread alone. Python 3.13 because librosa 1.0, which installs there,
+    # does not bring audioread: what pip installs here is all there is.
+    runs-on: ubuntu-latest
+    env:
+      # a test that skips for want of ffmpeg or audioread fails instead: a job
+      # whose every real file skipped would otherwise pass and prove nothing
+      KUDIO_REQUIRE_FFMPEG: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Install with audioread
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev,viz] audioread
+      - name: Read every compressed format (they must run, not skip)
+        run: pytest -rs tests/test_compressed.py
+
   docs:
     # The documentation site, built strict on every push and pull request: a
     # docstring that breaks the build, or a link to something that no longer
@@ -109,7 +135,7 @@ jobs:
 
   publish:
     # build sdist+wheel and upload to PyPI when a v* tag is pushed
-    needs: [test, backends]
+    needs: [test, backends, compressed]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: pypi

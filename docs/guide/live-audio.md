@@ -369,8 +369,10 @@ array goes through PyAudio, which blocks until the end. Either way a
 `(frames, channels)` array plays on as many channels. With neither installed,
 `play_audio` raises `DependencyError`.
 
-A path is read with soundfile, so anything `file_load` opens plays, FLAC and
-FLOAT WAV included, and a file that cannot be read returns a message. An open
+A path is read the way `file_load` reads one, so whatever that opens plays:
+FLAC and FLOAT WAV, and
+[with ffmpeg](audio-files.md#formats-soundfile-does-not-read) m4a and webm. A
+file that cannot be read returns a message, and the reason is logged. An open
 `wave.Wave_read` goes to PyAudio as it is; a 32-bit integer file plays as
 32-bit integers there, although PyAudio would take that sample width for
 float32 left to itself.

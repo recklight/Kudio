@@ -28,7 +28,9 @@ two folders laid out alike pair up file for file. Every file in a format
 soundfile reads is taken, by its suffix (``.wav``, ``.flac``, ``.ogg``,
 ``.mp3``, ``.aiff`` and the rest of ``soundfile.available_formats()``), in
 every subfolder and whatever the case of the suffix; raw PCM is not, since
-it cannot be read without its rate and encoding. Any other file whose name
+it cannot be read without its rate and encoding. m4a, aac and webm, which
+:func:`kudio.file_load` decodes with ffmpeg, are not looked for either, and can
+be named in a list or a dict. Any other file whose name
 is no id of the folder is named in a warning, so that no utterance leaves
 the set unsaid. Two files that come to one id, ``001.wav`` and
 ``001.flac``, are refused, since either could be the one meant. A list is a
@@ -501,11 +503,13 @@ def _installed(names: Sequence[str]) -> None:
 
 def _set_rate(files: Iterable[Path], what: str) -> int:
     """The one rate the readable files of *what* share, from their headers."""
-    import soundfile as sf
+    from kudio.core.io import audio_info
     counts: Dict[int, int] = {}
     for path in files:
         try:
-            rate = int(sf.info(str(path)).samplerate)
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                rate = audio_info(path, peak=False).sr
         except Exception:                       # noqa: BLE001 -- said per item later
             continue
         counts[rate] = counts.get(rate, 0) + 1

@@ -304,6 +304,13 @@ def test_the_length_and_the_rate_survive():
     assert len(kudio.telephone(speech[:1000], SR)) == 1000
 
 
+def test_a_rate_that_is_not_whole_goes_down_the_line_too():
+    """22254.5 Hz, say, which an array can be at and a file cannot."""
+    speech = make_speech()
+    assert len(kudio.telephone(speech, 22254.5)) == len(speech)
+    assert len(kudio.apply_channel(speech, 22254.5, "telephone")) == len(speech)
+
+
 def test_the_rumble_below_the_passband_is_gone():
     sr = 16000
     t = np.arange(sr * 2) / sr
@@ -356,9 +363,9 @@ def test_stereo_is_refused_rather_than_flattened(call):
     (lambda: kudio.dropouts(make_speech(), SR, loss=-0.1), "loss"),
     (lambda: kudio.dropouts(make_speech(), SR, packet_ms=0), "packet_ms"),
     (lambda: kudio.dropouts(make_speech(), SR, conceal="magic"), "concealment"),
-    (lambda: kudio.dropouts(make_speech(), 0), "positive rate"),
+    (lambda: kudio.dropouts(make_speech(), 0), "positive sample rate"),
     (lambda: kudio.telephone(make_speech(), SR, codec="opus"), "codec"),
-    (lambda: kudio.telephone(make_speech(), 0), "positive rate"),
+    (lambda: kudio.telephone(make_speech(), 0), "positive sample rate"),
 ])
 def test_impossible_settings_are_refused(call, match):
     with pytest.raises(FeatureError, match=match):
@@ -608,3 +615,51 @@ def test_dither_brings_a_quarter_step_sine_back_at_any_depth(bits):
     gains = [float(np.dot(kudio.bit_depth(quiet, bits, dither=True, seed=s), quiet)
                    / np.dot(quiet, quiet)) for s in range(10)]
     assert abs(np.mean(gains) - 1.0) < 0.05
+
+
+# -- settings that are not numbers -----------------------------------------------------
+NOT_BITS = [8.5, float('nan'), float('inf'), True, '8', None, 1, 0, -8, 2000, [8]]
+NOT_A_LOSS = [float('nan'), float('inf'), True, False, '0.05', None, -0.1, 1.5]
+NOT_A_BURST = [float('nan'), float('inf'), True, '4', 0.5, 0, -1]
+NOT_A_PACKET = [float('nan'), float('inf'), True, '20', None, 0, -20]
+
+
+@pytest.mark.parametrize("name, values, call", [
+    ('bits', NOT_BITS, lambda v: kudio.mu_law(make_speech(), bits=v)),
+    ('bits', NOT_BITS, lambda v: kudio.a_law(make_speech(), bits=v)),
+    ('bits', NOT_BITS, lambda v: kudio.bit_depth(make_speech(), bits=v)),
+    ('bits', [v for v in NOT_BITS if v is not None], lambda v: kudio.channel_spec({'bits': v})),
+    ('loss', NOT_A_LOSS, lambda v: kudio.dropouts(make_speech(), SR, loss=v)),
+    ('loss', NOT_A_LOSS, lambda v: kudio.channel_spec({'codec': 'mu_law', 'loss': v})),
+    ('burst', NOT_A_BURST, lambda v: kudio.dropouts(make_speech(), SR, burst=v)),
+    ('burst', NOT_A_BURST, lambda v: kudio.channel_spec({'loss': 0.1, 'burst': v})),
+    ('packet_ms', NOT_A_PACKET, lambda v: kudio.dropouts(make_speech(), SR, packet_ms=v)),
+    ('packet_ms', NOT_A_PACKET, lambda v: kudio.channel_spec({'loss': 0.1, 'packet_ms': v})),
+], ids=['mu_law', 'a_law', 'bit_depth', 'channel_spec(bits)', 'dropouts(loss)',
+        'channel_spec(loss)', 'dropouts(burst)', 'channel_spec(burst)', 'dropouts(packet_ms)',
+        'channel_spec(packet_ms)'])
+def test_a_setting_that_is_not_one_number_in_its_range_is_refused(name, values, call):
+    """8.9 bits became 8 and were labelled so, a burst of nan lost packets one
+    at a time, and a loss of True lost every one of them."""
+    for value in values:
+        with pytest.raises(FeatureError, match=rf"{name} (must|is)") as refused:
+            call(value)
+        assert repr(value) in str(refused.value)
+
+
+@pytest.mark.parametrize("eight", [8.0, np.int64(8), np.float32(8.0), np.array(8)])
+def test_eight_bits_of_any_type_are_eight_bits(eight):
+    y = make_speech()
+    for law in (kudio.mu_law, kudio.a_law, kudio.bit_depth):
+        np.testing.assert_array_equal(law(y, bits=eight), law(y, bits=8))
+    assert kudio.channel_tag({'bits': eight}) == '8bit'
+    np.testing.assert_array_equal(kudio.apply_channel(y, SR, {'bits': eight}),
+                                  kudio.apply_channel(y, SR, {'bits': 8}))
+
+
+def test_numpy_settings_drop_the_packets_python_ones_do():
+    y = make_speech()
+    np.testing.assert_array_equal(
+        kudio.dropouts(y, SR, loss=np.float64(0.1), burst=np.int64(3), packet_ms=np.float64(20),
+                       seed=1),
+        kudio.dropouts(y, SR, loss=0.1, burst=3, packet_ms=20.0, seed=1))

@@ -367,8 +367,9 @@ print(np.count_nonzero(right == 0.0), np.count_nonzero(wrong == 0.0))
 順序正確時，遺失的 15 個封包是 4800 個完全靜音的樣本，每個封包 320 個；順序
 錯誤時，沒有一個樣本是零。
 
-`channel_spec` 會拒絕未知的設定、編解碼器或補償方式、0 到 1 以外的遺失比例、少於
-2 的位元數、小於 1 的 `burst`，以及零或負的 `packet_ms`。`apply_channel` 和
+`channel_spec` 會拒絕未知的設定、編解碼器或補償方式、0 到 1 以外的遺失比例、不是 2 到
+64 之間整數的位元數、小於 1 的 `burst`，以及零或負的 `packet_ms`；這四個只要不是一個有限
+的數字，例如 NaN、`True` 或文字，也一樣拒絕。`apply_channel` 和
 `Synthesizer` 會在任何音訊通過之前先呼叫它，所以給了錯誤鏈結的 `Synthesizer`
 在建立時就會失敗，不會等到第一個檔案。規格裡的 `band` 只有開或關；要用其他邊界
 頻率，請自己呼叫 `telephone(..., band=)`。

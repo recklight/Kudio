@@ -175,3 +175,34 @@ def test_a_reference_without_speech_is_nan_with_one_warning(fn):
     assert math.isnan(value)
     assert len(said) == 1 and said[0].startswith(f"{fn.__name__}(): ")
     assert said[0].endswith("; scored nan")
+
+
+def test_a_byte_order_mark_does_not_hide_the_first_turn(tmp_path):
+    """"\ufeffSPEAKER" is no line type, and lines of other types are skipped:
+    a perfect system would score a DER of 1 against what is left."""
+    line = "SPEAKER rec 1 {} 1.0 <NA> <NA> {} <NA> <NA>\n"
+    path = tmp_path / "ref.rttm"
+    path.write_text(line.format(0.0, "A") + line.format(2.0, "B"), encoding="utf-8-sig")
+    turns = kudio.load_rttm(path)
+    assert turns == {"rec": [Turn(0.0, 1.0, "A"), Turn(2.0, 3.0, "B")]}
+    assert der([(0.0, 1.0, "x"), (2.0, 3.0, "y")], turns["rec"]) == 0.0
+
+
+@pytest.mark.parametrize("onset, duration, said", [
+    ("nan", "1.0", "have to be finite, got 'nan' and '1.0'"),
+    ("0.0", "inf", "have to be finite, got '0.0' and 'inf'"),
+    ("-inf", "1.0", "have to be finite"),
+    ("1.0", "-0.5", "the duration cannot be negative, got '-0.5'"),
+])
+def test_a_turn_that_cannot_be_is_refused_by_line(tmp_path, onset, duration, said):
+    path = tmp_path / "ref.rttm"
+    line = "SPEAKER rec 1 {} {} <NA> <NA> A <NA> <NA>\n"
+    path.write_text(line.format(0.0, 1.0) + line.format(onset, duration), encoding="utf-8")
+    with pytest.raises(ValueError, match=rf"^load_rttm\(\): line 2 of .*ref\.rttm: .*{said}"):
+        kudio.load_rttm(path)
+
+
+def test_a_turn_of_no_length_is_a_turn(tmp_path):
+    path = tmp_path / "ref.rttm"
+    path.write_text("SPEAKER rec 1 1.5 0.0 <NA> <NA> A <NA> <NA>\n", encoding="utf-8")
+    assert kudio.load_rttm(path) == {"rec": [Turn(1.5, 1.5, "A")]}

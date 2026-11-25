@@ -1,8 +1,9 @@
 # Audio files
 
 The functions on this page read and write through
-[soundfile](https://python-soundfile.readthedocs.io/), and every waveform they
-load is a float32 NumPy array in which ±1.0 is full scale. Mono audio is a 1-D
+[soundfile](https://python-soundfile.readthedocs.io/), with ffmpeg for
+[what it does not read](#formats-soundfile-does-not-read), and every waveform
+they load is a float32 NumPy array in which ±1.0 is full scale. Mono audio is a 1-D
 array. Anything with more channels is shaped `(frames, channels)`, a frame
 being one sample from every channel: soundfile's layout, and the one
 [`loudness`][kudio.core.loudness.loudness] expects.
@@ -89,6 +90,8 @@ Everything in [`AudioInfo`][kudio.core.io.AudioInfo] but the peak comes from
 the header. The peak needs the samples, read 2^20 frames at a time so a long file
 is never held whole; `peak=False` skips that read for a quick pass over a
 large corpus, and `peak` is then `None`, printed as "peak not measured".
+A WAV that ends before its header says is
+[named in a warning](#a-file-that-was-cut-short).
 [`audio_info`][kudio.core.io.audio_info] takes an array too, read channels
 last, with `sr=` passed in because a waveform does not carry its rate.
 `kudio info clip.wav` prints the same from the shell
@@ -105,17 +108,15 @@ print(y8.shape, y8.dtype, sr8)                    # (28000,) float32 8000
 ```
 
 With the default `sr=None`, [`file_load`][kudio.core.io.file_load] keeps the
-file's own rate and reads through soundfile alone. Ask for a rate and the file
-goes through librosa instead, resampled with its `soxr_hq` resampler. With
-librosa 1.0 both paths open whatever the installed libsndfile opens;
-`soundfile.available_formats()` lists it, and with soundfile 0.14 that
-includes WAV, FLAC, OGG, MP3, AIFF and NIST SPHERE. librosa 0.10 and 0.11,
-which kudio still accepts, fall back to audioread on the `sr=` path when
-soundfile cannot open a file, so with them a file can load with `sr=` and fail
-without it.
+file's own rate. Asked for another, it resamples with librosa's `soxr_hq`
+resampler; a file that is at that rate already comes back as it is. Either way
+the file is read with soundfile, which opens whatever the installed libsndfile
+opens. `soundfile.available_formats()` lists it, and with soundfile 0.14 that
+includes WAV, FLAC, OGG, MP3, AIFF and NIST SPHERE. m4a, aac and webm are not
+on the list and [need two more things](#formats-soundfile-does-not-read).
 
 `mono=True`, the default, averages the channels. With `mono=False` they are
-kept, channels last, whichever of the two paths the file took:
+kept, channels last, with a rate or without one:
 
 ```python
 y, sr = kudio.file_load("stereo.wav", mono=False)
@@ -129,13 +130,82 @@ print(y.shape, y8.shape)                          # (16000, 2) (8000, 2)
     frame of every channel, and code that indexes it the librosa way runs
     without an error and reads two samples.
 
+Every function that measures, changes or writes audio takes `(frames,)` or
+`(frames, channels)`. An array of two rows or more with more columns than rows
+is channels first, and is refused with a `ValueError` that says to transpose
+it, since filtered or trimmed along the wrong axis it comes back looking like
+audio. A single row, `(1, n)`, is one channel of `n` samples, and so is a
+column, `(n, 1)`.
+
 `file_load` turns a file it cannot read into an
 [`AudioIOError`][kudio.exceptions.AudioIOError] naming the path, so one
-`except kudio.AudioIOError` catches every failed load. Like every kudio error
-type it derives from [`KudioError`][kudio.exceptions.KudioError]. A bad
+`except kudio.AudioIOError` catches every failed load. The message says what
+is wrong with the path: there is no such file, it is a folder, the file is
+empty, or the reason soundfile or the operating system gives. Like every kudio
+error type it derives from [`KudioError`][kudio.exceptions.KudioError]. A bad
 argument is a mistake in the call rather than in the file, and is a plain
-`ValueError`: `sr=0` here, a rate of zero for `resample`, `peak=` and `lufs=`
-together for `convert_folder`.
+`ValueError`: a rate that is zero, NaN, text or `True`, a rate of 16000.5 for
+a file, `peak=` and `lufs=` together for `convert_folder`.
+
+### Formats soundfile does not read
+
+m4a, mp4, aac, webm, 3gp, amr and wma are decoded with
+[audioread](https://github.com/beetbox/audioread) and
+[ffmpeg](https://ffmpeg.org/) wherever kudio reads a file: in `file_load`,
+`audio_info`, [`play_audio`][kudio.core.stream.play_audio], the
+[`Synthesizer`][kudio.core.synth.Synthesizer] and the command line. Neither
+comes with kudio. ffmpeg has to be on the PATH, and audioread is one package:
+
+```bash
+pip install audioread
+```
+
+librosa 0.10 and 0.11 install audioread themselves, so on Python 3.11 and
+older it is there already. librosa 1.0, which pip picks on Python 3.12 and
+later, does not. Without one of the two, the `AudioIOError` says which one is
+missing.
+
+The samples come back as 16 bits hold them, and an encoder pads the last of its
+blocks. 2 s of sound came back as 2.043 s from a bare AAC stream, as 2.020 s
+from AMR and as 1.997 s from WMA; from an m4a, whose container says how much of
+it is padding, as 2.000 s. [Line two such files up](metrics.md#finding-the-delay) before
+comparing them sample by sample. `audio_info` counts the frames it decoded for
+the peak; with `peak=False` they come from the header, to a tenth of a second.
+`subtype` and `format` are `None`.
+
+ffmpeg decodes as far as a file goes and calls that the file, so two kinds of
+file are read with a warning:
+
+- One that gives less than its header promises, like half of an m4a made for
+  streaming. MP4 and Matroska say how long they are and can be held to it. A
+  bare AAC or AMR stream does not: cut short, it is a shorter recording.
+- One whose name ends in a format soundfile reads and which soundfile does not
+  recognise: a FLAC that lost its beginning, or an m4a that somebody called
+  `.mp3`.
+
+A file soundfile does recognise stays with soundfile. A FLAC cut to half raises
+an `AudioIOError` with soundfile's reason; ffmpeg made 8192 of its 17647 frames
+of it.
+
+### A file that was cut short
+
+A copy that broke off leaves a WAV whose header still gives the whole length.
+soundfile reads what is there, and a take of 6 s comes back as one of 3 s:
+
+```text
+take.wav: the header says 6.00 s and 3.00 s are there, 96022 bytes fewer. The file may have been cut short.
+```
+
+`file_load`, `audio_info` and the rest of what reads a file warn like that, and
+give back what is there. The header and the size of the file are enough to
+tell, so `audio_info(path, peak=False)` says it as well, without reading a
+sample. A length that a program left there because it streamed its output and
+could not go back, 0 or 0x7FFFF000 and up, says nothing and is not held against
+the file; neither is a difference of one block.
+
+Only a RIFF WAV is held to its header. A FLAC that was cut raises, an m4a is
+warned about [as above](#formats-soundfile-does-not-read), and AIFF, MP3, Ogg,
+RF64 and W64 come back as far as they go, without a word.
 
 ## Writing a file
 
@@ -150,7 +220,13 @@ kudio.save_wave("out/clip8k.wav", y, sr, d_sample=8000)       # resampled first
 
 [`save_wave`][kudio.core.io.save_wave] creates missing folders and replaces an
 existing file without asking; [`check_file`][kudio.core.io.check_file]
-([below](#picking-a-name-that-is-free)) finds a free name. soundfile picks the
+([below](#picking-a-name-that-is-free)) finds a free name. An array that is
+neither `(frames,)` nor `(frames, channels)` with 1 to 1024 channels is a
+`ValueError`. The file is written beside its name and takes the place of the
+old one when it is whole, so a write that fails leaves the old one as it was:
+nine channels of FLAC, a full disk, Ctrl-C. On Windows a file that is open in
+another program cannot be replaced; the finished one is copied over it instead,
+which is the one case in which a disk error can damage it. soundfile picks the
 container from the extension, and the subtype has to be one that container
 takes: FLAC takes `PCM_16` and `PCM_24` but not `FLOAT`.
 
@@ -208,11 +284,19 @@ clip measured 90.3 dB louder, 20 log10 32768. What returns float32 still does;
 the editing functions and `normalize_lufs` hand back the input's type,
 rounded and clipped at full scale.
 
+64-bit integers are refused with a `ValueError`. No audio file holds them;
+numpy gives them for a list of ints and for `astype(int)`, and on their scale
+16-bit samples sit 288 dB down, where a clip measures as silence. Pass the
+samples as the type they were read as, or as float.
+
 ### NaN and inf
 
-A file holding NaN or inf samples still loads, because repairing a corpus
-starts with reading it, and a warning names the file and counts them. Most
-measurements taken from that clip afterwards come back `nan`. `audio_info`
+A file holding NaN or inf samples still loads at its own rate, because
+repairing a corpus starts with reading it, and a warning names the file and
+counts them. At any other rate it is an `AudioIOError` with the count: a
+resampler spreads each of those samples over its neighbours, so repair the
+clip first and [`resample`][kudio.core.io.resample] it then. Most
+measurements taken from such a clip come back `nan`. `audio_info`
 gives such a file, or such an array, a peak of `nan` with a warning, and
 `math.isfinite(info.peak)` catches it. The loudness functions warn too, and
 [`audio_report`][kudio.core.report.audio_report] reports the bad samples as
@@ -236,12 +320,14 @@ print(len(y), len(y8), same is y)                 # 56000 28000 True
 `file_load(path, sr=...)` and uses the same `soxr_hq` resampler; on a 1 s tone
 the two gave identical samples. At equal rates it returns the array you passed
 in, not a copy, so it is safe to call unconditionally, but copy before
-changing the result in place if the original still matters.
+changing the result in place if the original still matters. The rates need not
+be whole here, 22254.5 Hz for one, since an array can be at any rate; a file's
+has to be.
 
 A `(frames, channels)` array is resampled along its frames, so a 1 s stereo
 clip at 16 kHz comes back `(8000, 2)` at 8 kHz, and `save_wave(..., d_sample=)`
 does the same. An integer array comes back in its own type, rounded to the
-nearest value rather than cut towards zero.
+nearest value rather than cut towards zero and held to the type's range.
 
 ## Gathering files
 
@@ -372,7 +458,9 @@ two files with the same peak need not sound equally loud. Passing both raises
 
 Loudness is measured over 400 ms blocks, so a file shorter than 0.4 s, before
 or after trimming, lands in `failed` with a `FeatureError` under `lufs=`;
-`peak=` has no minimum. Digital silence is written as it is by either. And
+`peak=` has no minimum. Digital silence is written as it is by either, and so,
+under `lufs=` and with a warning, is a file that never rises above the -70 LUFS
+gate of BS.1770, which has no loudness to scale from. And
 loudness normalisation is a gain and nothing else, so a quiet file with one
 loud transient can be pushed past full scale: `normalize_lufs` warns, and the
 default `PCM_16` output clips it, so write `FLOAT` or aim lower.
@@ -497,6 +585,11 @@ keeps behind its clip list: each name maps to the file it came from, the
 waveform as a list with one array per channel (one mono array for a file added
 with `add_local_file`), the rate and the channel count. In a script, arrays
 and `save_wave` are simpler.
+
+`add_new_file(name, wave=[y], sr=sr, ch=1)` adds a clip, its waveform as a list
+of one array with the channels interleaved. A name that is taken keeps its
+clip, or with `override=True` gives it up to the new one. A bare array instead
+of the list is a `ValueError`, and the clip already there stays.
 
 `save_all(dst_path="session/")` writes every clip into that folder, a clip
 named `clip.quiet` to `session/clip.quiet.wav`. Without `dst_path` it writes

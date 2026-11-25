@@ -18,6 +18,11 @@ below, so a missing extra shows up when you call the function that needs it
 (for the plotting helpers, when you import `kudio.util.visual`), and not
 before.
 
+WAV, FLAC, OGG, MP3, AIFF and the other formats libsndfile knows are read with
+that. m4a, aac, webm and the like take audioread (`pip install audioread`) and
+ffmpeg on the PATH, neither of which comes with kudio
+([Audio files](guide/audio-files.md#formats-soundfile-does-not-read)).
+
 numpy is held below 2.6. The limit is numba's, not mine: librosa depends on
 numba, numba caps numpy, and asking pip for a newer numpy than numba accepts
 only gives it a problem it cannot solve. The cap moves when numba's does.
@@ -308,14 +313,14 @@ kudio's own exception classes all derive from
 | Class | Raised when |
 |---|---|
 | [`AudioIOError`][kudio.exceptions.AudioIOError] | a file cannot be read or written: `file_load`, `audio_info`, `save_wave` and what is built on them |
-| [`FeatureError`][kudio.exceptions.FeatureError] | a transform or measurement refuses its input: wrong shape, too short, an unknown method or parameter |
+| [`FeatureError`][kudio.exceptions.FeatureError] | a transform or measurement refuses its input: wrong shape, too short, an unknown method or parameter; it is a `ValueError` as well |
 | [`DeviceError`][kudio.exceptions.DeviceError] | `StreamRecorder` finds no usable input device, or sounddevice is installed but the system has no PortAudio library |
 | [`SynthesisError`][kudio.exceptions.SynthesisError] | [`Synthesizer`][kudio.core.synth.Synthesizer] will not empty a folder holding its inputs, the working directory, your home directory or a filesystem root, or meets a silent noise or clean file it cannot set an SNR with |
 | [`DependencyError`][kudio.exceptions.DependencyError] | an optional package is missing; it is an `ImportError` as well |
 
 Nothing in kudio raises
 [`UnsupportedFormatError`][kudio.exceptions.UnsupportedFormatError], a
-subclass of `AudioIOError`. A file soundfile cannot read comes back as
+subclass of `AudioIOError`. A file that cannot be read or decoded comes back as
 `AudioIOError` itself, so catch that, for example to skip the unreadable files
 in a batch:
 
@@ -331,8 +336,10 @@ for path in ["noisy.wav", "missing.wav"]:
 skipped missing.wav
 ```
 
-The message names the file and carries soundfile's reason, and soundfile's own
-exception is chained as `__cause__`, so a traceback shows both.
+The message names the file and says what is wrong with it: here that there is
+no such file, for a damaged one what soundfile says, for an m4a without ffmpeg
+that ffmpeg is missing. What was raised underneath is chained as `__cause__`,
+so a traceback shows both.
 
 A `DependencyError` names the extra to install, and keeps the package and the
 extra as attributes. On a machine without `[pesq]`:
@@ -359,10 +366,13 @@ Three kinds of failure fall outside `KudioError`, or only partly inside it:
 - Many argument checks, and a few checks on the data, raise the built-in
   `ValueError` or `TypeError`: an unknown metric name in `score`, two signals
   too different in length to score, a stereo pair handed to a metric, a
-  sample rate of 0 in [`resample`][kudio.core.io.resample] or `file_load`, a
+  sample rate of 0, NaN or `True` in [`resample`][kudio.core.io.resample],
+  `file_load` or `save_wave`, a three-dimensional array for `save_wave`, a
   string where `Synthesizer` expects a list of SNRs, a clean folder with no
   `.wav` file in it. A `Synthesizer` input that does not exist raises
   `FileNotFoundError`. `except kudio.KudioError` catches none of these.
+  `except ValueError` goes the other way: `FeatureError` is one too, so it
+  catches what `vad` or an effect refuses together with what a metric does.
 - A buffer that waited longer than its `timeout=` raises the built-in
   `TimeoutError` ([Recording and live views](guide/live-audio.md)).
 - `play_audio` does not raise when it cannot play something, a missing file

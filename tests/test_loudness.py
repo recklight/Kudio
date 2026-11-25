@@ -439,3 +439,57 @@ def test_the_curve_and_its_range_do_not_read_a_corrupt_clip_as_silence():
 def test_true_peak_refuses_an_oversampling_of_zero():
     with pytest.raises(kudio.FeatureError, match="oversample"):
         kudio.true_peak(np.ones(1600) * 0.5, 16000, oversample=0)
+
+
+# -- quiet is not silent -------------------------------------------------------------
+def _under_the_gate(sr=16000):
+    """Speech-like, with an RMS of about -96 dBFS: something is there, and no
+    400 ms of it reaches -70 LUFS."""
+    return 5e-5 * _speech_like(sr)
+
+
+def test_a_clip_under_the_gate_comes_back_with_a_warning():
+    sr = 16000
+    y = _under_the_gate(sr)
+    assert np.any(y) and loudness(y, sr) == -np.inf
+    with pytest.warns(UserWarning, match=r"^normalize_lufs\(\): the clip has no 400 ms block "
+                                         r"above -70 LUFS, .* peak is -9\d\.\d dBFS\); it was "
+                                         r"not normalised and comes back as it was$") as caught:
+        out = normalize_lufs(y, sr)
+    assert np.array_equal(out, y)
+    assert len(caught) == 1 and caught[0].filename == __file__
+
+
+def test_matching_to_or_from_a_clip_under_the_gate_warns_and_names_it():
+    sr = 16000
+    quiet, loud = _under_the_gate(sr), _speech_like(sr)
+    for y, reference, said in ((quiet, loud, r"^match_loudness\(\): the clip has no "),
+                               (loud, quiet, r"^match_loudness\(\): the reference has no "),
+                               (quiet, quiet, r"the reference has no .*; the clip has no .*; "
+                                              r"the two were not matched")):
+        with pytest.warns(UserWarning, match=said) as caught:
+            assert np.array_equal(match_loudness(y, reference, sr), y)
+        assert len(caught) == 1 and caught[0].filename == __file__
+
+
+@pytest.mark.parametrize("silence", [np.zeros(32000), np.zeros((32000, 2)),
+                                     np.zeros(32000, dtype=np.int16),
+                                     np.full(32000, 128, dtype=np.uint8)])
+def test_digital_silence_is_handed_back_without_a_word(silence, recwarn):
+    """Nobody expects silence to come out at -23 LUFS."""
+    sr = 16000
+    assert np.array_equal(normalize_lufs(silence, sr), silence)
+    assert np.array_equal(match_loudness(silence, _speech_like(sr), sr), silence)
+    assert np.array_equal(match_loudness(_speech_like(sr), silence, sr), _speech_like(sr))
+    assert not recwarn.list
+
+
+def test_the_gate_is_where_the_warning_starts():
+    """A steady tone just over -70 LUFS is normalised, and just under it is not."""
+    sr = 16000
+    tone = _sine(sr=sr)
+    level = loudness(tone, sr)
+    over, under = (tone * 10 ** ((target - level) / 20) for target in (-69.9, -70.1))
+    assert loudness(normalize_lufs(over, sr, lufs=-23.0), sr) == pytest.approx(-23.0, abs=0.01)
+    with pytest.warns(UserWarning, match="it was not normalised"):
+        assert np.array_equal(normalize_lufs(under, sr, lufs=-23.0), under)

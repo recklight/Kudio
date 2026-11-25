@@ -36,7 +36,9 @@ python -m kudio.cli info take.wav   # when the kudio script is not on PATH
   會先平均成一個聲道，所以對立體聲檔案做 `convert` 會寫出單聲道檔。`info` 照實回報
   聲道數，`loudness` 和 `normalize` 則保留各聲道，因為 BS.1770 會把各聲道加權相加，
   立體聲檔案混成單聲道後量起來會低 3 LU。
-- 單一輸入可以是 libsndfile 讀得了的任何格式，WAV 和 FLAC 都行。資料夾模式和 `synth`
+- 單一輸入可以是 libsndfile 讀得了的任何格式，WAV 和 FLAC 都行；裝了 audioread 和 ffmpeg，
+  [m4a、aac、webm 之類](guide/audio-files.md#formats-soundfile-does-not-read)也可以。
+  資料夾模式和 `synth`
   會蒐集每個子資料夾裡結尾為 `.wav` 的檔案，不分副檔名大小寫，所以錄音機產生的
   `ZOOM0001.WAV` 在任何系統上都找得到。
 - 除非指令有 `--subtype`，輸出都是 16-bit PCM，定點格式的輸出超過滿刻度的部分會被削掉。
@@ -159,6 +161,8 @@ encoding  : WAV / PCM_24
 peak      : 0.2922
 ```
 
+m4a 的 encoding 會是 `not read by soundfile, decoded with audioread`。
+
 ### report {#report}
 
 不需要乾淨參考訊號的健康檢查：準位、削峰、直流偏移、靜音、雜訊底、估計的 SNR，以及內容
@@ -235,7 +239,8 @@ true peak     -10.69 dBTP
 每一行標的是視窗的中心時間，所以用 3 秒視窗時，第一行在 1.50 秒。短於 3 秒的片段仍然會
 得到整合響度和真峰值，範圍那一行會說它填不滿視窗；加 `--momentary` 時還會得到 400 ms
 的極值，範圍那一行會說需要 3 秒。短於 400 ms，也就是一個 BS.1770 區塊，連整合響度都沒有，
-指令會以錯誤結束。數位靜音的檔案會印出 `-inf` 並說明，立體聲檔案則照立體聲量測。
+指令會以錯誤結束。數位靜音的檔案會印出 `-inf` 並說明；裡面有東西、卻從頭到尾沒有高過
+-70 LUFS 閘門的檔案也會印出 `-inf`，那一行會寫出它的峰值。立體聲檔案照立體聲量測。
 
 `--target` 用來檢查交付的音量：
 
@@ -330,7 +335,8 @@ wrote mic_a.wav (16000 Hz, PCM_16)
 `mic_a.wav` 只有一個聲道：44.1 kHz 的立體聲原檔在讀入時就被平均了。加 `--recursive` 時，
 兩個參數都是資料夾，工作交給 [`convert_folder`][kudio.core.io.convert_folder]，它會照來源
 資料夾底下的結構建立輸出。`--lufs` 做響度正規化，`--trim-db` 裁掉靜音，兩者都在重新取樣
-之後進行，單一檔案和資料夾都適用。
+之後進行，單一檔案和資料夾都適用。太小聲、沒有響度可言的檔案會照原本的音量寫出，標準錯誤
+上會說明。單一檔案裡沒有任何樣本時是錯誤，什麼都不會寫。
 
 ```bash
 kudio convert raw/ 16k/ --rate 16000 --recursive --lufs -23
@@ -348,8 +354,9 @@ kudio convert raw/ 16k/ --rate 16000 --recursive --lufs -23
 
 把檔案調整到指定的響度 `--lufs`（不給時是 -23），或指定的峰值 `--peak`，兩者不能同時用。
 峰值是線性振幅，大於 0、最多 1，例如 0.99，不是 dBFS；其他的值會以錯誤結束，數位靜音的
-檔案也一樣，因為它沒有準位可以縮放。各聲道會保留。要用耳朵比較兩個檔案之前，該用的是
-響度，因為兩個版本中比較大聲的那個，不管其他地方有什麼差異，往往就會勝出。
+檔案也一樣，因為它沒有準位可以縮放。目標是響度時，從頭到尾沒有高過 -70 LUFS 閘門的檔案也是
+錯誤，因為它沒有響度；這種檔案仍然可以用 `--peak` 縮放。各聲道會保留。要用耳朵比較兩個檔案
+之前，該用的是響度，因為兩個版本中比較大聲的那個，不管其他地方有什麼差異，往往就會勝出。
 
 ```bash
 kudio normalize hot.wav hot_r128.wav --lufs -23
@@ -379,7 +386,8 @@ warning: normalize_lufs: -6.0 LUFS puts the peak at 2.09 (6.4 dBFS over); the si
 ### trim {#trim}
 
 用 [`trim_silence`][kudio.effects.silence.trim_silence] 切掉開頭和結尾的靜音。
-`--top-db`（預設 30）是從最大聲的音框往下算，不是從滿刻度。
+`--top-db`（預設 30）是從最大聲的音框往下算，不是從滿刻度。它必須是大於 0 的有限數字：
+給 0 的話，連最大聲的音框都算靜音。沒有任何樣本的檔案會以錯誤結束，什麼都不會寫。
 
 ```bash
 kudio trim take.wav take_trim.wav --top-db 30
@@ -805,7 +813,8 @@ References: kudio, itut2001p862, itut2003p8621, itut2007p8622, itut2005p862amd2,
 就會在警告裡列出來，免得有語句悄悄離開測試集；`p01_001.wav` 旁邊的逐字稿
 `p01_001.txt` 不會被列出。兩個以上聲道的檔案會平均成一個聲道，和其他指令讀音訊的方式
 一樣，它那一列的 `note` 也會寫明。一邊也可以是清單而不是資料夾：每行一個 `id path`，和 Kaldi 的 `wav.scp` 一樣，或是有 `id` 和
-`path` 兩欄的 `.csv` 檔。清單裡的相對路徑從工作目錄讀起。有 id 在某一邊找不到、同一個
+`path` 兩欄的 `.csv` 檔。清單裡的相對路徑從工作目錄讀起。清單可以列 m4a，由 audioread 和
+ffmpeg 解碼；資料夾則不會去找這種檔案。有 id 在某一邊找不到、同一個
 id 出現兩次、兩個檔案對到同一個 id（`001.wav` 和 `001.flac`），或清單裡的檔案不存在，
 指令都會在評分之前以 2 結束，列出前五個 id，其餘的只算數量。只拿剛好配得起來的那些
 評分，等於用這張表的名字報了另一個測試集。
@@ -970,7 +979,7 @@ PyAudio indices — use with kudio.Recorder / stream readers
 | 指令 | 以 1 結束的時機 |
 |---|---|
 | `report` | 有任何發現：削峰、峰值在滿刻度 0.5 dB 以內或超過、峰值低於 -30 dBFS、直流偏移大於 0.01、內容在奈奎斯特頻率的 90% 以下就結束、靜音超過 60%、估計 SNR 低於 10 dB、數位靜音，或有 NaN 和 inf 樣本 |
-| `loudness --target` | 整合響度和目標差超過 1 LU，或檔案是靜音 |
+| `loudness --target` | 整合響度和目標差超過 1 LU，或檔案是靜音、從頭到尾沒有高過 -70 LUFS 閘門 |
 | `vad` | 找不到語音 |
 | `pitch` | 沒有任何有聲音框 |
 | `align` | 相關係數低於 0.5：不是同一段錄音 |

@@ -12,7 +12,8 @@ from typing import List, Tuple
 import numpy as np
 
 from kudio import _optional
-from kudio._samples import as_float
+from kudio._numbers import real
+from kudio._samples import as_float, channels_last
 from kudio.exceptions import FeatureError
 
 __all__ = ['trim_silence', 'split_on_silence']
@@ -33,6 +34,19 @@ def _time_last(y: np.ndarray) -> np.ndarray:
     return y.T if y.ndim == 2 else y
 
 
+def _check_top_db(top_db, name: str) -> None:
+    """Refuse a *top_db* that is not a distance down from the loudest frame.
+
+    At 0 or below, and at NaN, the loudest frame itself is not above the line,
+    so the whole clip is silence: what comes back is empty, and what is written
+    from it is a file with nothing in it.
+    """
+    value = real(top_db)
+    if value is None or value <= 0:
+        raise FeatureError(f"{name}(): top_db has to be a finite number of dB above "
+                           f"0, got {top_db!r}")
+
+
 def trim_silence(y: np.ndarray, top_db: float = 30.0,
                  frame_length: int = 2048, hop_length: int = 512
                  ) -> Tuple[np.ndarray, Tuple[int, int]]:
@@ -40,11 +54,15 @@ def trim_silence(y: np.ndarray, top_db: float = 30.0,
 
     Returns ``(trimmed_waveform, (start_sample, end_sample))``. The waveform is
     a copy, and a ``(frames, channels)`` array is trimmed along its frames.
+
+    :raises FeatureError: on a *top_db* that is not a finite number above 0,
+        and on samples that are not finite.
     """
-    y = np.asarray(y)
+    _check_top_db(top_db, 'trim_silence')
+    y = channels_last(y, 'trim_silence', FeatureError)
     # found on the float reading, where uint8 silence is 0 rather than 128,
     # and cut from y itself, so the clip comes back in its own type
-    x = _time_last(as_float(y))
+    x = _time_last(as_float(y, 'trim_silence', FeatureError))
     _, index = _optional.librosa().effects.trim(
         x, top_db=top_db, frame_length=frame_length, hop_length=hop_length)
     start, end = int(index[0]), int(index[1])
@@ -58,9 +76,12 @@ def split_on_silence(y: np.ndarray, top_db: float = 30.0,
 
     Each segment is a copy; a ``(frames, channels)`` array is split along its
     frames.
+
+    :raises FeatureError: as :func:`trim_silence` does.
     """
-    y = np.asarray(y)
-    x = _time_last(as_float(y))
+    _check_top_db(top_db, 'split_on_silence')
+    y = channels_last(y, 'split_on_silence', FeatureError)
+    x = _time_last(as_float(y, 'split_on_silence', FeatureError))
     intervals = _optional.librosa().effects.split(
         x, top_db=top_db, frame_length=frame_length, hop_length=hop_length)
     return [y[start:end].copy() for start, end in intervals]

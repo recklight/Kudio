@@ -715,3 +715,92 @@ def test_the_wavelet_filter_keeps_float32():
     y = (0.1 * np.random.default_rng(0).standard_normal(256)).astype(np.float32)
     assert kudio.wavelet_low_pass_filter(y).dtype == np.float32
     assert kudio.wavelet_low_pass_filter(np.zeros(64, np.float32)).dtype == np.float32
+
+
+# -- the gate on a clip shorter than what it smooths over --------------------------
+def test_the_gate_takes_any_clip_of_one_frame_or_more(noisy_and_clean):
+    """The default mask is smoothed over 6 frames, and 512 to 639 samples have
+    5: one gain per frame, however wide the smoothing."""
+    noisy, _ = noisy_and_clean
+    for n in (512, 513, 600, 639, 640, 700):
+        y = noisy[SR:SR + n]
+        out = kudio.spectral_enhance(y, SR, 'spectral_gate')
+        assert out.shape == (n,) and np.all(np.isfinite(out))
+        assert np.max(np.abs(out)) <= np.max(np.abs(y)) * 1.01
+
+
+@pytest.mark.parametrize("sr, n, setting", [
+    (SR, 7680, dict(time_smooth_ms=500.0)),          # 62 frames, and the clip has 61
+    (6000, 12000, dict(freq_smooth_hz=4000.0)),      # 341 bins, and the spectrum has 257
+])
+def test_the_gate_takes_its_whole_range_of_smoothing(noisy_and_clean, sr, n, setting):
+    noisy, _ = noisy_and_clean
+    out = kudio.spectral_enhance(noisy[SR:SR + n], sr, 'spectral_gate', **setting)
+    assert out.shape == (n,) and np.all(np.isfinite(out))
+
+
+def test_the_mask_is_smoothed_by_the_same_box_on_a_short_clip():
+    """Frames past either end count as zero, as they do at the ends of a long
+    clip, so a clip of 5 frames under a box of 6 keeps at most 5/6."""
+    from kudio.enhance.spectral import _smooth_mask
+    long, short = np.ones((40, 4)), np.ones((5, 4))
+    assert _smooth_mask(long, 1, 6)[:4, 0] == pytest.approx([3 / 6, 4 / 6, 5 / 6, 1])
+    assert _smooth_mask(long, 1, 6)[-3:, 0] == pytest.approx([1, 5 / 6, 4 / 6])
+    out = _smooth_mask(short, 1, 6)
+    assert out.shape == (5, 4)
+    assert out[:, 0] == pytest.approx([3 / 6, 4 / 6, 5 / 6, 5 / 6, 4 / 6])
+    assert _smooth_mask(short, 9, 1).shape == (5, 4)
+
+
+# -- a hop the windows do not overlap enough for ---------------------------------
+@pytest.mark.parametrize("window", ['hann', 'hamming', 'blackman', 'boxcar'])
+@pytest.mark.parametrize("hop", [64, 128, 170, 200, 240, 256, 300, 340, 384, 450, 500, 511, 512,
+                                 600, 1000])
+def test_the_result_is_never_louder_than_the_clip(noisy_and_clean, window, hop):
+    """Every gain is at most 1. What a gain leaves at the edge of a frame is
+    divided by the windows that overlap there, and with nearly none of them
+    0.4 went to 18, or to 40 where a single frame reaches the last sample. A
+    hop is either refused or leaves the clip no louder."""
+    noisy, _ = noisy_and_clean
+    quiet = 0.4 * noisy[:SR]
+    for rest in (0, hop // 2, int(0.8 * hop), hop - 1):
+        y = quiet[:(len(quiet) // hop - 1) * hop + rest]
+        for method in ('logmmse', 'wiener', 'specsub', 'spectral_gate'):
+            try:
+                out = kudio.spectral_enhance(y, SR, method, n_fft=512, hop_length=hop,
+                                             window=window)
+            except FeatureError as e:
+                assert "too long for n_fft=512" in str(e) and hop > 256
+                continue
+            assert out.shape == y.shape
+            assert np.max(np.abs(out)) <= 1.01 * np.max(np.abs(y)), (rest, method)
+
+
+@pytest.mark.parametrize("hop", [400, 500, 512, 1000])
+def test_a_hop_too_long_for_its_window_is_refused(noisy_and_clean, hop):
+    noisy, _ = noisy_and_clean
+    with pytest.raises(FeatureError, match=rf"^spectral_enhance\(\): hop_length={hop} is too long "
+                                           r"for n_fft=512 .* Half of n_fft or less, 256,"):
+        kudio.spectral_enhance(noisy, SR, hop_length=hop)
+    with pytest.raises(FeatureError, match=rf"^StreamEnhancer\(\): hop_length={hop} is too long"):
+        kudio.StreamEnhancer(SR, hop_length=hop)
+
+
+def test_a_boxcar_needs_no_overlap(noisy_and_clean):
+    """It is the window that says how long a hop may be."""
+    noisy, _ = noisy_and_clean
+    out = kudio.spectral_enhance(noisy, SR, hop_length=512, window='boxcar')
+    assert np.max(np.abs(out)) <= 1.01 * np.max(np.abs(noisy))
+
+
+@pytest.mark.parametrize("hop, faded", [(64, 0), (128, 0), (170, 0), (256, 69)])
+def test_only_what_the_last_frame_barely_reaches_is_faded(noisy_and_clean, hop, faded):
+    """With a gate of no strength every gain is 1 and the clip comes back, up
+    to the samples under the last 3% of the window."""
+    noisy, _ = noisy_and_clean
+    y = noisy[:100 * hop + hop - 1]
+    out = kudio.spectral_enhance(y, SR, 'spectral_gate', prop_decrease=0.0, hop_length=hop)
+    same = np.abs(out - y) < 1e-4
+    assert same[:len(y) - faded].all()
+    assert faded == 0 or np.max(np.abs(out[-5:])) < 1e-3
+    assert np.abs(out).max() <= np.abs(y).max() * 1.01

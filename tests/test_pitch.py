@@ -187,7 +187,7 @@ def test_a_frame_too_short_for_fmin_is_refused_rather_than_silently_empty():
 
 
 def test_a_bad_rate_is_refused():
-    with pytest.raises(FeatureError, match="positive rate"):
+    with pytest.raises(FeatureError, match="positive sample rate"):
         kudio.f0(buzz(150.0), 0)
 
 

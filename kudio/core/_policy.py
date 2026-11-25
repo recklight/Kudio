@@ -18,7 +18,7 @@ import math
 import numbers
 import sys
 import warnings
-from typing import Iterator, Optional, Sequence, Tuple, Union
+from typing import Iterator, Optional, Sequence, Tuple, Type, Union
 
 import numpy as np
 
@@ -118,11 +118,17 @@ def signal(y, label: str, name: Optional[str]) -> np.ndarray:
     return y
 
 
-def sample_rate(sr, name: str) -> Union[int, float]:
+def sample_rate(sr, name: str, error: Type[Exception] = ValueError,
+                what: str = 'sr') -> Union[int, float]:
     """*sr* as a sample rate in hertz: an int where it is a whole number,
     16000.0 and ``np.array(16000)`` included, and a float where it is not.
     Anything but one positive number is refused; which rates a measure is
-    defined at is for the measure to say."""
+    defined at is for the measure to say.
+
+    :param error: what to raise; a module whose refusals are FeatureErrors
+        passes that.
+    :param what: what the argument is called, where it is not ``sr``.
+    """
     value = sr.item() if isinstance(sr, np.ndarray) and sr.ndim == 0 else sr
     if isinstance(value, numbers.Real) and not isinstance(value, (bool, np.bool_)):
         try:
@@ -131,8 +137,8 @@ def sample_rate(sr, name: str) -> Union[int, float]:
             value = math.inf
         if math.isfinite(value) and value > 0:
             return int(value) if value.is_integer() else value
-    raise ValueError(f"{name}(): sr has to be a positive sample rate in hertz, "
-                     f"a single number, got {sr!r}")
+    raise error(f"{name}(): {what} has to be a positive sample rate in hertz, "
+                f"a single number, got {sr!r}")
 
 
 def faint(name: Optional[str], signals: Sequence[Tuple[str, np.ndarray]]) -> None:

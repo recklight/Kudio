@@ -11,10 +11,14 @@ from __future__ import annotations
 import copy
 import logging
 import warnings
-from pathlib import Path
-from typing import Optional
+from pathlib import Path, PurePath
+from typing import Any, Optional
 
+import numpy as np
 import yaml
+
+from kudio import _textfile
+from kudio._textfile import plain
 
 __all__ = ['KudioConfig', 'KC']
 
@@ -90,16 +94,13 @@ class Dict(dict):
         del self[name]
 
     def to_dict(self) -> dict:
+        """The config as plain dicts, however deep in lists they sit."""
         base = {}
         for key, value in self.items():
-            if isinstance(value, type(self)):
-                base[key] = value.to_dict()
-            elif isinstance(value, (list, tuple)):
-                base[key] = type(value)(
-                    item.to_dict() if isinstance(item, type(self)) else item
-                    for item in value)
+            if isinstance(value, (list, tuple)):
+                base[key] = type(value)(_undict(item) for item in value)
             else:
-                base[key] = value
+                base[key] = _undict(value)
         return base
 
     def copy(self):
@@ -173,16 +174,60 @@ class Dict(dict):
         self.freeze(False)
 
 
+def _undict(value: Any) -> Any:
+    """*value* with every :class:`Dict` in it a plain dict. A container with
+    none in it is handed back as it is, so that a list used twice is still one
+    list, which YAML writes once and refers to."""
+    if isinstance(value, Dict):
+        return value.to_dict()
+    if isinstance(value, dict):
+        made = {k: _undict(v) for k, v in value.items()}
+        return made if any(made[k] is not v for k, v in value.items()) else value
+    if isinstance(value, (list, tuple)):
+        items = [_undict(v) for v in value]
+        return type(value)(items) if any(a is not b for a, b in zip(items, value)) else value
+    return value
+
+
+class _Dumper(yaml.SafeDumper):
+    """yaml's safe dumper, with numpy's numbers and paths as plain values."""
+
+    def ignore_aliases(self, data: Any) -> bool:
+        # a number used twice is written twice, not as a reference to itself
+        return super().ignore_aliases(plain(data))
+
+    def _represent_plain(self, data: Any):
+        value = plain(data)
+        return self.represent_undefined(data) if value is data else \
+            self.represent_data(value)
+
+
+for _kind in (np.bool_, np.integer, np.floating, np.str_, np.ndarray, PurePath):
+    _Dumper.add_multi_representer(_kind, _Dumper._represent_plain)
+
+
 class KudioConfig(Dict):
     """Attribute-style config with YAML load/save and audio-centric defaults."""
 
     def write_config(self, file: str = 'cfg.yaml', exist_ok: bool = False) -> bool:
-        """Dump the config to *file*; refuses to overwrite unless ``exist_ok``."""
+        """Dump the config to *file*; refuses to overwrite unless ``exist_ok``.
+
+        A ``Path`` goes in as its text, with forward slashes, and a numpy
+        number as the number it is.
+
+        :raises ValueError: for a value YAML has no plain form for. A config
+            already at *file* is left as it was.
+        """
         if Path(file).exists() and not exist_ok:
             log.warning("Config exists, not overwritten: %s", file)
             return False
-        with open(str(file), 'w', encoding='utf-8') as f:
-            yaml.safe_dump(self.to_dict(), f, allow_unicode=True)
+        try:
+            text = yaml.dump(self.to_dict(), Dumper=_Dumper, allow_unicode=True)
+        except yaml.representer.RepresenterError as e:
+            value = e.args[-1]
+            raise ValueError(f"write_config(): the config holds {value!r}, and YAML "
+                             f"has no plain form for a {type(value).__name__}") from None
+        _textfile.write(str(file), text)
         log.info("Config written to %s", file)
         return True
 

@@ -55,6 +55,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from kudio._samples import channels_last, refuse_64_bit
+from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
 __all__ = ['Alignment', 'find_delay', 'align', 'MIN_CORRELATION']
@@ -115,10 +117,11 @@ class Alignment:
 
         Separate from :func:`find_delay` so a delay measured once -- on a loud
         passage, say -- can be applied to a whole set of files that came
-        through the same chain.
+        through the same chain. What comes back are slices of what went in;
+        copy one before writing into it.
         """
-        ref = np.asarray(ref)
-        deg = np.asarray(deg)
+        ref = channels_last(ref, 'Alignment.apply', FeatureError)
+        deg = channels_last(deg, 'Alignment.apply', FeatureError)
         if self.delay > 0:
             deg = deg[self.delay:]
         elif self.delay < 0:
@@ -139,10 +142,12 @@ class Alignment:
 
 
 def _mono(name: str, y: np.ndarray) -> np.ndarray:
-    y = np.asarray(y)
-    if y.ndim > 1:
+    # the numbers as they are: neither the lag nor a normalised correlation
+    # depends on the scale
+    y = channels_last(refuse_64_bit(y, name, FeatureError), name, FeatureError)
+    if y.ndim > 1 and y.shape[1:] != (1,):
         raise FeatureError(
-            f"{name} takes mono audio, got shape {y.shape}. Mix down first "
+            f"{name}() takes mono audio, got shape {y.shape}. Mix down first "
             f"(y.mean(axis=1)) -- which channel led is a question of its own.")
     return y.astype(np.float64, copy=False).reshape(-1)
 
@@ -163,10 +168,9 @@ def find_delay(ref: np.ndarray, deg: np.ndarray, sr: int, *,
     resample and a sample offset does not, so aligning two rates would be
     measuring a delay in units that do not exist yet.
     """
-    a = _mono("find_delay()", ref)
-    b = _mono("find_delay()", deg)
-    if sr <= 0:
-        raise FeatureError(f"find_delay() needs a positive rate, got {sr}")
+    a = _mono("find_delay", ref)
+    b = _mono("find_delay", deg)
+    sr = sample_rate(sr, 'find_delay', FeatureError)
     if a.size == 0 or b.size == 0:
         raise FeatureError("find_delay() needs audio on both sides, got "
                            f"{a.size} and {b.size} samples")
@@ -209,7 +213,8 @@ def align(ref: np.ndarray, deg: np.ndarray, sr: int, *,
           ) -> Tuple[np.ndarray, np.ndarray]:
     """Return *ref* and *deg* trimmed to the region they share, lined up.
 
-    The pair comes back ready for :func:`kudio.si_sdr` and friends.
+    The pair comes back ready for :func:`kudio.si_sdr` and friends, as slices
+    of what was passed in; copy one before writing into it.
 
     :param min_correlation: refuse below this (:data:`MIN_CORRELATION` when
         not given), because two unrelated recordings still have a best lag

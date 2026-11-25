@@ -2,10 +2,17 @@
 """Audio file I/O: path resolution, loading and saving of wave files."""
 from __future__ import annotations
 
+import contextlib
+import errno
 import logging
+import math
 import os
 import re
+import secrets
 import shutil
+import stat
+import struct
+import time
 import warnings
 from dataclasses import dataclass
 from multiprocessing import Pool
@@ -17,7 +24,8 @@ import soundfile as sf
 
 from kudio import _optional
 from kudio._progress import tqdm
-from kudio._samples import as_float
+from kudio._samples import as_float, channels_last, layout_known, refuse_64_bit
+from kudio.core._policy import warn
 from kudio.exceptions import AudioIOError, DependencyError
 
 __all__ = [
@@ -227,6 +235,295 @@ def _relative(path: PathLike, root: Optional[PathLike]) -> Path:
     return _abspath(path).relative_to(_abspath(root))
 
 
+def _check_rate(value: Any, name: str = 'sr', optional: bool = False,
+                whole: bool = True) -> Any:
+    """*value* as an int -- or, for a rate that need not be *whole*, as the
+    float it is -- or a ValueError naming the argument it was passed as.
+
+    Headers, configs and numpy hand rates out as 16000.0, np.int32(16000) or a
+    0-d array, so a number of any type passes, and None where the argument is
+    *optional*. ``True`` equals 1 and is refused by type: taken as a rate of
+    1 Hz it makes two samples of two seconds of audio.
+    """
+    if value is None and optional:
+        return None
+    number = value.item() if isinstance(value, np.ndarray) and value.ndim == 0 else value
+    # float() would read '16000' too, and text has no __float__; a complex
+    # number of numpy's does, and drops its imaginary part
+    if hasattr(number, '__float__') and not isinstance(
+            number, (bool, np.bool_, complex, np.complexfloating, np.ndarray)):
+        try:
+            rate = float(number)
+        except (TypeError, ValueError, OverflowError):
+            rate = math.nan
+        if 0 < rate < math.inf:
+            if rate.is_integer():
+                return int(rate)
+            if not whole:
+                return rate
+    raise ValueError(f"{name} must be a positive {'whole ' if whole else ''}rate"
+                     f"{' or None' if optional else ''}, got {value!r}")
+
+
+class _Unread(Exception):
+    """A file that could not be read. The text is the reason, which the caller
+    puts in an error of its own together with the path."""
+
+
+def _nothing_to_read(path: PathLike) -> Optional[str]:
+    """Why there is nothing at *path* to decode, or None when there is.
+
+    Asked before any decoder is: libsndfile says "System error" for a missing
+    file and for a folder alike.
+    """
+    try:
+        found = os.stat(str(path))
+    except (FileNotFoundError, NotADirectoryError, ValueError):
+        return "no such file"              # ValueError: a null in the name
+    except OSError as e:
+        return e.strerror or type(e).__name__
+    if stat.S_ISDIR(found.st_mode):
+        return "it is a folder, not a file"
+    # only a regular file says how long it is; a pipe says 0 and may hold audio
+    if stat.S_ISREG(found.st_mode) and not found.st_size:
+        return "the file is empty, 0 bytes"
+    return None
+
+
+#: libsndfile's SF_ERR_UNRECOGNISED_FORMAT, SF_ERR_SYSTEM,
+#: SF_ERR_UNSUPPORTED_ENCODING and SFE_BAD_FILE
+_UNRECOGNISED, _SYSTEM, _UNSUPPORTED, _BAD_FILE = 1, 2, 4, 7
+
+
+def _left_to_ffmpeg(error: BaseException, path: PathLike) -> Optional[str]:
+    """How a message puts it that soundfile does not read *path*, when that is
+    for ffmpeg to try; None when soundfile's refusal stands.
+
+    Two refusals are not about the file: the format is not known, or the
+    encoding not supported. Any other one is: from a damaged FLAC ffmpeg hands
+    back as much as it can, and does not say how much that was.
+
+    An extension of .mp3 is all libsndfile needs to take a file it does not
+    recognise for MP3. Finding no frame in it, it says that the file does not
+    exist or is a pipe.
+    """
+    code = error.code if isinstance(error, sf.LibsndfileError) else None
+    if code == _UNSUPPORTED:
+        return "soundfile does not support the encoding"
+    if code == _UNRECOGNISED or (code == _BAD_FILE and Path(path).suffix.lower() == '.mp3'):
+        return "soundfile does not recognise the format"
+    return None
+
+
+def _reason(error: BaseException, path: PathLike) -> str:
+    """What stopped *path* from being read, for the brackets at the end of the
+    message: the text of *error*, or its type when it has none.
+
+    libsndfile's "System error" is all it says of a file that is there and
+    will not open, so the operating system is asked what it has against it.
+    """
+    if isinstance(error, sf.LibsndfileError) and error.code == _SYSTEM:
+        try:
+            with open(str(path), 'rb'):
+                pass
+        except OSError as e:
+            return e.strerror or type(e).__name__
+    return str(error) or type(error).__name__
+
+
+# What libsndfile leaves -- AAC in m4a, mp4, 3gp or on its own, WebM, AMR, WMA,
+# ALAC -- goes through audioread, which runs ffmpeg or, on a Mac, Core Audio. It
+# is imported here and not at the top: a machine that reads WAV needs neither,
+# and librosa 1.0 no longer brings it along.
+
+def _decoders(refused: str) -> list:
+    """What audioread can decode with on this machine."""
+    try:
+        import audioread
+        for fresh in (False, True):
+            # its own WAV, AIFF and AU reader is left out: those are
+            # libsndfile's, and it has already turned the file down
+            found = [backend for backend in audioread.available_backends(flush_cache=fresh)
+                     if backend.__name__ != 'RawAudioFile']
+            if found:
+                return found
+            # audioread looks once and remembers; ffmpeg may be on the PATH by now
+    except ImportError as e:
+        if isinstance(e, ModuleNotFoundError) and e.name == 'audioread':
+            raise _Unread(f"{refused}. Such a file is decoded with audioread and ffmpeg, "
+                          f"and audioread is not installed: pip install audioread") from e
+        raise _Unread(f"{refused}. Such a file is decoded with audioread, which cannot be "
+                      f"imported: {e}") from e
+    raise _Unread(f"{refused}. Such a file is decoded with ffmpeg, and audioread found "
+                  f"none: install ffmpeg and put it on the PATH")
+
+
+def _decode(path: PathLike, error: BaseException,
+            take: Optional[Callable[[bytes], Any]] = None) -> Tuple[int, int, float]:
+    """``(rate, channels, seconds)`` of a file soundfile refused with *error*,
+    the seconds being the header's. *take* gets the 16-bit samples, block by
+    block; without it nothing but the header is read.
+    """
+    refused = _left_to_ffmpeg(error, path)
+    decoders = _decoders(refused)
+    import audioread
+    cause: Optional[BaseException] = None
+    try:
+        # the whole path: ffmpeg takes what stands before a colon in a
+        # relative one for a protocol
+        with audioread.audio_open(os.path.abspath(str(path)), backends=decoders) as reader:
+            rate, channels = int(reader.samplerate), int(reader.channels)
+            got = take is None
+            if take is not None:
+                for block in reader:
+                    take(block)
+                    got = True
+            # a header with nothing behind it opens, and decodes to nothing
+            if got and rate > 0 and channels > 0:
+                return rate, channels, float(reader.duration)
+    except (audioread.DecodeError, EOFError, OSError) as e:
+        cause = e
+    raise _Unread(f"{refused}, and it could not be decoded either: the file is damaged, "
+                  f"cut short or holds no audio") from cause
+
+
+def _warn_decoded(path: PathLike, error: BaseException, seconds: float,
+                  header: float, counted: bool = True) -> None:
+    """Say so when a file soundfile refused with *error* may not be what it
+    seems, now that audioread has read it.
+
+    One named as a format soundfile reads, and not recognised by it, is damaged
+    or has the wrong extension; ffmpeg reads both, and of a FLAC that lost its
+    beginning it hands back the rest. And ffmpeg decodes as far as a file goes
+    and reports no error: half of an m4a made for streaming, or of a WebM, is
+    half the clip. Only containers that store how long they are can be held to
+    it. For a bare AAC or AMR stream ffmpeg guesses from the bit rate.
+    """
+    from kudio.core.dataset_score import _audio_suffixes
+    suffix = Path(path).suffix.lower()
+    if error.code != _UNSUPPORTED and suffix in _audio_suffixes():
+        made = (f"ffmpeg decoded {seconds:.2f} s of it" if counted else
+                f"ffmpeg reads {seconds:.1f} s off its header")
+        warn(f"{path}: soundfile does not recognise it as the {suffix} file its name says, "
+             f"and {made}. The file is damaged, or its extension is wrong.")
+        return
+    with open(str(path), 'rb') as f:
+        head = f.read(8)
+    stored = head[4:8] == b'ftyp' or head[:4] == b'\x1aE\xdf\xa3'     # MP4, Matroska
+    # the header's figure comes rounded down to a tenth of a second
+    if counted and stored and header - seconds > 0.1:
+        warn(f"{path}: {seconds:.2f} s could be decoded of the {header:.1f} s in its "
+             f"header. The file is cut short or damaged, unless it is a video whose "
+             f"sound ends early.")
+
+
+#: The least length of samples that is not one. A program that streams its
+#: output writes a header before it knows the length and cannot go back to it:
+#: sox leaves 0x7FFFF000 there, ffmpeg 0xFFFFFFFF, and others 0.
+_STREAMED = 0x7FFFF000
+
+#: the chunks looked through for the samples of a WAV, which has a dozen
+_MOST_CHUNKS = 4096
+
+
+def _wav_shortfall(path: PathLike) -> Optional[Tuple[float, int]]:
+    """``(seconds, bytes)`` of a RIFF WAV that ends before its samples do: how
+    long its header says it is, and how much of that is missing. None for one
+    that is whole, or short by a block at most, and for any other file.
+    """
+    found = os.stat(str(path))
+    if not stat.S_ISREG(found.st_mode):              # a pipe is read by now
+        return None
+    with open(str(path), 'rb') as f:
+        head = f.read(12)
+        if head[:4] != b'RIFF' or head[8:] != b'WAVE':
+            return None
+        block = per_second = 0
+        for _ in range(_MOST_CHUNKS):
+            chunk = f.read(8)
+            if len(chunk) < 8:
+                return None
+            name, length = struct.unpack('<4sI', chunk)
+            if name == b'data':
+                missing = length - (found.st_size - f.tell())
+                if not 0 < length < _STREAMED or not per_second or missing <= block:
+                    return None
+                return length / per_second, missing
+            start = f.tell()
+            if name == b'fmt ':
+                described = f.read(16)
+                if len(described) < 16:
+                    return None
+                tag, _, rate, average, block, _ = struct.unpack('<HHIIHH', described)
+                # a block is a frame in PCM, float, the G.711 codes and the
+                # extensible form of them; in a codec it is a packet
+                per_second = rate * block if tag in (1, 3, 6, 7, 0xFFFE) else average
+            f.seek(start + length + length % 2)      # chunks begin at even bytes
+    return None
+
+
+def _warn_cut_wav(path: PathLike, frames: int, sr: int) -> None:
+    """Say so when a WAV ends before its header says, which libsndfile reads as
+    a shorter recording. Only the header and the size of the file are looked
+    at, so it is said of a file whose samples nobody asked for as well."""
+    try:
+        short = _wav_shortfall(path)
+    except OSError:
+        return
+    if short:
+        seconds, missing = short
+        warn(f"{path}: the header says {seconds:.2f} s and {frames / sr:.2f} s are there, "
+             f"{missing} bytes fewer. The file may have been cut short.")
+
+
+def _read_native(path: PathLike, rewind: bool = True) -> Tuple[np.ndarray, int]:
+    """*path* at its own rate: float32, 1-D or ``(frames, channels)``, and the
+    rate. Every function that reads audio from a file reads it here.
+
+    soundfile first, and audioread for what soundfile leaves to it
+    (:func:`_left_to_ffmpeg`).
+
+    *rewind* is what ``soundfile.read`` does before it reads, seek to the first
+    frame. In a low-rate MP3 that moves some samples by a step of float32, so
+    ``file_load`` keeps to it without *sr* and does without it with one.
+
+    :raises _Unread: with the reason, when the file is not there or cannot be
+        decoded. soundfile's own errors are passed on.
+    """
+    gone = _nothing_to_read(path)
+    if gone:
+        raise _Unread(gone)
+    try:
+        if rewind:
+            y, rate = sf.read(str(path), dtype='float32', always_2d=False)
+        else:
+            with sf.SoundFile(str(path)) as f:
+                y, rate = f.read(dtype='float32', always_2d=False), f.samplerate
+        _warn_cut_wav(path, len(y), rate)
+        return y, int(rate)
+    except sf.LibsndfileError as e:
+        if _left_to_ffmpeg(e, path) is None:
+            raise
+        blocks: List[bytes] = []
+        rate, channels, header = _decode(path, e, blocks.append)
+        samples = np.frombuffer(b''.join(blocks), dtype='<i2')
+        y = samples[:samples.size - samples.size % channels].astype(np.float32) / 32768.0
+        _warn_decoded(path, e, y.size / channels / rate, header)
+        return (y if channels == 1 else y.reshape(-1, channels)), rate
+
+
+def _read_mono(path: PathLike) -> Tuple[np.ndarray, int]:
+    """:func:`_read_native` without the rewind, its channels averaged, for what
+    cannot be made from a clip with NaN or inf in it: a mixture, a phase."""
+    y, rate = _read_native(path, rewind=False)
+    if y.ndim > 1:
+        y = y.mean(axis=1)
+    bad = _count_non_finite(y)
+    if bad:
+        raise _Unread(f"{bad} of {y.size} sample(s) are not finite (NaN or inf)")
+    return y, rate
+
+
 def _count_non_finite(y: np.ndarray) -> int:
     """How many samples of *y* are NaN or inf."""
     y = np.asarray(y)
@@ -261,48 +558,57 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
               ) -> Tuple[np.ndarray, int]:
     """Load a wave file; returns ``(waveform float32, sample_rate)``.
 
-    ``sr=None`` keeps the file's native sample rate and reads through
-    soundfile alone. A requested ``sr`` resamples through librosa.
+    ``sr=None`` keeps the file's native sample rate. Another *sr* resamples,
+    which takes librosa; a file already at *sr* comes back as it is.
+
+    The file is read with soundfile. What soundfile does not read -- m4a, mp4,
+    aac, webm, 3gp, amr -- is decoded to 16 bits with audioread and ffmpeg,
+    whichever *sr* is asked for; neither comes with kudio. A file that gives
+    less than its header promises, or is not recognised as what its extension
+    says, is read with a warning.
 
     Multi-channel audio (``mono=False``) comes back **channels last**, shaped
     ``(frames, channels)`` -- the layout soundfile uses and the one
     :func:`kudio.loudness` expects. A mono file stays 1-D with ``mono=False``;
     it does not become ``(frames, 1)``.
 
-    :raises ValueError: for an *sr* that is not a positive rate. That is a
-        mistake in the call, so it is not dressed up as a bad file.
-    :raises AudioIOError: when the file cannot be read.
+    A file with NaN or inf in it is read with a warning too, at its own rate;
+    it is not resampled.
+
+    :raises ValueError: for an *sr* that is not a positive whole rate. That is
+        a mistake in the call, so it is not dressed up as a bad file.
+    :raises AudioIOError: when there is no such file, it is a folder or empty,
+        it cannot be read, or it holds NaN or inf and would have to be
+        resampled.
     """
-    if sr is not None and sr <= 0:
-        raise ValueError(f"sr must be a positive rate or None, got {sr!r}")
-    # a missing librosa is not a file that cannot be read, so it is raised
-    # here rather than turned into an AudioIOError below
-    librosa = None if sr is None else _optional.librosa()
+    sr = _check_rate(sr, optional=True)
     try:
-        if sr is None:
-            y, rate = sf.read(str(wav_dir), dtype='float32', always_2d=False)
-            if mono and y.ndim > 1:
-                y = y.mean(axis=1).astype(np.float32)
-            y = np.asarray(y, dtype=np.float32)
-            _warn_non_finite(y, wav_dir)
-            return y, int(rate)
-        # resampling path (heavier)
-        y, rate = librosa.load(str(wav_dir), sr=sr, mono=mono)
-        if y.ndim > 1:
-            # librosa hands back (channels, frames); the rest of kudio -- and
-            # the sr=None branch above -- speak (frames, channels). Two layouts
-            # from one function, chosen by an unrelated argument, is exactly
-            # the kind of thing nobody notices until a model is training on
-            # transposed audio.
-            y = y.T
+        y, rate = _read_native(wav_dir, rewind=sr is None)
+        if mono and y.ndim > 1:
+            y = y.mean(axis=1)
         y = np.ascontiguousarray(y, dtype=np.float32)
-        _warn_non_finite(y, wav_dir)
-        return y, int(rate)
+        if sr is None or sr == rate:
+            _warn_non_finite(y, wav_dir)
+            return y, rate
+        bad = _count_non_finite(y)
+        if bad:
+            # a resampler's filter is long, and would turn one NaN into a
+            # whole filter length of them
+            raise _Unread(f"{bad} of {y.size} sample(s) are not finite (NaN or inf), so "
+                          f"it cannot be resampled from {rate} to {sr} Hz; read it with "
+                          f"sr=None, repair it and resample that")
+        with layout_known():
+            y = resample(y, rate, sr)
+        return np.ascontiguousarray(y, dtype=np.float32), sr
+    except DependencyError:
+        # a missing librosa is not a file that cannot be read
+        raise
     except Exception as e:
-        raise AudioIOError(f"Could not load audio file: {wav_dir} ({e})") from e
+        raise AudioIOError(f"Could not load audio file: {wav_dir} "
+                           f"({_reason(e, wav_dir)})") from e
 
 
-def resample(y: np.ndarray, orig_sr: int, target_sr: int,
+def resample(y: np.ndarray, orig_sr: float, target_sr: float,
              res_type: str = 'soxr_hq') -> np.ndarray:
     """Resample a waveform already in memory.
 
@@ -313,25 +619,37 @@ def resample(y: np.ndarray, orig_sr: int, target_sr: int,
     >>> y16 = kudio.resample(y8, orig_sr=8000, target_sr=16000)
 
     A ``(frames, channels)`` array is resampled along its frames, the layout
-    :func:`file_load` returns. Integer input comes back in its own dtype,
-    rounded and clipped to its range rather than truncated.
+    :func:`file_load` returns, and a row ``(1, n)`` is one channel. Integer
+    input comes back in its own dtype, rounded and clipped to its range rather
+    than truncated; unsigned types are read around their midpoint.
+
+    :param orig_sr: the rate *y* is at. It need not be whole, unlike a file's:
+        22254.5 Hz is a rate an array can be at.
+    :param target_sr: the rate to take it to, the same.
+    :raises ValueError: for a rate that is not a positive number, 64-bit
+        integers, or an array that is channels first.
     """
-    if orig_sr <= 0 or target_sr <= 0:
-        raise ValueError(f"sample rates must be > 0, got {orig_sr} -> {target_sr}")
-    y = np.asarray(y)
+    orig_sr = _check_rate(orig_sr, 'orig_sr', whole=False)
+    target_sr = _check_rate(target_sr, 'target_sr', whole=False)
+    y = channels_last(refuse_64_bit(y, 'resample'), 'resample')
     if orig_sr == target_sr or y.size == 0:
         return y
     if y.ndim > 2:
         raise ValueError(f"expected (frames,) or (frames, channels), got shape {y.shape}")
     librosa = _optional.librosa()
+    limits = np.iinfo(y.dtype) if np.issubdtype(y.dtype, np.integer) else None
+    middle = (int(limits.max) + 1) / 2 if limits is not None and limits.min == 0 else 0
+    x = y.astype(np.float64) - middle if middle else y
     # librosa resamples its last axis by default, which on a channels-last
     # array is the channel axis: a (16000, 2) clip came back (16000, 1)
-    out = librosa.resample(y.astype(np.float32), orig_sr=orig_sr,
+    out = librosa.resample(x.astype(np.float32), orig_sr=orig_sr,
                            target_sr=target_sr, res_type=res_type, axis=0)
-    if np.issubdtype(y.dtype, np.integer):
-        limits = np.iinfo(y.dtype)
-        return np.clip(np.round(out), limits.min, limits.max).astype(y.dtype)
-    return out.astype(y.dtype, copy=False)
+    if limits is None:
+        return out.astype(y.dtype, copy=False)
+    # in float64: the largest int32 is not a float32, and 2**31 cast back to
+    # int32 is full scale the other way
+    return np.clip(np.round(out.astype(np.float64) + middle),
+                   limits.min, limits.max).astype(y.dtype)
 
 
 @dataclass(frozen=True)
@@ -342,7 +660,8 @@ class AudioInfo:
     ``nan`` when some samples are not finite, ``None`` when it was not
     measured (``peak=False``).
     ``subtype`` / ``format`` are soundfile's (``'PCM_16'``, ``'WAV'``) and are
-    ``None`` when the info was taken from an array rather than a file.
+    ``None`` when the info was taken from an array, or from a file soundfile
+    does not read.
     """
     sr: int
     channels: int
@@ -373,13 +692,30 @@ def audio_info(source: Union[PathLike, np.ndarray], sr: Optional[int] = None,
     ``peak=False`` never touches the samples and stays instant on a large file.
     The default reads them, because every caller so far wanted the peak too.
 
+    What soundfile does not read (m4a, aac, webm) goes through audioread and
+    ffmpeg, as in :func:`file_load`. ``frames`` and ``duration``
+    are then counted from what was decoded; with ``peak=False`` they are the
+    header's, which is read to a tenth of a second, unless it gives no
+    duration.
+
+    A WAV that ends before its header says is described as the shorter
+    recording it holds, with a warning. That takes no samples either.
+
     An array needs its *sr* passed in — a waveform does not carry one — and is
-    read **channels last**, matching :func:`file_load`.
+    read **channels last**, matching :func:`file_load`. A row ``(1, n)`` is one
+    channel.
+
+    :raises ValueError: for an array without *sr*, or with one that is not a
+        positive whole rate, and for an array that is channels first or holds
+        64-bit integers.
+    :raises AudioIOError: when there is no such file, it is a folder or empty,
+        or its header cannot be read.
     """
     if isinstance(source, np.ndarray):
         if sr is None:
             raise ValueError("audio_info(array) needs sr=")
-        y = source
+        sr = _check_rate(sr)
+        y = channels_last(refuse_64_bit(source, 'audio_info'), 'audio_info')
         frames = int(y.shape[0]) if y.size else 0
         channels = 1 if y.ndim == 1 else int(y.shape[1])
         top: Optional[float] = None
@@ -387,14 +723,23 @@ def audio_info(source: Union[PathLike, np.ndarray], sr: Optional[int] = None,
             # on the full scale a file's peak is read on; abs(-32768) is
             # -32768 in int16 besides
             top = _peak(as_float(y), "<array>")
-        return AudioInfo(sr=int(sr), channels=channels, frames=frames,
-                         duration=frames / float(sr) if sr else 0.0, peak=top)
+        return AudioInfo(sr=sr, channels=channels, frames=frames,
+                         duration=frames / float(sr), peak=top)
 
     path = Path(source)
     try:
-        meta = sf.info(str(path))
+        gone = _nothing_to_read(path)
+        if gone:
+            raise _Unread(gone)
+        try:
+            meta = sf.info(str(path))
+        except sf.LibsndfileError as e:
+            if _left_to_ffmpeg(e, path) is None:
+                raise
+            return _decoded_info(path, e, peak)
     except Exception as e:
-        raise AudioIOError(f"Could not read audio header: {path} ({e})") from e
+        raise AudioIOError(f"Could not read audio header: {path} "
+                           f"({_reason(e, path)})") from e
 
     top: Optional[float] = None
     if peak:
@@ -406,16 +751,42 @@ def audio_info(source: Union[PathLike, np.ndarray], sr: Optional[int] = None,
                         bad += _count_non_finite(block)
                         top = max(top, float(np.max(np.abs(block))))
         except Exception as e:
-            raise AudioIOError(f"Could not read audio file: {path} ({e})") from e
+            raise AudioIOError(f"Could not read audio file: {path} "
+                               f"({_reason(e, path)})") from e
         if bad:
             top = _undefined_peak(path, bad)
 
+    _warn_cut_wav(path, meta.frames, meta.samplerate)
     return AudioInfo(sr=int(meta.samplerate), channels=int(meta.channels),
                      frames=int(meta.frames),
                      duration=float(meta.frames) / float(meta.samplerate)
                      if meta.samplerate else 0.0,
                      peak=top, path=path,
                      subtype=meta.subtype, format=meta.format)
+
+
+def _decoded_info(path: Path, error: BaseException, peak: bool) -> AudioInfo:
+    """:func:`audio_info` of a file soundfile refused with *error*. Decoded
+    block by block, so that a long file is not held whole."""
+    samples = loudest = 0
+
+    def take(block: bytes) -> None:
+        nonlocal samples, loudest
+        x = np.frombuffer(block, dtype='<i2')
+        if x.size:
+            samples += x.size
+            # int32 first: the absolute value of -32768 does not fit int16
+            loudest = max(loudest, int(np.max(np.abs(x.astype(np.int32)))))
+
+    rate, channels, header = _decode(path, error, take if peak else None)
+    if not peak and header <= 0:             # a live recording's header has none
+        _decode(path, error, take)
+    counted = peak or header <= 0
+    frames = samples // channels if counted else int(round(header * rate))
+    seconds = frames / rate if counted else float(header)
+    _warn_decoded(path, error, seconds, header, counted)
+    return AudioInfo(sr=rate, channels=channels, frames=frames, duration=seconds,
+                     peak=loudest / 32768.0 if peak else None, path=path)
 
 
 def _undefined_peak(name: Any, bad: int) -> float:
@@ -496,6 +867,95 @@ def _is_fixed_point(subtype: str) -> bool:
 _PCM_BITS = {'PCM_S8': 8, 'PCM_U8': 8, 'PCM_16': 16, 'PCM_24': 24, 'PCM_32': 32}
 
 
+#: extensions soundfile cannot read the container from, and the container
+_CONTAINERS = {'.aif': 'AIFF'}
+
+#: containers libsndfile puts the file's own name in, or writes as two files
+#: under one name. They are written where they go.
+_BY_NAME = ('MPC2K', 'SD2', 'SVX')
+
+
+def _replace(source: str, target: str) -> None:
+    """``os.replace``, again for a moment on Windows, where a virus scanner or
+    an indexer holds a file it has just seen."""
+    for wait in (0.01, 0.05, 0.2, None):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError as e:
+            if os.name != 'nt':
+                raise
+            if wait is None:
+                raise PermissionError(e.errno, "Permission denied; it may be open in "
+                                               "another program") from e
+            time.sleep(wait)
+
+
+def _overwrite(source: str, target: str) -> bool:
+    """Copy *source* over what is in *target*. False when that cannot begin,
+    and then *target* is as it was: it does not open for writing, or it has to
+    become shorter and will not, being mapped into another program's memory.
+    """
+    size = os.path.getsize(source)
+    try:
+        f = open(target, 'r+b')                     # 'w' would empty it first
+    except OSError:
+        return False
+    with f:
+        if size < os.path.getsize(target):
+            try:
+                f.truncate(size)
+            except OSError:
+                return False
+        with open(source, 'rb') as whole:
+            shutil.copyfileobj(whole, f)
+    return True
+
+
+def _put_in_place(path: Path, container: str, write: Callable[[str], Any]) -> None:
+    """Have *write* make *path*: in a temporary file beside it, which takes its
+    place when it is whole.
+
+    Until then the file that is at *path* is not touched. libsndfile empties a
+    file as it opens it, and only then finds that FLAC takes 8 channels, that
+    it has no bitrate for the rate, that the disk is full.
+
+    Windows does not let a file be replaced while another program has it open.
+    The finished one is then copied over it, if it opens for writing; a disk
+    that fails in the middle of that does damage the file.
+
+    A link stays one, and the file it points to is replaced. What is no
+    ordinary file, /dev/null for one, is written as it is.
+    """
+    target = os.path.realpath(path) if os.path.islink(path) else str(path)
+    try:
+        there: Optional[os.stat_result] = os.stat(target)
+    except OSError:
+        there = None
+    if container in _BY_NAME or (there is not None and not stat.S_ISREG(there.st_mode)):
+        write(target)
+        return
+    if there is not None and not os.access(target, os.W_OK):
+        # replacing it would only ask for the folder's permission
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(path))
+    temporary = os.path.join(os.path.dirname(target), f".{secrets.token_hex(4)}.tmp")
+    try:
+        write(temporary)
+        if there is not None:
+            with contextlib.suppress(OSError):
+                os.chmod(temporary, stat.S_IMODE(there.st_mode))
+        try:
+            _replace(temporary, target)
+        except PermissionError:
+            if os.name != 'nt' or there is None or not _overwrite(temporary, target):
+                raise
+            os.unlink(temporary)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
+
+
 def save_wave(path: PathLike, wave: np.ndarray, sr: int,
               d_sample: Optional[int] = None, subtype: str = 'PCM_16') -> None:
     """Write *wave* to an audio file via soundfile.
@@ -504,6 +964,12 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
     ``.wav`` path writes WAV, ``.flac`` writes FLAC, and ``.aiff`` or
     ``.aif`` AIFF.
 
+    The file is written beside *path* and replaces it when it is whole, so a
+    write that fails leaves the file that was there as it was. The one exception
+    is a file that another program has open on Windows, which is overwritten
+    with the finished one: if the disk fails in the middle of that, the file is
+    damaged.
+
     :param subtype: soundfile subtype — ``'PCM_16'`` (default), ``'PCM_24'``,
         ``'FLOAT'`` (32-bit float), ... see ``soundfile.available_subtypes()``.
     :param d_sample: optional resample rate before writing.
@@ -511,7 +977,8 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
     Integer input is scaled by its own type's full scale, the way soundfile
     reads such a file back: int16 by ``1 / 32768``, int32 by ``1 / 2**31``,
     and unsigned types around their midpoint, so a 16-bit array is written
-    unchanged. Float input is written as it is; ``DOUBLE`` keeps float64.
+    unchanged. Float input is written as it is; ``DOUBLE`` keeps float64. A row
+    ``(1, n)`` is one channel.
 
     A fixed-point *subtype* clips anything beyond ±1.0 to full scale, and every
     ``PCM_*`` subtype is rounded to the nearest step. Both are done here rather
@@ -519,12 +986,21 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
     step low -- and wraps around unless clipping has been switched on: 1.2
     comes back as -0.8. Whether it has been is up to the soundfile release.
 
+    :raises ValueError: for an *sr* or *d_sample* that is not a positive whole
+        rate, and for a *wave* that is neither ``(frames,)`` nor ``(frames,
+        channels)`` with 1 to 1024 channels, that is channels first, or that
+        holds 64-bit integers.
     :raises AudioIOError: if any sample is NaN or inf, before anything is
         written or any folder created. Neither subtype family survives one:
         ``FLOAT`` keeps it, and an integer subtype writes NaN as a zero that
         reads back as silence, and inf as a full-scale sample.
     """
-    wave = np.asarray(wave)
+    sr = _check_rate(sr)
+    d_sample = _check_rate(d_sample, 'd_sample', optional=True)
+    wave = channels_last(refuse_64_bit(wave, 'save_wave'), 'save_wave')
+    if wave.ndim not in (1, 2) or (wave.ndim == 2 and not 1 <= wave.shape[1] <= 1024):
+        raise ValueError(f"save_wave() writes (frames,) or (frames, channels) with 1 to "
+                         f"1024 channels, got shape {wave.shape}")
     precision = np.float64 if str(subtype).upper() == 'DOUBLE' else np.float32
 
     if np.issubdtype(wave.dtype, np.integer):
@@ -574,15 +1050,19 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
     Path(path).parent.mkdir(exist_ok=True, parents=True)
     # soundfile takes the container from the extension spelled as libsndfile
     # names it, so .aiff writes and .aif, AIFF's other usual extension, did not
-    container = _CONTAINERS.get(Path(path).suffix.lower())
+    suffix = Path(path).suffix.lower()
+    container = _CONTAINERS.get(suffix, suffix[1:].upper())
     try:
-        sf.write(str(path), wave, sr, subtype=subtype, format=container)
+        if container not in sf.available_formats():
+            raise TypeError(f"there is no format to take from the extension {suffix!r}")
+        _put_in_place(Path(path), container, lambda name: sf.write(
+            name, wave, sr, subtype=subtype, format=container))
     except Exception as e:
-        raise AudioIOError(f"Could not write audio file: {path} ({e})") from e
-
-
-#: extensions soundfile cannot read the container from, and the container
-_CONTAINERS = {'.aif': 'AIFF'}
+        # the operating system's words and libsndfile's, without the name of
+        # the temporary file
+        why = getattr(e, 'error_string', None) or getattr(e, 'strerror', None) or str(e)
+        raise AudioIOError(f"Could not write audio file: {path} "
+                           f"({why or type(e).__name__})") from e
 
 
 def copy_waves(path: PathLike, wave_: Any) -> List[Path]:
@@ -661,7 +1141,12 @@ def convert_folder(src: Any, dst: PathLike, *,
         *trim_db*) is raised either way: it would fail every file the same way.
     :param root: the folder the output layout is measured from. Every input
         has to be inside it.
+    :raises ValueError: before the first file is read, for an *sr* that is not
+        a positive whole rate, for *peak* and *lufs* together, or for an
+        unknown *on_error*. Met file by file it would fail every file the same
+        way.
     """
+    sr = _check_rate(sr, optional=True)
     if peak is not None and lufs is not None:
         raise ValueError("pass peak= or lufs=, not both")
     if on_error not in ('collect', 'raise'):
@@ -687,23 +1172,24 @@ def convert_folder(src: Any, dst: PathLike, *,
 
     for n, f in enumerate(files, 1):
         try:
-            y, rate = file_load(f, sr=sr, mono=mono)
-            if trim_db is not None:
-                from kudio.effects.silence import trim_silence
-                y = trim_silence(y, top_db=trim_db)[0]
-            if y.size == 0:
-                raise AudioIOError("empty after trimming" if trim_db is not None
-                                   else "the file holds no samples")
-            if peak is not None:
-                from kudio.effects.augment import normalize
-                y = normalize(y, peak=peak)
-            elif lufs is not None:
-                from kudio.core.loudness import normalize_lufs
-                y = normalize_lufs(y, rate, lufs=lufs)
+            with layout_known():
+                y, rate = file_load(f, sr=sr, mono=mono)
+                if trim_db is not None:
+                    from kudio.effects.silence import trim_silence
+                    y = trim_silence(y, top_db=trim_db)[0]
+                if y.size == 0:
+                    raise AudioIOError("empty after trimming" if trim_db is not None
+                                       else "the file holds no samples")
+                if peak is not None:
+                    from kudio.effects.augment import normalize
+                    y = normalize(y, peak=peak)
+                elif lufs is not None:
+                    from kudio.core.loudness import normalize_lufs
+                    y = normalize_lufs(y, rate, lufs=lufs)
 
-            target = (out_root / _relative(f, root)).with_suffix(WAVE_SUFFIX)
-            target = Path(check_file(target, rename=not overwrite))
-            save_wave(target, y, rate, subtype=subtype)
+                target = (out_root / _relative(f, root)).with_suffix(WAVE_SUFFIX)
+                target = Path(check_file(target, rename=not overwrite))
+                save_wave(target, y, rate, subtype=subtype)
             outputs.append(target)
         except DependencyError:
             raise

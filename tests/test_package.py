@@ -400,3 +400,24 @@ def test_upercase_points_at_uppercase():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert kudio.uppercase(["a"]) == ["A"]
+
+
+# -- which except clause catches a refusal --------------------------------------
+def test_a_feature_error_is_a_value_error_too():
+    """vad refuses a rate with a FeatureError and lsd with a ValueError; which
+    of the two it is depends on the module, and a caller writes one except."""
+    y = np.zeros(1600)
+    for refused in (lambda: kudio.vad(y, 0), lambda: kudio.lsd(y, y, 0)):
+        with pytest.raises(ValueError):
+            refused()
+    with pytest.raises(kudio.KudioError):
+        kudio.vad(y, 0)
+    assert issubclass(kudio.FeatureError, kudio.KudioError)
+    assert not issubclass(kudio.SynthesisError, ValueError)
+    assert not issubclass(kudio.AudioIOError, ValueError)
+
+
+def test_a_feature_error_comes_back_from_a_worker_process():
+    import pickle
+    back = pickle.loads(pickle.dumps(kudio.FeatureError("too short")))
+    assert type(back) is kudio.FeatureError and str(back) == "too short"

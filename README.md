@@ -26,7 +26,8 @@ BibTeX keys for kudio and every work behind them.
 
 The core install is numpy, scipy, soundfile and librosa, with PyYAML, tqdm and
 PyWavelets; plotting, dataframes, PESQ, STOI and SDR, DNSMOS and live audio
-are extras.
+are extras. WAV, FLAC, OGG, MP3 and AIFF are read with that; m4a, aac and webm
+take `pip install audioread` and ffmpeg on the PATH.
 
 The [documentation](https://recklight.github.io/Kudio/) has a guide to each
 part of the library, the full API reference, and
@@ -407,7 +408,8 @@ one place. A missing optional extra raises a `DependencyError` that names what
 to install; it is an `ImportError` too. A wrong argument, such as a negative
 rate, an unknown metric or two signals too different in length to compare,
 raises `ValueError` or `TypeError`, the way the standard library does, and a
-buffer that waited too long raises `TimeoutError`. A metric refuses what it
+buffer that waited too long raises `TimeoutError`. `FeatureError` is a
+`ValueError` too. A metric refuses what it
 cannot read as a signal, NaN samples or int64 ones, with a `ValueError` that
 starts with its name, and gives nan with one warning where there is nothing
 to score, such as an empty pair or a silent reference.

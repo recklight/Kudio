@@ -13,12 +13,16 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import warnings
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path, PurePath
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
+
+from kudio import _textfile
+from kudio._textfile import plain
 
 __all__ = ['Pair', 'save_manifest', 'load_manifest', 'split_pairs',
            'Label', 'save_labels', 'load_labels']
@@ -68,23 +72,64 @@ def _portable(row: dict) -> dict:
     macOS. Relative paths stay relative, to the working directory of
     whoever reads them, as they always have."""
     for key in ('noisy', 'clean', 'target'):
-        value = row.get(key)
+        value = plain(row.get(key))
         if isinstance(value, str) and value:
             row[key] = value.replace('\\', '/')
     return row
+
+
+def _json_value(value: Any) -> Any:
+    """What :func:`json.dumps` asks for when it has no form for *value*."""
+    simple = plain(value)
+    if simple is value:
+        raise TypeError(f"{value!r}, and JSON has no form for a {type(value).__name__}")
+    return simple
+
+
+def _read_json(path: PathLike, what: str) -> Any:
+    """What *path* holds, or the error that stopped it with the file's name on:
+    a JSONDecodeError says which line, but not of which of fifty label files.
+    Both it and a UnicodeDecodeError are ValueErrors."""
+    try:
+        # -sig: Notepad's "UTF-8 with BOM" puts a mark in front, which is not JSON
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            return json.load(fh)
+    except json.JSONDecodeError as e:
+        raise json.JSONDecodeError(f"{what} {path} is not JSON: {e.msg}", e.doc, e.pos) from None
+    except UnicodeDecodeError as e:
+        raise ValueError(f"{what} {path} is not UTF-8 text: {e}") from None
+
+
+def _json_text(rows: List[dict], name: str, what: str) -> str:
+    """*rows* as the JSON list a file will hold, or a ValueError naming the
+    first row that has no JSON."""
+    def text(part):
+        return json.dumps(part, indent=2, ensure_ascii=False, default=_json_value)
+
+    try:
+        return text(rows)
+    except (TypeError, ValueError) as e:
+        for n, row in enumerate(rows, 1):
+            try:
+                text(row)
+            except (TypeError, ValueError) as why:
+                raise ValueError(f"{name}(): {what} {n} holds {why}") from None
+        raise ValueError(f"{name}(): {e}") from e
 
 
 def save_manifest(path: PathLike, pairs: Sequence[Pair]) -> Path:
     """Write *pairs* to *path* as JSON. Parent directories are created.
 
     Paths are written with forward slashes, so a manifest made on Windows
-    loads on Linux and macOS too.
+    loads on Linux and macOS too. A ``Path`` goes in as its text and a numpy
+    number as the number it is.
+
+    :raises ValueError: naming the row, for a value JSON has no form for. A
+        manifest already at *path* is left as it was.
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump([_portable(asdict(p)) for p in pairs], fh, indent=2,
-                  ensure_ascii=False)
+    text = _json_text([_portable(asdict(p)) for p in pairs], 'save_manifest', 'row')
+    _textfile.write(path, text, parents=True)
     return path
 
 
@@ -94,9 +139,10 @@ def load_manifest(path: PathLike) -> List[Pair]:
     Extra keys are dropped with a ``UserWarning`` rather than raising — a
     manifest written by a later version should still load — but a missing
     ``noisy`` or ``clean`` is an error, since there is no example without them.
+
+    :raises ValueError: naming the file, when it is not JSON, and the row.
     """
-    with open(path, "r", encoding="utf-8") as fh:
-        rows = json.load(fh)
+    rows = _read_json(path, 'manifest')
     if not isinstance(rows, list):
         raise ValueError(f"manifest is not a JSON list: {path}")
 
@@ -152,6 +198,33 @@ def _label_path(path: PathLike, fmt: Optional[str]) -> Tuple[Path, str]:
     return path, fmt
 
 
+def _seconds(value: Any, where: str) -> float:
+    """*value* as a Python number, or a ValueError that says *where* it was."""
+    value = plain(value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{where} has to be a number of seconds, got {value!r}")
+    if not math.isfinite(value):
+        raise ValueError(f"{where} has to be a finite number of seconds, got {value!r}")
+    return value
+
+
+def _span(start: Any, end: Any, where: str) -> Tuple[float, float]:
+    """``(start, end)`` as Python numbers, or a ValueError for a time that is
+    none or a label that ends before it starts."""
+    start = _seconds(start, f"{where}: start")
+    end = _seconds(end, f"{where}: end")
+    if end < start:
+        raise ValueError(f"{where} ends at {end:g} s, before it starts at {start:g} s")
+    return start, end
+
+
+def _microseconds(value: Any) -> float:
+    """*value* rounded to 6 decimals, as a Python number. A np.float64 is a
+    float and rounds as it is; a np.float32 is made one first, or 0.1 is
+    written as 0.10000000149011612."""
+    return plain(round(value if isinstance(value, float) else plain(value), 6))
+
+
 def save_labels(path: PathLike, labels: Sequence[Label],
                 fmt: Optional[str] = None) -> Path:
     """Write *labels* as JSON, or as an **Audacity label track**.
@@ -164,27 +237,38 @@ def save_labels(path: PathLike, labels: Sequence[Label],
     JSON. Audacity's format is three columns of plain text that half the audio
     world can already read, which is worth more than a private format that only
     kudio understands.
+
+    :raises ValueError: naming the label, for a time that is not a finite
+        number, an end before the start, and a text that is not a string or has
+        no form in JSON. A label file already at *path* is left as it was.
     """
     path, fmt = _label_path(path, fmt)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    labels = list(labels)
+    times = [_span(x.start, x.end, f"save_labels(): label {n}")
+             for n, x in enumerate(labels, 1)]
     if fmt == 'json':
         # to the microsecond, as the text format below writes them: a time
         # worked out by subtraction, 3.14 as 3.1399999999999997, is the same
         # boundary, and the file is read by people too
-        rows = [{**asdict(x), 'start': round(x.start, 6), 'end': round(x.end, 6)}
-                for x in labels]
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(rows, fh, indent=2, ensure_ascii=False)
-        return path
-
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
-        for label in labels:
+        rows = [{**asdict(x), 'start': _microseconds(x.start),
+                 'end': _microseconds(x.end)} for x in labels]
+        text, newline = _json_text(rows, 'save_labels', 'label'), None
+    else:
+        lines = []
+        for n, (label, (start, end)) in enumerate(zip(labels, times), 1):
+            if not isinstance(label.text, str):
+                raise ValueError(f"save_labels(): the text of label {n} has to be "
+                                 f"a string, got {label.text!r}")
             # tabs are the separator, so a tab inside a label would split the
-            # row -- Audacity has the same problem and also just strips them
-            text = label.text.replace("\t", " ").replace("\n", " ")
+            # row -- Audacity has the same problem and also just strips them.
+            # A carriage return ends a line as surely as a newline does
+            words = label.text.replace("\t", " ").replace("\r\n", " ")
+            words = words.replace("\r", " ").replace("\n", " ")
             # microseconds: 60x finer than a sample at 16 kHz and still 5x
             # finer at 192 kHz, so the rounding cannot move a boundary
-            fh.write(f"{label.start:.6f}\t{label.end:.6f}\t{text}\n")
+            lines.append(f"{start:.6f}\t{end:.6f}\t{words}\n")
+        text, newline = "".join(lines), "\n"
+    _textfile.write(path, text, newline=newline, parents=True)
     return path
 
 
@@ -195,38 +279,52 @@ def load_labels(path: PathLike, fmt: Optional[str] = None) -> List[Label]:
     ``\\<TAB>low<TAB>high``. Those rows are skipped: a :class:`Label` holds
     times, not frequencies.
 
-    :raises ValueError: on a malformed row, naming the line — a label file is
-        usually hand-edited at some point, and "line 12 has 2 columns" is worth
-        more than an IndexError.
+    :raises ValueError: on a malformed row, naming the line, or in JSON which
+        row of the list it is — a label file is usually hand-edited at some
+        point, and "line 12 has 2 columns" is worth more than an IndexError. A
+        time that is not finite and an end before its start are malformed too.
     """
     path, fmt = _label_path(path, fmt)
+    labels = []
     if fmt == 'json':
-        with open(path, "r", encoding="utf-8") as fh:
-            rows = json.load(fh)
+        rows = _read_json(path, 'label file')
         if not isinstance(rows, list):
             raise ValueError(f"label file is not a JSON list: {path}")
         known = {f.name for f in fields(Label)}
-        return [Label(**{k: v for k, v in row.items() if k in known})
-                for row in rows]
+        for n, row in enumerate(rows, 1):
+            where = f"label file {path}: row {n}"
+            if not isinstance(row, dict):
+                raise ValueError(f"{where} is not an object: {row!r}")
+            missing = [k for k in ('start', 'end') if k not in row]
+            if missing:
+                raise ValueError(f"{where} has no {' or '.join(missing)}; every "
+                                 f"row needs both 'start' and 'end'")
+            _span(row['start'], row['end'], where)
+            labels.append(Label(**{k: v for k, v in row.items() if k in known}))
+        return labels
 
-    labels = []
-    with open(path, "r", encoding="utf-8") as fh:
-        for n, line in enumerate(fh, 1):
-            if not line.strip() or line.startswith("\\"):
-                continue
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 2:
-                raise ValueError(
-                    f"{path} line {n}: expected 'start<TAB>end<TAB>text', "
-                    f"found {len(parts)} column(s)")
-            try:
-                start, end = float(parts[0]), float(parts[1])
-            except ValueError:
-                raise ValueError(
-                    f"{path} line {n}: {parts[0]!r} and {parts[1]!r} are not "
-                    f"times in seconds") from None
-            labels.append(Label(start=start, end=end,
-                                text="\t".join(parts[2:]).strip()))
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            lines = fh.readlines()
+    except UnicodeDecodeError as e:
+        raise ValueError(f"label file {path} is not UTF-8 text: {e}") from None
+    for n, line in enumerate(lines, 1):
+        if not line.strip() or line.startswith("\\"):
+            continue
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) < 2:
+            raise ValueError(
+                f"{path} line {n}: expected 'start<TAB>end<TAB>text', "
+                f"found {len(parts)} column(s)")
+        try:
+            start, end = float(parts[0]), float(parts[1])
+        except ValueError:
+            raise ValueError(
+                f"{path} line {n}: {parts[0]!r} and {parts[1]!r} are not "
+                f"times in seconds") from None
+        _span(start, end, f"{path} line {n}")
+        labels.append(Label(start=start, end=end,
+                            text="\t".join(parts[2:]).strip()))
     return labels
 
 

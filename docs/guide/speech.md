@@ -297,6 +297,13 @@ Broadband noise right next to a word is joined to it, which is the consonant
 rule doing its job: a burst of white noise that ended where a vowel began
 became part of the vowel's span. With 0.4 s between them, it was dropped.
 
+A clip needs something quieter than the speech in it, in 15 % of its frames. A
+220 Hz tone on its own, 0.02 s of it or 30 s, is its own floor and comes back
+empty; 0.1 s of it after 0.1 s of room tone is found, and 0.3 s of it after
+0.05 s is not. So do not ask `vad` about clips already cut to the word. How
+short a clip is makes no other difference, except that one under `min_speech`
+can hold no span and one under 40 ms is a single frame.
+
 ## Pitch with f0
 
 [`f0`][kudio.core.pitch.f0] runs pYIN (Mauch & Dixon 2014)[^pyin] through librosa

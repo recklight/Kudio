@@ -194,9 +194,9 @@ def test_a_drr_the_tail_cannot_reach_is_refused_rather_than_approximated():
 
 
 def test_bad_rates_are_refused():
-    with pytest.raises(FeatureError, match="positive rate"):
+    with pytest.raises(FeatureError, match="positive sample rate"):
         kudio.rir(0, rt60=0.5)
-    with pytest.raises(FeatureError, match="positive rate"):
+    with pytest.raises(FeatureError, match="positive sample rate"):
         kudio.rt60(kudio.rir(SR, rt60=0.5, seed=0), 0)
 
 

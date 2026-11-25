@@ -40,7 +40,8 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 
 from kudio import _optional
-from kudio._samples import as_float
+from kudio._samples import one_channel
+from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
 if TYPE_CHECKING:
@@ -79,8 +80,7 @@ class SpectrogramStream:
                  seconds: float = 3.0, top_db: float = 80.0, ref: float = 1.0,
                  n_mels: int = 0, fmin: float = 0.0,
                  fmax: Optional[float] = None):
-        if sr <= 0:
-            raise FeatureError(f"SpectrogramStream needs a positive rate, got {sr}")
+        sr = sample_rate(sr, 'SpectrogramStream', FeatureError)
         if n_fft < 2:
             raise FeatureError(f"n_fft must be >= 2, got {n_fft}")
         hop = max(1, int(n_fft) // 4) if hop_length is None else int(hop_length)
@@ -215,7 +215,7 @@ class SpectrogramStream:
             when the block was longer than the window -- all are returned, only
             the last :attr:`n_columns` are kept.
         """
-        block = as_float(block)
+        block = one_channel(block, 'SpectrogramStream.push', FeatureError)
         if block.ndim > 1:
             raise FeatureError(
                 f"SpectrogramStream takes mono audio, got shape {block.shape}. "

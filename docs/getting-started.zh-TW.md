@@ -15,6 +15,10 @@ pip install kudio
 選用套件組時，要到你呼叫需要它的函式時才會發現（畫圖工具則是在匯入
 `kudio.util.visual` 的時候），不會提早。
 
+WAV、FLAC、OGG、MP3、AIFF 和 libsndfile 認得的其他格式，這樣就能讀。m4a、aac、webm
+之類的格式還要 audioread（`pip install audioread`）和 PATH 上的 ffmpeg，兩樣都不隨 kudio
+安裝（[音訊檔案](guide/audio-files.md#formats-soundfile-does-not-read)）。
+
 numpy 的版本上限是 2.6 以下。這個限制來自 numba，不是我：librosa 相依於 numba，
 numba 限制了 numpy 的版本，要求 pip 裝一個比 numba 能接受的還新的 numpy，只會給它
 一個解不開的問題。numba 的上限往上調時，這裡也會跟著調。
@@ -268,13 +272,13 @@ kudio 自己的例外類別都繼承自 [`KudioError`][kudio.exceptions.KudioErr
 | 類別 | 引發時機 |
 |---|---|
 | [`AudioIOError`][kudio.exceptions.AudioIOError] | 檔案無法讀取或寫入：`file_load`、`audio_info`、`save_wave` 以及建立在它們之上的功能 |
-| [`FeatureError`][kudio.exceptions.FeatureError] | 轉換或量測拒絕它的輸入：形狀不對、太短、未知的方法或參數 |
+| [`FeatureError`][kudio.exceptions.FeatureError] | 轉換或量測拒絕它的輸入：形狀不對、太短、未知的方法或參數；它同時也是 `ValueError` |
 | [`DeviceError`][kudio.exceptions.DeviceError] | `StreamRecorder` 找不到可用的輸入裝置，或裝了 sounddevice 但系統沒有 PortAudio 函式庫 |
 | [`SynthesisError`][kudio.exceptions.SynthesisError] | [`Synthesizer`][kudio.core.synth.Synthesizer] 不肯清空存放輸入檔、工作目錄、你的家目錄或檔案系統根目錄的資料夾，或遇到無法設定 SNR 的靜音雜訊或乾淨檔案 |
 | [`DependencyError`][kudio.exceptions.DependencyError] | 缺少選用套件；它同時也是 `ImportError` |
 
 kudio 裡沒有任何地方會引發 `AudioIOError` 的子類別
-[`UnsupportedFormatError`][kudio.exceptions.UnsupportedFormatError]。soundfile 讀不了的
+[`UnsupportedFormatError`][kudio.exceptions.UnsupportedFormatError]。讀不了或解不開的
 檔案會以 `AudioIOError` 本身回報，所以請攔截它，例如在批次處理中略過讀不了的檔案：
 
 ```python
@@ -289,8 +293,9 @@ for path in ["noisy.wav", "missing.wav"]:
 skipped missing.wav
 ```
 
-訊息裡會寫出檔名和 soundfile 給的原因，soundfile 自己的例外則串接在 `__cause__`，
-所以 traceback 兩個都會顯示。
+訊息裡會寫出檔名和問題：這裡是檔案不存在，檔案壞掉時是 soundfile 給的原因，沒有 ffmpeg
+卻要讀 m4a 時則是缺少 ffmpeg。底下引發的例外串接在 `__cause__`，所以 traceback 兩個都會
+顯示。
 
 `DependencyError` 會寫出要安裝的套件組，並把套件名稱和套件組存成屬性。在沒有 `[pesq]`
 的電腦上：
@@ -315,9 +320,12 @@ pesq
 
 - 許多參數檢查，以及少數對資料的檢查，會引發內建的 `ValueError` 或 `TypeError`：
   `score` 裡未知的指標名稱、長度差太多無法評分的兩個訊號、交給指標的立體聲一對、
-  [`resample`][kudio.core.io.resample] 或 `file_load` 裡為 0 的取樣率、`Synthesizer`
+  [`resample`][kudio.core.io.resample]、`file_load` 或 `save_wave` 裡為 0、NaN 或 `True`
+  的取樣率、給 `save_wave` 的三維陣列、`Synthesizer`
   需要 SNR 清單卻給了字串、沒有任何 `.wav` 檔的乾淨資料夾。不存在的 `Synthesizer`
-  輸入會引發 `FileNotFoundError`。`except kudio.KudioError` 一個都攔不到。
+  輸入會引發 `FileNotFoundError`。`except kudio.KudioError` 一個都攔不到。反過來，
+  `except ValueError` 兩邊都攔得到：`FeatureError` 也是 `ValueError`，所以 `vad` 或效果
+  拒絕的輸入，和指標拒絕的輸入，一起就攔下來了。
 - 等待超過 `timeout=` 的緩衝區會引發內建的 `TimeoutError`
   （[錄音與即時檢視](guide/live-audio.md)）。
 - `play_audio` 無法播放時不會引發例外，連檔案不存在也一樣。它會回傳一段簡短的訊息說明

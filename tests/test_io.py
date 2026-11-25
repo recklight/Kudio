@@ -1,5 +1,14 @@
 # -*- coding: utf-8 -*-
+import contextlib
 import logging
+import os
+import struct
+import subprocess
+import sys
+import types
+import warnings
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -155,7 +164,7 @@ def test_resample_rejects_bad_rates():
     import pytest
     from kudio import resample
 
-    with pytest.raises(ValueError, match="sample rates must be > 0"):
+    with pytest.raises(ValueError, match="orig_sr must be a positive rate"):
         resample(np.zeros(10, dtype=np.float32), 0, 16000)
 
 
@@ -622,7 +631,7 @@ def test_a_refused_write_leaves_no_folder_behind(tmp_path):
 
 
 def test_a_bad_rate_is_a_bad_call_not_a_bad_file(wav_file):
-    with pytest.raises(ValueError, match="positive rate"):
+    with pytest.raises(ValueError, match="positive whole rate"):
         file_load(wav_file, sr=0)
 
 
@@ -714,3 +723,833 @@ def test_load_audio_collects_what_check_input_collects(tmp_path, sine):
     sf.write(str(tmp_path / "ZOOM0001.WAV"), sine, 16000)
     sf.write(str(tmp_path / "b.wav"), sine, 16000)
     assert list(kudio.LoadAudio(tmp_path)) == check_input(tmp_path)[0]
+
+
+# -- a rate is a positive number, and a file's a whole one -----------------------
+
+#: everything in kudio.core.io that is given a rate: the call, with *f* a 1 s
+#: 16 kHz file, *y* its samples and *out* a folder that is not there yet; the
+#: argument; whether None is one of its values; and whether it has to be whole
+RATED = {
+    'file_load': (lambda f, y, out, sr: file_load(f, sr=sr), 'sr', True, True),
+    # a short one: taken as 1 Hz it would come back 8000 times as long
+    'resample from': (lambda f, y, out, sr: kudio.resample(y[:160], sr, 8000),
+                      'orig_sr', False, False),
+    'resample to': (lambda f, y, out, sr: kudio.resample(y, 8000, sr),
+                    'target_sr', False, False),
+    'audio_info': (lambda f, y, out, sr: kudio.audio_info(y, sr=sr), 'sr', False, True),
+    'save_wave': (lambda f, y, out, sr: save_wave(out / "a.wav", y, sr), 'sr', False, True),
+    'save_wave resampling': (
+        lambda f, y, out, sr: save_wave(out / "a.wav", y, 8000, d_sample=sr),
+        'd_sample', True, True),
+    'convert_folder': (lambda f, y, out, sr: kudio.convert_folder(f, out, sr=sr),
+                       'sr', True, True),
+    'enhance_folder': (lambda f, y, out, sr: kudio.enhance_folder(f, out, sr=sr),
+                       'sr', True, True),
+}
+
+NOT_A_RATE = [True, False, np.True_, np.array(True), '16000', b'16000', bytearray(b'16000'),
+              float('nan'), float('inf'), float('-inf'), 0, 0.0, -1, 16000 + 0j,
+              np.complex128(16000), [16000], np.array([16000])]
+
+REFUSED = [(name, value) for name, (_, _, optional, whole) in RATED.items()
+           for value in NOT_A_RATE + [16000.5] * whole + [None] * (not optional)]
+
+
+@pytest.mark.parametrize("name, value", [
+    pytest.param(n, v, id=f"{n}-{v!r}") for n, v in REFUSED])
+def test_what_is_not_a_rate_is_refused(wav_file, sine, tmp_path, name, value):
+    """True went in as 1 Hz and came back as 1 sample a second, 16000.5 came
+    back labelled 16000, and nan and inf were blamed on the file."""
+    call, argument, optional, whole = RATED[name]
+    out = tmp_path / "out"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(ValueError) as caught:
+            call(wav_file, sine, out, value)
+    if name == 'audio_info' and value is None:
+        assert str(caught.value) == "audio_info(array) needs sr="
+    else:
+        assert str(caught.value) == (f"{argument} must be a positive {'whole ' * whole}rate"
+                                     f"{' or None' * optional}, got {value!r}")
+    assert not out.exists(), "a mistake in the call leaves nothing behind"
+
+
+@pytest.mark.parametrize("value", [16000.0, np.int32(16000), np.float64(16000.0),
+                                   np.array(16000), Fraction(16000), Decimal(16000)], ids=repr)
+@pytest.mark.parametrize("name", RATED)
+def test_a_whole_rate_of_any_type_is_that_rate(wav_file, sine, tmp_path, name, value):
+    call = RATED[name][0]
+
+    def outcome(sr, folder):
+        result = call(wav_file, sine, tmp_path / folder, sr)
+        written = {p.name: p.read_bytes() for p in (tmp_path / folder).glob("*.wav")}
+        if isinstance(result, tuple):                            # file_load
+            return result[0].tolist(), result[1], type(result[1])
+        if isinstance(result, np.ndarray):                       # resample
+            return result.tolist()
+        if isinstance(result, kudio.AudioInfo):
+            return result, type(result.sr)
+        return written
+
+    assert outcome(value, "given") == outcome(16000, "int")
+
+
+@pytest.mark.parametrize("value", [22254.5, np.float32(22254.5), Fraction(244800, 11),
+                                   Decimal("22254.5")], ids=repr)
+def test_an_array_can_be_at_a_rate_that_is_not_whole(sine, value):
+    """The sound chip of the first Macintosh ran at 22254.5 Hz. No file can be
+    at such a rate; what was recorded at it still has to be resampled from it."""
+    out = kudio.resample(sine, value, 8000)
+    assert len(out) == int(np.ceil(len(sine) * 8000 / float(value)))
+    assert len(kudio.resample(out, 8000, value)) == pytest.approx(len(sine), abs=2)
+
+
+# -- a shape no file can hold --------------------------------------------------
+
+@pytest.mark.parametrize("shape", [(), (10, 2, 2), (1, 1, 16000), (100, 0), (1025, 1025)], ids=repr)
+@pytest.mark.parametrize("d_sample", [None, 8000])
+def test_a_shape_no_file_can_hold_leaves_the_file_alone(tmp_path, sine, shape, d_sample):
+    """libsndfile opened the file first, which empties it, and looked at the
+    samples then."""
+    path = tmp_path / "a.wav"
+    save_wave(path, sine, 16000)
+    before = path.read_bytes()
+    with pytest.raises(ValueError) as caught:
+        save_wave(path, np.zeros(shape), 16000, d_sample=d_sample)
+    assert str(caught.value) == (f"save_wave() writes (frames,) or (frames, channels) with 1 to "
+                                 f"1024 channels, got shape {shape}")
+    assert path.read_bytes() == before
+    with pytest.raises(ValueError):
+        save_wave(tmp_path / "new" / "a.wav", np.zeros(shape), 16000)
+    assert not (tmp_path / "new").exists()
+
+
+@pytest.mark.parametrize("shape", [(0,), (0, 2), (4, 1), (1024, 1024)], ids=repr)
+def test_every_shape_a_file_can_hold_is_written(tmp_path, shape):
+    save_wave(tmp_path / "a.wav", np.zeros(shape), 16000)
+    info = sf.info(str(tmp_path / "a.wav"))
+    assert (info.frames, info.channels) == (shape[0], 1 if len(shape) == 1 else shape[1])
+
+
+@contextlib.contextmanager
+def _held(path, share):
+    """*path* open to another program on Windows, which shares it with nobody
+    (0) or lets it be read (1)."""
+    import ctypes
+    from ctypes import wintypes
+    create = ctypes.windll.kernel32.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    # read access, and the file has to exist
+    handle = create(str(path), 0x80000000, share, None, 3, 0x80, None)
+    try:
+        yield
+    finally:
+        ctypes.windll.kernel32.CloseHandle(wintypes.HANDLE(handle))
+
+
+# -- a write that fails --------------------------------------------------------
+
+#: a file of each kind, and what cannot be written in its place: the extension,
+#: the subtype, then the shape and the rate
+REFUSED_BY_LIBSNDFILE = {
+    'nine channels of FLAC': ('flac', 'PCM_16', (100, 9), 16000),
+    'three channels of MP3': ('mp3', 'MPEG_LAYER_III', (100, 3), 16000),
+    'FLAC at 1 MHz': ('flac', 'PCM_16', (100,), 1000000),
+    'Vorbis in a WAV': ('wav', 'VORBIS', (100,), 16000),
+    'float in a FLAC': ('flac', 'FLOAT', (100,), 16000),
+}
+
+
+def _there(tmp_path, sine, extension):
+    """A file worth keeping, alone in its folder."""
+    path = tmp_path / f"take.{extension}"
+    save_wave(path, sine, 16000, subtype='MPEG_LAYER_III' if extension == 'mp3' else 'PCM_16')
+    return path, path.read_bytes()
+
+
+@pytest.mark.parametrize("name", REFUSED_BY_LIBSNDFILE)
+def test_what_libsndfile_refuses_leaves_the_file_there_as_it_was(tmp_path, sine, name):
+    """It empties the file first and refuses then: 9 channels of FLAC, 3 of MP3
+    and FLAC at 1 MHz each left 0 bytes."""
+    extension, subtype, shape, sr = REFUSED_BY_LIBSNDFILE[name]
+    path, before = _there(tmp_path, sine, extension)
+    with pytest.raises(AudioIOError) as caught:
+        save_wave(path, np.zeros(shape), sr, subtype=subtype)
+    assert str(caught.value).startswith(f"Could not write audio file: {path} (")
+    assert ".tmp" not in str(caught.value)
+    assert path.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [path], "and nothing is left beside it"
+
+
+@pytest.mark.parametrize("error, raised, said", [
+    (OSError(28, "No space left on device"), AudioIOError, "No space left on device"),
+    (RuntimeError("the disk was pulled out"), AudioIOError, "the disk was pulled out"),
+    (MemoryError(), AudioIOError, "MemoryError"),
+    (KeyboardInterrupt(), KeyboardInterrupt, None),
+], ids=["disk full", "an error", "no text", "Ctrl-C"])
+def test_a_write_that_breaks_off_half_way_leaves_the_file_there(tmp_path, sine, monkeypatch,
+                                                                error, raised, said):
+    path, before = _there(tmp_path, sine, "wav")
+    write, beside = sf.SoundFile.write, []
+
+    def half(self, data):
+        write(self, data[:len(data) // 2])
+        self.flush()
+        beside.extend(p for p in tmp_path.iterdir() if p != path)
+        raise error
+
+    with monkeypatch.context() as patched:
+        patched.setattr(sf.SoundFile, "write", half)
+        with pytest.raises(raised, match=said):
+            save_wave(path, -sine, 16000)
+        with pytest.raises(raised):
+            save_wave(tmp_path / "new.wav", -sine, 16000)
+    assert path.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [path]
+    assert len(beside) == 2 and {p.suffix for p in beside} == {".tmp"}, (
+        "half a file is not one a folder tool would collect")
+
+
+def test_a_file_that_is_replaced_is_the_new_one(tmp_path, sine):
+    path, before = _there(tmp_path, sine, "wav")
+    save_wave(path, 0.5 * sine, 8000)
+    assert path.read_bytes() != before
+    info = kudio.audio_info(path)
+    assert (info.sr, info.format) == (8000, "WAV") and info.peak == pytest.approx(0.25, abs=0.01)
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_a_relative_name_is_written_where_it_says(tmp_path, sine, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    save_wave("take.wav", sine, 16000)
+    save_wave(os.path.join("sub", "take.flac"), sine, 16000)
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*.*")) == [
+        "sub/take.flac", "take.wav"]
+
+
+@pytest.mark.parametrize("name", ["take", "take.xyz", "take.m4a"])
+def test_an_extension_that_is_no_format_writes_nothing(tmp_path, sine, name):
+    with pytest.raises(AudioIOError, match="there is no format to take from the extension"):
+        save_wave(tmp_path / name, sine, 16000)
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_link_stays_a_link(tmp_path, sine):
+    real = tmp_path / "real"
+    real.mkdir()
+    path, _ = _there(real, sine, "wav")
+    link = tmp_path / "link.wav"
+    try:
+        link.symlink_to(path)
+    except OSError as e:
+        pytest.skip(f"no links here: {e}")
+    save_wave(link, 0.5 * sine, 8000)
+    assert link.is_symlink() and not path.is_symlink()
+    assert kudio.audio_info(path).sr == 8000
+    assert [p.name for p in real.iterdir()] == ["take.wav"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["link.wav", "real"]
+
+
+def test_the_file_behind_a_link_is_the_one_replaced(tmp_path, sine, monkeypatch):
+    """The same where links take an administrator."""
+    path, _ = _there(tmp_path, sine, "wav")
+    name = tmp_path / "other" / "link.wav"
+    name.parent.mkdir()
+    monkeypatch.setattr(os.path, "islink", lambda p: str(p) == str(name))
+    monkeypatch.setattr(os.path, "realpath", lambda p, **k: str(path))
+    save_wave(name, 0.5 * sine, 8000)
+    assert kudio.audio_info(path).sr == 8000
+    assert not list(name.parent.iterdir())
+
+
+def test_what_is_no_ordinary_file_is_not_replaced():
+    from kudio.core.io import _put_in_place
+    seen = []
+    _put_in_place(Path(os.devnull), 'WAV', seen.append)
+    assert seen == [str(Path(os.devnull))]
+
+
+@pytest.mark.skipif(os.name == 'nt', reason="Windows has no permission bits")
+def test_the_permissions_of_the_file_are_kept(tmp_path, sine):
+    path, _ = _there(tmp_path, sine, "wav")
+    path.chmod(0o640)
+    save_wave(path, -sine, 16000)
+    assert path.stat().st_mode & 0o777 == 0o640
+
+
+def test_a_file_that_may_not_be_written_is_not_replaced(tmp_path, sine):
+    """Replacing a file asks for the folder's permission alone."""
+    path, before = _there(tmp_path, sine, "wav")
+    path.chmod(0o444)
+    try:
+        if os.access(path, os.W_OK):
+            pytest.skip("root writes every file")
+        with pytest.raises(AudioIOError, match="Permission denied"):
+            save_wave(path, -sine, 16000)
+    finally:
+        path.chmod(0o644)
+    assert path.read_bytes() == before and list(tmp_path.iterdir()) == [path]
+
+
+windows = pytest.mark.skipif(os.name != 'nt', reason="only Windows keeps a file that is open")
+
+
+def _as_written(folder, wave, sr):
+    """What save_wave makes of *wave*, byte for byte."""
+    folder.mkdir()
+    save_wave(folder / "a.wav", wave, sr)
+    return (folder / "a.wav").read_bytes()
+
+
+@windows
+@pytest.mark.parametrize("seconds", [0.25, 1.0, 3.0], ids=["shorter", "as long", "longer"])
+@pytest.mark.parametrize("held", [lambda p: open(p, 'rb'), lambda p: sf.SoundFile(str(p))],
+                         ids=["by Python", "by soundfile"])
+def test_a_file_that_is_open_elsewhere_is_overwritten(tmp_path, sine, held, seconds):
+    """Windows replaces no file that is open, and lets it be written to."""
+    path, before = _there(tmp_path, sine, "wav")
+    new = 0.5 * np.sin(np.arange(int(16000 * seconds)) / 3)
+    with held(path):
+        save_wave(path, new, 16000)
+    assert path.read_bytes() == _as_written(tmp_path / "apart", new, 16000) != before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["apart", "take.wav"]
+
+
+@windows
+@pytest.mark.parametrize("share", [0, 1], ids=["shared with nobody", "to be read"])
+def test_a_file_that_is_closed_to_writing_is_left_as_it_was(tmp_path, sine, share):
+    path, before = _there(tmp_path, sine, "wav")
+    with _held(path, share):
+        with pytest.raises(AudioIOError, match="may be open in another program"):
+            save_wave(path, -sine, 16000)
+        assert [p.name for p in tmp_path.iterdir()] == ["take.wav"]
+    assert path.read_bytes() == before
+
+
+@windows
+def test_a_file_in_another_programs_memory_is_not_cut_short(tmp_path, sine):
+    """Windows does not shorten it, and the new samples on top of the old
+    would be neither recording."""
+    path, before = _there(tmp_path, sine, "wav")
+    mapped = np.memmap(path, dtype=np.uint8, mode='r')
+    try:
+        with pytest.raises(AudioIOError, match="may be open in another program"):
+            save_wave(path, sine[:4000], 16000)
+        assert bytes(mapped) == before
+        assert [p.name for p in tmp_path.iterdir()] == ["take.wav"]
+    finally:
+        mapped._mmap.close()
+
+
+@windows
+def test_no_other_error_is_answered_by_overwriting(tmp_path, sine, monkeypatch):
+    path, before = _there(tmp_path, sine, "wav")
+
+    def broken(source, target):
+        raise OSError(5, "Input/output error")
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "replace", broken)
+        with pytest.raises(AudioIOError, match="Input/output error"):
+            save_wave(path, -sine, 16000)
+    assert path.read_bytes() == before and list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("old, new", [(b"a long one", b"short"), (b"short", b"a long one"),
+                                      (b"same", b"size")])
+def test_a_file_is_overwritten_to_its_new_length(tmp_path, old, new):
+    from kudio.core.io import _overwrite
+    (tmp_path / "old").write_bytes(old)
+    (tmp_path / "new").write_bytes(new)
+    assert _overwrite(str(tmp_path / "new"), str(tmp_path / "old")) is True
+    assert (tmp_path / "old").read_bytes() == new
+
+
+# -- files that cannot be read, and what is said about them --------------------
+
+#: every way a file is read: the call, the error, and the words before the path
+READS = {
+    'file_load': (lambda p: file_load(p), AudioIOError, "Could not load audio file: "),
+    'file_load at its rate': (lambda p: file_load(p, sr=16000), AudioIOError,
+                              "Could not load audio file: "),
+    'file_load at a rate': (lambda p: file_load(p, sr=8000), AudioIOError,
+                            "Could not load audio file: "),
+    'file_load in stereo': (lambda p: file_load(p, sr=8000, mono=False), AudioIOError,
+                            "Could not load audio file: "),
+    'audio_info': (lambda p: kudio.audio_info(p), AudioIOError,
+                   "Could not read audio header: "),
+    'audio_info of the header': (lambda p: kudio.audio_info(p, peak=False), AudioIOError,
+                                 "Could not read audio header: "),
+    'Synthesizer': (lambda p: kudio.core.synth._load(p, None, "clean"), kudio.SynthesisError,
+                    "could not read clean file "),
+    'Synthesizer at a rate': (lambda p: kudio.core.synth._load(p, 8000, "noise"),
+                              kudio.SynthesisError, "could not read noise file "),
+    'save_spectrogram_as_wave': (
+        lambda p: kudio.save_spectrogram_as_wave(Path(p).parent / "out.wav", p,
+                                                 np.zeros((63, 257))),
+        AudioIOError, "Could not load audio file: "),
+}
+
+
+def _unreadable(folder, what):
+    path = folder / "take.wav"
+    if what == "folder":
+        path.mkdir()
+    elif what == "empty":
+        path.write_bytes(b"")
+    return path
+
+
+@pytest.mark.parametrize("spelled", [str, Path])
+@pytest.mark.parametrize("what, said", [("missing", "no such file"),
+                                        ("folder", "it is a folder, not a file"),
+                                        ("empty", "the file is empty, 0 bytes")])
+@pytest.mark.parametrize("name", READS)
+def test_a_path_with_nothing_to_read_is_told_apart(tmp_path, name, what, said, spelled):
+    """libsndfile says "System error" for a missing file and a folder alike,
+    and librosa 0.11 warns about audioread on the way to each of them."""
+    call, error, words = READS[name]
+    path = _unreadable(tmp_path, what)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(error) as caught:
+            call(spelled(path))
+    assert type(caught.value) is error, "and no second base to catch it by"
+    message = str(caught.value)
+    assert message.startswith(f"{words}{path}") and said in message
+
+
+def test_a_null_in_the_name_is_no_file(tmp_path):
+    with pytest.raises(AudioIOError, match="no such file"):
+        file_load(str(tmp_path / "a.wav") + "\0")
+
+
+def test_a_path_that_may_not_be_looked_at_is_not_called_missing(wav_file, monkeypatch):
+    def refuse(path, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "stat", refuse)
+        with pytest.raises(AudioIOError) as caught:
+            file_load(wav_file)
+    assert str(caught.value).endswith("(Permission denied)")
+
+
+def test_only_a_regular_file_is_empty_at_zero_bytes():
+    """A pipe has a size of 0 as well, and can still hold audio."""
+    from kudio.core.io import _nothing_to_read
+    assert os.stat(os.devnull).st_size == 0
+    assert _nothing_to_read(os.devnull) is None
+
+
+@contextlib.contextmanager
+def _closed_to_us(path):
+    """*path* as it is while another program holds it, or under somebody
+    else's permissions."""
+    if os.name == 'nt':
+        with _held(path, 0):
+            yield
+    else:
+        path.chmod(0)
+        if os.access(path, os.R_OK):
+            pytest.skip("root reads every file")
+        try:
+            yield
+        finally:
+            path.chmod(0o600)
+
+
+@pytest.mark.parametrize("name", READS)
+def test_a_file_that_will_not_open_says_what_the_system_says(wav_file, name):
+    call, error, words = READS[name]
+    with _closed_to_us(wav_file):
+        with pytest.raises(error) as caught:
+            call(wav_file)
+    assert str(caught.value).startswith(f"{words}{wav_file}")
+    assert "Permission denied" in str(caught.value)
+    assert "System error" not in str(caught.value)
+
+
+@pytest.fixture
+def failing(monkeypatch):
+    """Make soundfile raise what it is handed, however it is asked to read."""
+    def install(error):
+        def fail(*args, **kwargs):
+            raise error
+        for name in ("read", "info", "SoundFile"):
+            monkeypatch.setattr(sf, name, fail)
+    return install
+
+
+@pytest.mark.parametrize("error, said", [(EOFError(), "EOFError"),
+                                         (RuntimeError("the disk was pulled out"),
+                                          "the disk was pulled out")], ids=repr)
+@pytest.mark.parametrize("name", READS)
+def test_an_error_without_text_is_named_by_its_type(wav_file, failing, name, error, said):
+    """An error with a text keeps it."""
+    failing(error)
+    call, expected, words = READS[name]
+    with pytest.raises(expected) as caught:
+        call(wav_file)
+    message = str(caught.value)
+    assert message in (f"{words}{wav_file} ({said})", f"{words}{wav_file}: {said}")
+
+
+def test_nothing_is_read_through_librosa(wav_file, monkeypatch):
+    """librosa 1.0 reads fewer formats than 0.11, so what a file holds must
+    not be up to which one is installed."""
+    import librosa
+
+    def load(*args, **kwargs):
+        raise AssertionError("librosa.load was called")
+    monkeypatch.setattr(librosa, "load", load)
+    for name, (call, _, _) in READS.items():
+        call(wav_file)
+
+
+def test_importing_kudio_and_reading_a_wav_need_no_audioread(wav_file):
+    code = ("import sys, kudio; kudio.file_load(sys.argv[1]); kudio.audio_info(sys.argv[1]); "
+            "kudio.file_load(sys.argv[1], sr=16000); "
+            "kudio.core.synth._load(sys.argv[1], None, 'clean'); "
+            "print([m for m in ('audioread', 'librosa') if m in sys.modules])")
+    done = subprocess.run([sys.executable, "-c", code, str(wav_file)], capture_output=True,
+                          text=True, cwd=str(Path(kudio.__file__).parents[1]), timeout=300)
+    assert done.stdout.strip() == "[]", done.stdout + done.stderr
+
+
+# -- NaN and inf ---------------------------------------------------------------
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+@pytest.mark.parametrize("sr, mono", [(None, True), (16000, True), (16000, False),
+                                      (16000.0, True)])
+def test_a_file_with_nan_is_read_at_its_own_rate(tmp_path, bad, sr, mono):
+    """Asking for the rate the file is at is no resampling, and repairing a
+    clip starts with reading it."""
+    path = tmp_path / "take.wav"
+    written = _write_non_finite(path, bad=bad)
+    with pytest.warns(UserWarning, match=r"take\.wav: 10 of 16000 sample\(s\)") as caught:
+        y, rate = file_load(path, sr=sr, mono=mono)
+    assert rate == 16000
+    assert np.array_equal(y, written.astype(np.float32), equal_nan=True)
+    assert caught[0].filename == __file__
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+@pytest.mark.parametrize("mono", [True, False])
+def test_a_file_with_nan_is_not_resampled(tmp_path, bad, mono):
+    """soxr's filter is hundreds of samples long, and would make that many NaN
+    of each one."""
+    path = tmp_path / "take.wav"
+    _write_non_finite(path, bad=bad)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")                   # the error says it all
+        with pytest.raises(AudioIOError) as caught:
+            file_load(path, sr=8000, mono=mono)
+    message = str(caught.value)
+    assert message.startswith(f"Could not load audio file: {path} (10 of 16000 sample(s) are "
+                              f"not finite (NaN or inf), so it cannot be resampled from 16000 "
+                              f"to 8000 Hz")
+    assert "sr=None" in message
+
+
+def test_nan_in_one_channel_is_counted_where_it_is(tmp_path):
+    path = tmp_path / "st.wav"
+    y = np.full((1000, 2), 0.25, np.float32)
+    y[10:13, 1] = np.nan
+    sf.write(str(path), y, 16000, subtype="FLOAT")
+    with pytest.warns(UserWarning, match=r"3 of 2000 sample\(s\)"):
+        kept, _ = file_load(path, sr=16000, mono=False)
+    assert np.array_equal(kept, y, equal_nan=True)
+    with pytest.warns(UserWarning, match=r"3 of 1000 sample\(s\)"):
+        mixed, _ = file_load(path, sr=16000)
+    assert np.flatnonzero(np.isnan(mixed)).tolist() == [10, 11, 12]
+
+
+def test_convert_folder_names_the_file_it_could_not_resample(tmp_path, sine):
+    _write_non_finite(tmp_path / "bad.wav")
+    save_wave(tmp_path / "good.wav", sine, 16000)
+    result = kudio.convert_folder(tmp_path, tmp_path / "out", sr=8000)
+    assert result.written == 1
+    assert [p.name for p, _ in result.failed] == ["bad.wav"]
+    assert "cannot be resampled from 16000 to 8000 Hz" in result.failed[0][1]
+
+
+@pytest.mark.parametrize("sr", [None, 16000, 8000])
+def test_a_synthesis_input_with_nan_is_named_with_the_count(tmp_path, sr):
+    path = tmp_path / "take.wav"
+    _write_non_finite(path)
+    with pytest.raises(kudio.SynthesisError) as caught:
+        kudio.core.synth._load(path, sr, "noise")
+    assert str(caught.value) == (f"could not read noise file {path}: 10 of 16000 sample(s) are "
+                                 f"not finite (NaN or inf)")
+
+
+def test_there_is_no_phase_in_a_file_with_nan(tmp_path, sine):
+    path = tmp_path / "take.wav"
+    _write_non_finite(path)
+    spec = kudio.waveform_to_spectrogram(sine)
+    with pytest.raises(AudioIOError) as caught:
+        kudio.save_spectrogram_as_wave(tmp_path / "out.wav", path, spec)
+    assert str(caught.value) == (f"Could not load audio file: {path} (10 of 16000 sample(s) are "
+                                 f"not finite (NaN or inf))")
+    assert not (tmp_path / "out.wav").exists()
+
+
+# -- a WAV that ends before its header says ------------------------------------
+
+#: the ways a file is read, all of which have to say so
+CUT_READS = {
+    'file_load': lambda p: file_load(p),
+    'file_load at its rate': lambda p: file_load(p, sr=16000),
+    'file_load in stereo': lambda p: file_load(p, sr=16000, mono=False),
+    'audio_info': lambda p: kudio.audio_info(p),
+    'audio_info of the header': lambda p: kudio.audio_info(p, peak=False),
+    'Synthesizer': lambda p: kudio.core.synth._load(p, None, "clean"),
+    'play_audio': lambda p: kudio.play_audio(str(p)),
+}
+
+
+@pytest.fixture
+def quiet_card(monkeypatch):
+    """play_audio plays to nothing."""
+    monkeypatch.setitem(sys.modules, "sounddevice",
+                        types.SimpleNamespace(play=lambda y, rate: None))
+
+
+def _cut(path, keep):
+    """*path* with the first *keep* of its bytes, or that share of them."""
+    whole = path.read_bytes()
+    path.write_bytes(whole[:int(len(whole) * keep) if isinstance(keep, float) else keep])
+    return path
+
+
+def _riff(*chunks, form=b'WAVE', riff=b'RIFF'):
+    body = b''.join(name + length.to_bytes(4, 'little') + content
+                    for name, length, content in chunks)
+    return riff + (4 + len(body)).to_bytes(4, 'little') + form + body
+
+
+def _fmt(average=32000):
+    """16 kHz, 16 bits, one channel."""
+    return b'fmt ', 16, struct.pack('<HHIIHH', 1, 1, 16000, average, 2, 16)
+
+
+FMT = _fmt()
+
+
+def _data(length, held):
+    return b'data', length, bytes(held)
+
+
+def _listed(path, *chunks, **kwargs):
+    path.write_bytes(_riff(*chunks, **kwargs))
+    return path
+
+
+def _in_silence(read, path):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        return read(path)
+
+
+@pytest.mark.parametrize("name", CUT_READS)
+def test_a_wav_that_was_cut_short_is_said_to_be(tmp_path, sine, quiet_card, name):
+    """libsndfile reads what there is, so half of a take is a shorter take."""
+    path = tmp_path / "take.wav"
+    save_wave(path, sine, 16000)
+    _cut(path, 44 + 16000)                                # of 44 + 32000
+    with pytest.warns(UserWarning) as caught:
+        CUT_READS[name](path)
+    assert [str(w.message) for w in caught] == [
+        f"{path}: the header says 1.00 s and 0.50 s are there, 16000 bytes fewer. "
+        f"The file may have been cut short."]
+    assert caught[0].filename == __file__
+
+
+def test_what_is_read_of_it_is_what_soundfile_reads(tmp_path, sine):
+    path = tmp_path / "take.wav"
+    save_wave(path, np.stack([sine, -sine], axis=1), 16000)
+    _cut(path, 0.6)
+    expected, _ = sf.read(str(path), dtype='float32')
+    with pytest.warns(UserWarning, match="cut short"):
+        y, _ = file_load(path, mono=False)
+    assert np.array_equal(y, expected)
+    with pytest.warns(UserWarning, match="cut short"):
+        info = kudio.audio_info(path, peak=False)
+    assert (info.frames, info.channels, info.peak) == (len(expected), 2, None)
+
+
+@pytest.mark.parametrize("subtype, channels", [("GSM610", 1)] + [
+    (subtype, channels) for channels in (1, 2) for subtype in (
+        "PCM_U8", "PCM_16", "PCM_24", "PCM_32", "FLOAT", "DOUBLE", "ULAW", "ALAW",
+        "IMA_ADPCM", "MS_ADPCM")])
+def test_every_kind_of_wav_is_held_to_its_header(tmp_path, subtype, channels):
+    path = tmp_path / "take.wav"
+    y = 0.3 * np.sin(np.arange(16001 * channels) / 9).reshape(-1, channels)
+    sf.write(str(path), y, 16000, subtype=subtype)
+    _in_silence(file_load, path)                          # 16001 frames: an odd length
+    _cut(path, 0.5)
+    # at its own rate: soundfile does not seek in GSM, which the rest would need
+    with pytest.warns(UserWarning, match=r"the header says 1\.0\d s and 0\.[45]\d s are there"):
+        file_load(path)
+
+
+@pytest.mark.parametrize("name", CUT_READS)
+def test_a_whole_wav_is_read_without_a_word(tmp_path, quiet_card, name):
+    for frames in (0, 1, 999, 1000):
+        for subtype in ("PCM_U8", "PCM_16", "PCM_24", "FLOAT"):
+            path = tmp_path / f"{frames}_{subtype}.wav"
+            save_wave(path, 0.1 * np.ones(frames), 16000, subtype=subtype)
+            _in_silence(CUT_READS[name], path)
+
+
+@pytest.mark.parametrize("short, said", [(0, False), (1, False), (2, False), (3, True),
+                                         (4, True)])
+def test_a_block_is_not_counted_for_a_cut(tmp_path, short, said):
+    """A frame that is missing is not a copy that broke off."""
+    path = _listed(tmp_path / "a.wav", FMT, _data(32000, 32000 - short))
+    if said:
+        with pytest.warns(UserWarning, match=f"{short} bytes fewer"):
+            kudio.audio_info(path, peak=False)
+    else:
+        _in_silence(lambda p: kudio.audio_info(p, peak=False), path)
+
+
+@pytest.mark.parametrize("length", [0, 0x7FFFF000, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF], ids=hex)
+@pytest.mark.parametrize("name", ['file_load', 'audio_info', 'audio_info of the header'])
+def test_a_length_left_by_a_program_that_streams_is_none(tmp_path, name, length):
+    path = _listed(tmp_path / "a.wav", FMT, _data(length, 32000))
+    _in_silence(CUT_READS[name], path)
+
+
+def test_the_longest_length_that_is_one_is_held_to(tmp_path):
+    path = _listed(tmp_path / "a.wav", FMT, _data(0x7FFFEFFE, 32000))
+    with pytest.warns(UserWarning, match="cut short"):
+        kudio.audio_info(path, peak=False)
+
+
+LIST = (b'LIST', 26, b'INFOISFT' + (14).to_bytes(4, 'little') + b'Lavf62.0.100\x00\x00')
+
+
+@pytest.mark.parametrize("chunks", [
+    (FMT, _data(32000, 32000), LIST),
+    (LIST, FMT, _data(32000, 32000)),
+    (FMT, LIST, (b'JUNK', 7, bytes(8)), _data(32000, 32000), LIST),
+    (FMT, _data(31999, 32000)),                       # odd, with the byte that fills it up
+    (FMT, _data(31999, 31999)),                       # and without
+    (FMT, _data(31999, 32000), LIST),
+    (FMT, _data(32000, 32000), (b'LIST', 5000, bytes(20))),      # cut in what comes after
+], ids=["a list after", "a list before", "chunks all round", "odd", "odd, not filled up",
+        "odd, a list after", "cut after the samples"])
+def test_what_surrounds_the_samples_is_no_cut(tmp_path, chunks):
+    path = _listed(tmp_path / "a.wav", *chunks)
+    for name in ('file_load', 'audio_info', 'audio_info of the header'):
+        _in_silence(CUT_READS[name], path)
+
+
+@pytest.mark.parametrize("chunks", [
+    (LIST, FMT, (b'JUNK', 7, bytes(8)), _data(32000, 16000)),
+    (FMT, (b'bext', 602, bytes(602)), _data(32000, 16000)),
+], ids=["an odd chunk before", "a broadcast wave"])
+def test_the_samples_are_found_behind_other_chunks(tmp_path, chunks):
+    path = _listed(tmp_path / "a.wav", *chunks)
+    with pytest.warns(UserWarning, match=r"says 1\.00 s and 0\.50 s are there, 16000 bytes"):
+        kudio.audio_info(path, peak=False)
+
+
+@pytest.mark.parametrize("container, kwargs", [
+    ('RF64', {}), ('W64', {}), ('AIFF', {}), ('CAF', {}), ('AU', {}),
+    ('WAV', {'endian': 'BIG'})], ids=str)
+def test_only_a_riff_wav_is_held_to_its_header(tmp_path, sine, container, kwargs):
+    path = tmp_path / "take.wav"
+    sf.write(str(path), sine, 16000, format=container, subtype='PCM_16', **kwargs)
+    _cut(path, 0.5)
+    try:
+        expected = len(sf.read(str(path))[0])
+    except sf.SoundFileError:
+        return                                        # refused, so nothing is read short
+    y, _ = _in_silence(file_load, path)
+    assert len(y) == expected
+    _in_silence(kudio.audio_info, path)
+
+
+@pytest.mark.parametrize("head", [{'riff': b'RF64'}, {'riff': b'RIFX'}, {'riff': b'FORM'},
+                                  {'form': b'AVI '}], ids=str)
+def test_the_same_chunks_in_another_container_are_not_judged(tmp_path, head):
+    from kudio.core.io import _wav_shortfall
+    path = _listed(tmp_path / "a.wav", FMT, _data(32000, 16000))
+    assert _wav_shortfall(path) == (1.0, 16000)
+    assert _wav_shortfall(_listed(path, FMT, _data(32000, 16000), **head)) is None
+
+
+@pytest.mark.parametrize("average", [0, 1, 0xFFFFFFFF])
+def test_the_seconds_of_samples_are_counted(tmp_path, average):
+    """Not every writer fills in the bytes a second that a player goes by."""
+    path = _listed(tmp_path / "a.wav", _fmt(average), _data(32000, 16000))
+    with pytest.warns(UserWarning, match=r"says 1\.00 s and 0\.50 s are there"):
+        kudio.audio_info(path, peak=False)
+
+
+def test_no_header_is_too_broken_to_be_looked_at(tmp_path, sine):
+    """Whatever is in it, the answer is a number of bytes or none."""
+    from kudio.core.io import _wav_shortfall
+    path = tmp_path / "take.wav"
+    save_wave(path, sine[:500], 16000)
+    whole = path.read_bytes()
+    rng = np.random.default_rng(0)
+    cut = [whole[:keep] for keep in range(60)]
+    for _ in range(300):
+        broken = bytearray(whole[:int(rng.integers(60, len(whole)))])
+        for _ in range(int(rng.integers(1, 6))):
+            broken[int(rng.integers(0, 60))] = int(rng.integers(0, 256))
+        cut.append(bytes(broken))
+    for content in cut:
+        path.write_bytes(content)
+        short = _wav_shortfall(path)
+        assert short is None or (short[0] > 0 and short[1] > 0)
+    path.write_bytes(_riff(*[(b'JUNK', 0, b'')] * 10000, FMT, _data(32000, 10)))
+    assert _wav_shortfall(path) is None, "given up after so many"
+
+
+def test_a_cut_file_can_be_made_one_that_is_not_read(tmp_path, sine):
+    """The way out for a sweep over a corpus, as inspection.md gives it."""
+    save_wave(tmp_path / "take.wav", sine, 16000)
+    whole, _ = file_load(tmp_path / "take.wav")
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*cut short")
+        assert np.array_equal(file_load(tmp_path / "take.wav")[0], whole)
+        _cut(tmp_path / "take.wav", 0.5)
+        with pytest.raises(AudioIOError, match="may have been cut short"):
+            file_load(tmp_path / "take.wav")
+
+
+def test_a_folder_of_takes_names_the_one_that_was_cut(tmp_path, sine):
+    for name in ("a", "b"):
+        save_wave(tmp_path / f"{name}.wav", sine, 16000)
+    _cut(tmp_path / "b.wav", 0.5)
+    with pytest.warns(UserWarning) as caught:
+        result = kudio.convert_folder(tmp_path, tmp_path / "out")
+    assert result.written == 2
+    said = [str(w.message) for w in caught]
+    assert len(said) == 1 and said[0].startswith(f"{tmp_path / 'b.wav'}: the header says")
+
+
+def test_a_set_that_is_scored_says_it_with_the_item(tmp_path, sine):
+    """The rate of the set is read from the headers of its items before that,
+    which is no place to say it as well."""
+    for side in ("ref", "deg"):
+        for name in ("a", "b"):
+            save_wave(tmp_path / side / f"{name}.wav", 0.5 * sine + 0.01, 16000)
+        _cut(tmp_path / side / "a.wav", 0.5)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = kudio.score_dataset(tmp_path / "deg", reference=tmp_path / "ref",
+                                     metrics=["snr"])
+    said = [str(w.message) for w in caught if "cut short" in str(w.message)]
+    assert len(said) == 1 and said[0].startswith("score_dataset(): 1 of 2 items")
+    notes = {row['id']: row['notes'] for row in result.rows}
+    assert [note.split(": the header says")[0] for note in notes['a']] == [
+        str(tmp_path / side / "a.wav") for side in ("ref", "deg")]
+    assert not notes['b']

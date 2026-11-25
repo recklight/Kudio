@@ -12,6 +12,8 @@ from typing import Sequence
 
 import numpy as np
 
+from kudio._samples import as_float, channels_last, to_float
+from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
 __all__ = ['fade_in', 'fade_out', 'fade', 'reverse', 'remove_dc',
@@ -22,17 +24,6 @@ _EXP_FLOOR_DB = -60.0
 #: Enough to remove the step at a cut, short enough that nothing is heard to
 #: happen. Below ~2 ms the click starts coming back.
 DEFAULT_CROSSFADE = 0.005
-
-
-def _as_type(out: np.ndarray, dtype) -> np.ndarray:
-    """*out* in the input's type. An integer one is rounded and held to the
-    type's range: an equal-power seam rises 3 dB above two int16 clips at
-    30000, and cast straight back 280 of a 320-sample seam came out negative,
-    down to -32732."""
-    if np.issubdtype(dtype, np.integer):
-        limits = np.iinfo(dtype)
-        return np.clip(np.round(out), limits.min, limits.max).astype(dtype)
-    return out.astype(dtype, copy=False)
 
 
 def _ramp(n: int, shape: str) -> np.ndarray:
@@ -75,27 +66,30 @@ def fade_in(y: np.ndarray, sr: int, duration: float = 0.01,
     A 10 ms default is the usual anti-click amount: long enough to remove the
     step at the start of a cut, short enough not to be heard as a fade.
     """
-    y = np.asarray(y)
-    n = _fade_samples(y.shape[0], duration, sr, "fade_in")
-    if n == 0 or y.size == 0:
-        return y.copy()
-    out = y.astype(np.float64, copy=True)
-    curve = _ramp(n, shape)
-    out[:n] *= curve if y.ndim == 1 else curve[:, None]
-    return _as_type(out, y.dtype)
+    return _faded(y, sr, duration, shape, 'fade_in')
 
 
 def fade_out(y: np.ndarray, sr: int, duration: float = 0.01,
              shape: str = 'linear') -> np.ndarray:
     """Ramp the last *duration* seconds down to silence."""
-    y = np.asarray(y)
-    n = _fade_samples(y.shape[0], duration, sr, "fade_out")
+    return _faded(y, sr, duration, shape, 'fade_out')
+
+
+def _faded(y: np.ndarray, sr: int, duration: float, shape: str,
+           name: str) -> np.ndarray:
+    sr = sample_rate(sr, name, FeatureError)
+    y = channels_last(y, name, FeatureError)
+    x, back = to_float(y, name, FeatureError)
+    n = _fade_samples(y.shape[0], duration, sr, name)
     if n == 0 or y.size == 0:
         return y.copy()
-    out = y.astype(np.float64, copy=True)
-    curve = _ramp(n, shape)[::-1]
-    out[-n:] *= curve if y.ndim == 1 else curve[:, None]
-    return _as_type(out, y.dtype)
+    out = x.astype(np.float64, copy=True)
+    curve = _ramp(n, shape)
+    if name == 'fade_out':
+        out[-n:] *= curve[::-1] if y.ndim == 1 else curve[::-1, None]
+    else:
+        out[:n] *= curve if y.ndim == 1 else curve[:, None]
+    return back(out)
 
 
 def fade(y: np.ndarray, sr: int, fade_in_s: float = 0.01,
@@ -106,7 +100,8 @@ def fade(y: np.ndarray, sr: int, fade_in_s: float = 0.01,
     in and a fade out that overlap is an error rather than a silently
     multiplied middle.
     """
-    y = np.asarray(y)
+    sr = sample_rate(sr, 'fade', FeatureError)
+    y = channels_last(y, 'fade', FeatureError)
     n_in = _fade_samples(y.shape[0], fade_in_s, sr, "fade_in")
     n_out = _fade_samples(y.shape[0], fade_out_s, sr, "fade_out")
     if n_in + n_out > y.shape[0]:
@@ -132,6 +127,10 @@ def crossfade(first: np.ndarray, second: np.ndarray, sr: int,
     caller tracking positions in the audio has to account for it, and hiding it
     would make those positions silently wrong.
 
+    Two clips of different types are read each on its own scale, and the result
+    is of the first one's type: an int16 take from a recorder and a float one
+    from a file meet at the level each was recorded at.
+
     :param shape: ``'equal_power'`` (sine/cosine) holds the perceived level
         steady when the two sides are **unrelated** — two different takes, two
         different sources. ``'linear'`` holds the *sum* steady, which is right
@@ -139,8 +138,11 @@ def crossfade(first: np.ndarray, second: np.ndarray, sr: int,
         material bumps the level by up to 3 dB. :func:`splice` therefore
         defaults to linear and this defaults to equal-power.
     """
-    first = np.asarray(first)
-    second = np.asarray(second)
+    sr = sample_rate(sr, 'crossfade', FeatureError)
+    first = channels_last(first, 'crossfade', FeatureError)
+    second = channels_last(second, 'crossfade', FeatureError)
+    a, back = to_float(first, 'crossfade', FeatureError)
+    b = as_float(second, 'crossfade', FeatureError)
     if first.size == 0:
         return second.copy()
     if second.size == 0:
@@ -151,7 +153,9 @@ def crossfade(first: np.ndarray, second: np.ndarray, sr: int,
     n = int(round(duration * sr))
     n = min(n, first.shape[0], second.shape[0])
     if n <= 0:
-        return np.concatenate([first, second])
+        if first.dtype == second.dtype:        # end to end, as they are
+            return np.concatenate([first, second])
+        return back(np.concatenate([a, b]))
     if shape not in ('equal_power', 'linear'):
         raise FeatureError(
             f"shape must be 'equal_power' or 'linear', got {shape!r}")
@@ -164,8 +168,10 @@ def crossfade(first: np.ndarray, second: np.ndarray, sr: int,
     if first.ndim > 1:
         down, up = down[:, None], up[:, None]
 
-    blended = first[-n:] * down + second[:n] * up
-    return _as_type(np.concatenate([first[:-n], blended, second[n:]]), first.dtype)
+    # an equal-power seam rises 3 dB above two int16 clips at 30000; `back`
+    # holds it to the type's range
+    blended = a[-n:] * down + b[:n] * up
+    return back(np.concatenate([a[:-n], blended, b[n:]]))
 
 
 def splice(parts: Sequence[np.ndarray], sr: int, duration: float = DEFAULT_CROSSFADE,
@@ -176,7 +182,8 @@ def splice(parts: Sequence[np.ndarray], sr: int, duration: float = DEFAULT_CROSS
 
     Empty parts are skipped rather than producing a seam with nothing on one
     side. The result is shorter than the sum of the parts by one *duration* per
-    seam; :func:`crossfade` explains why that matters.
+    seam; :func:`crossfade` explains why that matters. It is of the first
+    part's type, whatever the others are.
 
     **The default shape differs from `crossfade`'s, deliberately.** A splice
     joins two moments of the *same* recording, which are usually alike, and
@@ -185,7 +192,9 @@ def splice(parts: Sequence[np.ndarray], sr: int, duration: float = DEFAULT_CROSS
     linear left it at 0.500. A crossfade between genuinely different material
     is the other case, and defaults the other way.
     """
-    usable = [np.asarray(p) for p in parts if np.asarray(p).size]
+    sr = sample_rate(sr, 'splice', FeatureError)
+    usable = [channels_last(p, 'splice', FeatureError)
+              for p in parts if np.asarray(p).size]
     if not usable:
         return np.zeros(0, dtype=np.float32)
     merged = usable[0].copy()                  # never hand back the caller's array
@@ -196,7 +205,7 @@ def splice(parts: Sequence[np.ndarray], sr: int, duration: float = DEFAULT_CROSS
 
 def reverse(y: np.ndarray) -> np.ndarray:
     """Play the waveform backwards. Multi-channel audio keeps its channels."""
-    y = np.asarray(y)
+    y = channels_last(y, 'reverse', FeatureError)
     return np.ascontiguousarray(y[::-1])
 
 
@@ -208,10 +217,11 @@ def remove_dc(y: np.ndarray) -> np.ndarray:
     recording is a very low frequency, and :func:`kudio.highpass` is the tool
     for that.
     """
-    y = np.asarray(y)
+    y = channels_last(y, 'remove_dc', FeatureError)
+    x, back = to_float(y, 'remove_dc', FeatureError)
     if y.size == 0:
         return y.copy()
     # accumulate in float64: a float32 mean over a long clip carries enough
     # rounding error to leave behind the offset it was asked to remove
-    offset = np.mean(y, axis=0, dtype=np.float64, keepdims=True)
-    return _as_type(y - offset, y.dtype)
+    offset = np.mean(x, axis=0, dtype=np.float64, keepdims=True)
+    return back(x - offset)

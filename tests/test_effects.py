@@ -239,3 +239,29 @@ def test_stretch_and_shift_take_integer_audio(call):
     y = (3000 * np.sin(2 * np.pi * 220 * np.arange(16000) / 16000)).astype(np.int16)
     out = call(y)
     assert out.dtype == np.int16 and 2000 < np.abs(out).max() < 6000
+
+
+# -- a top_db that leaves nothing ----------------------------------------------------
+@pytest.mark.parametrize("top_db", [0, 0.0, -5, float('nan'), float('inf'), float('-inf'),
+                                    np.float32('nan'), np.array(-1.0), True, np.True_, None,
+                                    '30', [30], np.array([30.0]), 30 + 0j,
+                                    pytest.param(10 ** 400, id='past float64')])
+def test_a_top_db_that_is_not_a_distance_down_is_refused(top_db):
+    """At 0 or below, and at NaN, no frame is above the line and the clip comes
+    back empty, the loudest frame with it."""
+    import kudio
+    y = np.concatenate([np.zeros(8000), _tone(), np.zeros(8000)])
+    for call in (kudio.trim_silence, kudio.split_on_silence):
+        with pytest.raises(ValueError, match=rf"^{call.__name__}\(\): top_db has to be a finite "
+                                             rf"number of dB above 0, got ") as refused:
+            call(y, top_db)
+        assert isinstance(refused.value, kudio.FeatureError)
+
+
+@pytest.mark.parametrize("top_db", [30, 30.0, np.int64(30), np.float32(30), np.array(30.0)])
+def test_a_top_db_of_any_number_type_is_the_same_cut(top_db):
+    import kudio
+    y = np.concatenate([np.zeros(8000), _tone(), np.zeros(8000)])
+    assert kudio.trim_silence(y, top_db)[1] == kudio.trim_silence(y)[1]
+    assert ([len(p) for p in kudio.split_on_silence(y, top_db)]
+            == [len(p) for p in kudio.split_on_silence(y)])

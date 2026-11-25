@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import pathlib
+import re
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -1089,3 +1091,219 @@ def test_a_bad_target_rate_is_refused_before_the_folder_is_emptied(tmp_path):
     with pytest.raises(ValueError, match="target_sr"):
         syx.syn(seed=0, target_sr=0)
     assert (tmp_path / "o" / "keep.txt").exists()
+
+
+@pytest.mark.parametrize("value", [True, '8000', 8000.5, float('nan'), float('inf'), 0, -1],
+                         ids=repr)
+@pytest.mark.parametrize("argument", ["target_sr", "desired_sample"])
+def test_a_rate_no_file_can_be_at_is_refused(tmp_path, argument, value):
+    """8000.5 was written to files that said 8000, and True went on to blame
+    the noise: at 1 Hz it was digital silence."""
+    syx = _one_clean(tmp_path, np.random.default_rng(0).standard_normal(16000))
+    (tmp_path / "o").mkdir()
+    (tmp_path / "o" / "keep.txt").write_text("from an earlier run")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with pytest.raises(ValueError) as caught:
+            syx.syn(seed=0, **{argument: value})
+    assert str(caught.value) == (f"{argument} must be a positive whole rate or None, "
+                                 f"got {value!r}")
+    assert [p.name for p in (tmp_path / "o").iterdir()] == ["keep.txt"]
+
+
+def test_a_whole_target_rate_of_any_type_is_that_rate(tmp_path):
+    syx = _one_clean(tmp_path, np.random.default_rng(0).standard_normal(16000))
+    out, *_ = syx.syn(seed=0, target_sr=np.float64(8000.0))[0]
+    assert kudio.audio_info(out).sr == 8000
+    assert syx.target_sr == 8000 and type(syx.target_sr) is int
+
+
+# -- what is already in the output folder --------------------------------------
+
+NAN, INF = float('nan'), float('inf')
+
+#: a setting no run can work with: what the Synthesizer is built with, what
+#: syn is called with, and what the error says
+IMPOSSIBLE = {
+    'rt60 nan': ({'rt60': NAN}, {}, "rt60 values must be positive and finite"),
+    'rt60 inf': ({'rt60': INF}, {}, "rt60 values must be positive and finite"),
+    'one rt60 nan': ({'rt60': (0.3, NAN)}, {}, "rt60 values must be positive and finite"),
+    'rt60 of no length': ({'rt60': 1e-5}, {}, "raise rt60"),
+    'rt60 True': ({'rt60': True}, {}, "rt60 is a time in seconds, got True"),
+    'one rt60 True': ({'rt60': (0.3, np.True_)}, {}, "rt60 is a time in seconds"),
+    'drr_db nan': ({'rt60': 0.3, 'drr_db': NAN}, {}, "drr_db must be a finite number"),
+    'drr_db inf': ({'rt60': 0.3, 'drr_db': INF}, {}, "drr_db must be a finite number"),
+    'drr_db too low': ({'rt60': 0.3, 'drr_db': -99}, {}, "drr_db=-99 is below"),
+    'target_sr inf': ({}, {'target_sr': INF}, "target_sr must be a positive whole rate"),
+    'target_sr nan': ({}, {'target_sr': NAN}, "target_sr must be a positive whole rate"),
+    'desired_sample': ({}, {'desired_sample': 8000.5}, "desired_sample must be a positive"),
+    'a band over Nyquist': ({'channel': 'telephone'}, {'target_sr': 500}, "bandpass needs"),
+    'a burst without end': ({'channel': {'loss': 0.01, 'burst': INF}}, {}, "cannot be under 1"),
+    'seed': ({}, {'seed': -1}, "seed must be >= 0"),
+}
+
+
+def _corpus_to_keep(tmp_path):
+    """An input of one talker and one noise, and an output folder that holds a
+    run from before."""
+    syx = _one_clean(tmp_path, np.random.default_rng(0).standard_normal(16000))
+    syx.syn(seed=7)
+    (tmp_path / "o" / "keep.txt").write_text("from an earlier run")
+    return syx, {p.name: p.read_bytes() for p in (tmp_path / "o").iterdir()}
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.parametrize("name", IMPOSSIBLE)
+def test_no_setting_empties_the_folder_and_then_fails(tmp_path, name):
+    """rt60=nan, drr_db=-99 and a telephone band at 500 Hz each deleted the
+    corpus in the folder and wrote nothing."""
+    _, before = _corpus_to_keep(tmp_path)
+    built, called, said = IMPOSSIBLE[name]
+    with pytest.raises((ValueError, kudio.FeatureError), match=re.escape(said)):
+        Synthesizer(str(tmp_path / "c"), str(tmp_path / "n"), out_path=str(tmp_path / "o"),
+                    snr_ratio=0, **built).syn(**{'seed': 0, **called})
+    assert {p.name: p.read_bytes() for p in (tmp_path / "o").iterdir()} == before
+
+
+@pytest.mark.parametrize("attribute, value", [("drr_db", -99), ("drr_db", NAN),
+                                              ("rt60Ratio", [NAN])])
+def test_a_setting_changed_afterwards_is_tried_too(tmp_path, attribute, value):
+    _, before = _corpus_to_keep(tmp_path)
+    syx = Synthesizer(str(tmp_path / "c"), str(tmp_path / "n"), out_path=str(tmp_path / "o"),
+                      snr_ratio=0, rt60=0.3)
+    setattr(syx, attribute, value)
+    with pytest.raises((ValueError, kudio.FeatureError)):
+        syx.syn(seed=0)
+    assert {p.name: p.read_bytes() for p in (tmp_path / "o").iterdir()} == before
+
+
+def test_a_refused_run_leaves_what_describes_the_corpus(tmp_path):
+    """seed, target_sr, the rooms and the manifest name what is in the folder."""
+    _corpus_to_keep(tmp_path)
+    syx = Synthesizer(str(tmp_path / "c"), str(tmp_path / "n"), out_path=str(tmp_path / "o"),
+                      snr_ratio=0, rt60=0.3)
+    syx.syn(seed=3, target_sr=8000)
+    kept = (syx.seed, syx.target_sr, dict(syx.rooms), syx.manifest(), syx.synWavesList)
+    syx.drr_db = -99
+    with pytest.raises((ValueError, kudio.FeatureError)):
+        syx.syn(seed=4, target_sr=16000)
+    syx.drr_db = 0.0
+    assert (syx.seed, syx.target_sr, dict(syx.rooms), syx.manifest(), syx.synWavesList) == kept
+
+
+def test_the_room_of_every_file_is_tried_at_its_own_rate(tmp_path):
+    """0.75 ms of impulse response is 12 samples at 16 kHz and 1 at 1 kHz."""
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    for name, sr in (("a", 16000), ("b", 1000)):
+        kudio.save_wave(clean / f"{name}.wav", 0.1 * np.sin(np.arange(sr) / 5), sr)
+    (tmp_path / "noise").mkdir()
+    kudio.save_wave(tmp_path / "noise" / "n.wav",
+                    0.1 * np.random.default_rng(0).standard_normal(16000), 16000)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "keep.txt").write_text("from an earlier run")
+    syx = Synthesizer(str(clean), str(tmp_path / "noise"), out_path=str(out), snr_ratio=0,
+                      rt60=0.0005, drr_db=20)
+    with pytest.raises((ValueError, kudio.FeatureError)):
+        syx.syn(seed=0)
+    assert [p.name for p in out.iterdir()] == ["keep.txt"]
+
+
+def test_an_input_that_cannot_be_read_is_still_named_in_its_turn(tmp_path):
+    """It is no setting, and which file it is, is what the error has to say."""
+    _corpus_to_keep(tmp_path)
+    (tmp_path / "c" / "b.wav").write_bytes(b"not a wave file")
+    syx = Synthesizer(str(tmp_path / "c"), str(tmp_path / "n"), out_path=str(tmp_path / "o"),
+                      snr_ratio=0, rt60=0.3, channel='telephone')
+    with pytest.raises(kudio.SynthesisError, match="could not read clean file .*b.wav"):
+        syx.syn(seed=0)
+
+
+@pytest.mark.parametrize("sr", [500, 8000, 16000, 48000, 192000])
+def test_the_quick_look_at_a_room_never_passes_one_rir_refuses(sr):
+    from kudio.core.synth import _room_fits
+    rng = np.random.default_rng(sr)
+    passed = refused = 0
+    for seed in range(200):
+        rt60, drr = float(10 ** rng.uniform(-2.5, 0.0)), float(rng.uniform(-30, 10))
+        try:
+            kudio.rir(sr, rt60=rt60, drr_db=drr, seed=seed)
+            made = True
+        except kudio.FeatureError:
+            made = False
+        if _room_fits(sr, rt60, drr, seed):
+            assert made, (rt60, drr, seed)
+            passed += 1
+        refused += not made
+    assert passed and refused, "both answers came up, or this tests nothing"
+
+
+@pytest.mark.parametrize("value", [NAN, INF, (5, NAN)], ids=repr)
+def test_a_background_snr_that_is_no_number_empties_nothing(tmp_path, value):
+    syx, before = _corpus_to_keep(tmp_path)
+    with pytest.raises(ValueError, match="background_snr values must be finite"):
+        syx.syn_extra_mode(str(tmp_path / "n"), background_snr=value, seed=0)
+    assert {p.name: p.read_bytes() for p in (tmp_path / "o").iterdir()} == before
+
+
+def test_several_rooms_can_come_from_anything_that_gives_them(tmp_path):
+    syx = Synthesizer(*_inputs(tmp_path), out_path=str(tmp_path / "out"), snr_ratio=0,
+                      rt60=(0.1 * k for k in (2, 3)))
+    assert syx.rt60Ratio == [0.2, pytest.approx(0.3)]
+
+
+# -- librosa, asked for before anything is deleted -----------------------------
+
+def _inputs(tmp_path, clean_sr=16000, noise_sr=16000):
+    for name, sr in (("clean", clean_sr), ("noise", noise_sr)):
+        (tmp_path / name).mkdir()
+        kudio.save_wave(tmp_path / name / "a.wav",
+                        0.1 * np.random.default_rng(sr).standard_normal(sr), sr)
+    return str(tmp_path / "clean"), str(tmp_path / "noise")
+
+
+@pytest.fixture
+def no_librosa(monkeypatch):
+    def missing():
+        raise kudio.DependencyError('librosa')
+    monkeypatch.setattr(kudio._optional, "librosa", missing)
+
+
+@pytest.mark.parametrize("clean_sr, noise_sr, built, called", [
+    (16000, 8000, {}, {}),
+    (16000, 16000, {}, {'target_sr': 8000}),
+    (16000, 16000, {'channel': 'telephone'}, {}),
+    (16000, 8000, {'rt60': 0.3}, {'target_sr': 8000}),
+], ids=["a noise at another rate", "another target_sr", "a telephone", "a room"])
+def test_a_run_that_has_to_resample_asks_for_librosa_first(tmp_path, no_librosa, clean_sr,
+                                                           noise_sr, built, called):
+    clean, noise = _inputs(tmp_path, clean_sr, noise_sr)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "keep.txt").write_text("from an earlier run")
+    syx = Synthesizer(clean, noise, out_path=str(out), snr_ratio=0, **built)
+    with pytest.raises(kudio.DependencyError, match="librosa"):
+        syx.syn(seed=0, **called)
+    assert [p.name for p in out.iterdir()] == ["keep.txt"]
+    assert syx.seed is None
+
+
+@pytest.mark.parametrize("built, called", [
+    ({}, {}), ({}, {'target_sr': 16000}), ({'rt60': 0.3, 'channel': 'voip'}, {})],
+    ids=["as they are", "the rate they are at", "a room and a link"])
+def test_a_run_that_resamples_nothing_needs_no_librosa(tmp_path, no_librosa, built, called):
+    syx = Synthesizer(*_inputs(tmp_path), out_path=str(tmp_path / "out"), snr_ratio=0, **built)
+    out, *_ = syx.syn(seed=0, **called)[0]
+    assert kudio.audio_info(out).sr == 16000
+
+
+def test_extra_mode_asks_for_librosa_first_too(tmp_path, no_librosa):
+    clean, noise = _inputs(tmp_path, 16000, 8000)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "keep.txt").write_text("from an earlier run")
+    syx = Synthesizer(clean, noise, out_path=str(out), snr_ratio=0)
+    with pytest.raises(kudio.DependencyError, match="librosa"):
+        syx.syn_extra_mode(noise, (5,), seed=0, is_pool=False)
+    assert [p.name for p in out.iterdir()] == ["keep.txt"]

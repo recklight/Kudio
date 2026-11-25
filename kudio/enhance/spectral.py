@@ -79,7 +79,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from kudio._samples import as_float
+from kudio._samples import as_float, one_channel
+from kudio.core._framing import convolve_same
+from kudio.core._policy import sample_rate
 from kudio.core.io import ConvertResult, PathLike
 from kudio.exceptions import FeatureError
 
@@ -558,11 +560,11 @@ def _smooth_mask(mask: np.ndarray, freq_bins: int, time_frames: int) -> np.ndarr
     if time_frames > 1:
         kernel = np.ones(time_frames) / time_frames
         out = np.apply_along_axis(
-            lambda col: np.convolve(col, kernel, mode='same'), 0, out)
+            lambda col: convolve_same(col, kernel), 0, out)
     if freq_bins > 1:
         kernel = np.ones(freq_bins) / freq_bins
         out = np.apply_along_axis(
-            lambda row: np.convolve(row, kernel, mode='same'), 1, out)
+            lambda row: convolve_same(row, kernel), 1, out)
     return out
 
 
@@ -632,18 +634,25 @@ def spectral_enhance(y: np.ndarray, sr: int, method: str = 'logmmse', *,
     :param method: see :data:`METHODS`; each entry lists its own parameters.
     :param noise: see :data:`NOISE_ESTIMATORS`. The estimator matters at least
         as much as the gain rule.
+    :param hop_length: samples between frames, ``n_fft // 4`` when not given.
+        Half of *n_fft* suits every usual window. Where frames overlap less,
+        what the gain leaves at the edge of one is divided by next to nothing,
+        so a hop that lets the overlapping windows fall under 9% of their peak
+        is refused. The last ``hop_length`` samples at most, which only one
+        frame may reach, are faded where its window falls under 3%.
     :param params: method parameters, defaulted from ``METHODS[method]``.
     :raises FeatureError: on an unknown method, non-mono audio, samples that
-        are not finite, or a clip too short to frame.
+        are not finite, a clip too short to frame, or a *hop_length* too long
+        for its window.
     """
     if method not in METHODS:
         raise FeatureError(
             f"unknown method {method!r}. Choose from "
             f"{', '.join(sorted(METHODS))}")
-    if sr <= 0:
-        raise FeatureError(f"spectral_enhance() needs a positive rate, got {sr}")
+    sr = sample_rate(sr, 'spectral_enhance', FeatureError)
 
-    y = np.ascontiguousarray(np.asarray(as_float(y), dtype=np.float32).squeeze())
+    y = one_channel(y, 'spectral_enhance', FeatureError)
+    y = np.ascontiguousarray(np.asarray(y, dtype=np.float32).squeeze())
     if y.ndim != 1:
         raise FeatureError(
             f"spectral_enhance() takes mono audio, got shape {y.shape}")
@@ -669,6 +678,7 @@ def spectral_enhance(y: np.ndarray, sr: int, method: str = 'logmmse', *,
 
     from kudio.core.stft import STFT
     stft = STFT(sr=sr, n_fft=n_fft, hop_length=hop_length, window=window)
+    _check_overlap(stft._overlap(), n_fft, hop_length, 'spectral_enhance')
     spec = stft.analyse(y)                                  # (frames, bins)
     power = np.maximum(np.abs(spec) ** 2, _EPS)
     noise_psd = estimate_noise_psd(power, noise, **(noise_kwargs or {}))
@@ -695,7 +705,52 @@ def spectral_enhance(y: np.ndarray, sr: int, method: str = 'logmmse', *,
                                    make_gain_rule(method, settings))
 
     gains = np.clip(gains, g_min, 1.0)
-    return stft.synthesise(spec * gains, length=len(y))
+    return _fade_thin_tail(stft.synthesise(spec * gains, length=len(y)), stft, len(spec))
+
+
+#: How thin the overlap of the windows may get between frames, as a share of
+#: what it is at its thickest. The inverse divides by it, and a frame that has
+#: been through a gain does not fall to zero with its window. Seven methods
+#: under eight windows gave at most 1.01 times the peak that went in where the
+#: share was 0.09 or more, 1.08 times from 0.06 to there and 1.78 at 0.003.
+_THIN_OVERLAP = 0.09
+#: The same at the end of a clip, where the last frame may be the only one: the
+#: last sample under a Hann window, 255 past the centre of 512, has 1e-9 of it
+#: and came out at 109 times the peak of the clip. At 0.01 the worst was 1.05.
+_THIN_TAIL = 0.03
+
+
+def _check_overlap(overlap: np.ndarray, n_fft: int, hop_length: int, name: str) -> None:
+    """Refuse a hop the windows do not overlap enough for; *overlap* is their
+    summed energy at each place of a hop."""
+    thinnest, thickest = float(np.min(overlap)), float(np.max(overlap))
+    if not thinnest >= _THIN_OVERLAP * thickest:
+        share = thinnest / thickest if thickest > 0 else 0.0
+        raise FeatureError(
+            f"{name}(): hop_length={hop_length} is too long for n_fft={n_fft} and its "
+            f"window: between frames the overlapping windows fall to {share:.1%} of "
+            f"their peak, under {_THIN_OVERLAP:.0%}, and dividing by that makes the "
+            f"result louder than the clip. Half of n_fft or less, {max(1, n_fft // 2)}, "
+            f"suits the usual windows")
+
+
+def _fade_thin_tail(out: np.ndarray, stft, n_frames: int) -> np.ndarray:
+    """*out* with the samples at its end faded that the last frame covers with
+    next to nothing of its window, rather than divided up from it."""
+    energy = stft._window_energy()
+    size, hop = stft.n_fft, stft.hop_length
+    covered = np.zeros(size)                       # over the last n_fft samples
+    for k in range(n_frames - 1, -1, -1):
+        start = k * hop - size // 2 - (len(out) - size)
+        if start + size <= 0:
+            break
+        a, b = max(0, start), min(size, start + size)
+        if a < b:
+            covered[a:b] += energy[a - start:b - start]
+    share = covered / (_THIN_TAIL * float(np.max(stft._overlap())))
+    if np.any(share < 1.0):
+        out[-size:] *= np.minimum(share, 1.0)
+    return out
 
 
 def _check_ranges(method: str, settings: dict) -> None:
@@ -871,7 +926,8 @@ def compare_enhancers(y: np.ndarray, sr: int,
         # run every method on its defaults
         raise FeatureError(f"no method here takes {', '.join(sorted(stray))}")
 
-    y = np.asarray(as_float(y), dtype=np.float32)
+    sr = sample_rate(sr, 'compare_enhancers', FeatureError)
+    y = np.asarray(one_channel(y, 'compare_enhancers', FeatureError), dtype=np.float32)
     if not np.all(np.isfinite(y)):
         # every run would fail on it, one line each, and the table would
         # still come back as if something had been compared
@@ -1011,12 +1067,15 @@ def enhance_folder(src: Any, dst: PathLike,
         method or noise estimator, a parameter or *noise_kwargs* key it does
         not take, or a value outside its range. Met file by file, each of
         these would fail every file the same way.
+    :raises ValueError: before the first file as well, for an *sr* that is not
+        a positive whole rate.
     """
-    from kudio.core.io import WAVE_SUFFIX, check_file, check_input, \
+    from kudio.core.io import WAVE_SUFFIX, _check_rate, check_file, check_input, \
         file_load, save_wave
     from kudio.core.report import audio_report
     from kudio.exceptions import AudioIOError, DependencyError
 
+    sr = _check_rate(sr, optional=True)
     entry = _as_enhancer(method)
     if on_error not in ('collect', 'raise'):
         raise FeatureError(f"on_error must be 'collect' or 'raise', got {on_error!r}")
@@ -1090,7 +1149,7 @@ def enhance_folder(src: Any, dst: PathLike,
 
 def _warm_up(y: np.ndarray, sr: int, names: Sequence[str], noise: str) -> None:
     """Pay every one-time import and JIT cost before the clock starts."""
-    sample = y[:min(len(y), sr)] if len(y) else y
+    sample = y[:min(len(y), int(sr))] if len(y) else y
     if sample.size < 512:
         return
     for name in names:
@@ -1132,7 +1191,8 @@ def _reference_metrics(reference, degraded, sr, metrics,
     from kudio.core._policy import checked
     from kudio.core.evaluator import _cut, _sides, si_sdr as _si_sdr, snr as _snr
 
-    ref = np.asarray(as_float(reference), dtype=np.float32).squeeze()
+    ref = np.asarray(as_float(reference, 'compare_enhancers', FeatureError),
+                     dtype=np.float32).squeeze()
     deg = np.asarray(as_float(degraded), dtype=np.float32).squeeze()
     if min(len(ref), len(deg)) == 0:
         return (None, None, None, None)

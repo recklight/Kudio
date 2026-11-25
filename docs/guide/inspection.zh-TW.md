@@ -339,8 +339,8 @@ no hiss    SNR~inf dB
 
 ### 一次一整個資料夾 {#a-folder-at-a-time}
 
-soundfile 打不開的檔案，`file_load` 會引發 [`AudioIOError`][kudio.exceptions.AudioIOError]；
-空檔案則是 `audio_report` 會引發 `FeatureError`。兩個都要攔，否則掃到第一個壞檔就會停下來：
+讀不了的檔案，`file_load` 會引發 [`AudioIOError`][kudio.exceptions.AudioIOError]；
+沒有樣本的檔案則是 `audio_report` 會引發 `FeatureError`。兩個都要攔，否則掃到第一個壞檔就會停下來：
 
 ```python
 from pathlib import Path
@@ -354,6 +354,11 @@ for path in sorted(Path("corpus").rglob("*.wav")):
     for problem in problems:
         print(f"{path.as_posix()}: {problem}")
 ```
+
+[截斷的錄音](audio-files.md#a-file-that-was-cut-short)有多少就量多少：讀得到的樣本
+沒有問題，`audio_report` 在裡面什麼也找不到。對檔案發出警告的是 `file_load`；在迴圈前
+加上 `warnings.filterwarnings("error", message=".*cut short")`，這個警告就會變成
+`AudioIOError`，這種錄音會和其他問題列在一起。
 
 ## 聽起來有多大聲 {#how-loud-it-sounds}
 
@@ -405,7 +410,8 @@ kudio 的測試會要求它在 8、16、44.1 和 48 kHz 都和那個獨立的響
 ### 正規化到目標響度 {#normalising-to-a-target}
 
 [`normalize_lufs`][kudio.core.loudness.normalize_lufs] 套用一個能把片段帶到目標響度的增益，
-預設是 -23 LUFS（EBU R 128[^ebu]），靜音則原樣回傳。除此之外它什麼都不做。
+預設是 -23 LUFS（EBU R 128[^ebu]），靜音則原樣回傳。裡面有東西、卻沒有任何區塊高過
+-70 LUFS 閘門的片段，量到的也是 `-inf`，會原樣回傳並發出警告說明。除此之外它什麼都不做。
 被增益推過滿刻度的樣本，回傳時就是超過 1.0，不會被限制，
 因為限制它們會改變你剛剛要求的響度：
 
@@ -448,6 +454,8 @@ matched   -27.5 LUFS
 ```
 
 不對齊的話，含雜訊的版本在任何聽測一開始就領先 2.5 LU。
+其中一段是靜音時沒有東西可以對齊，第一段會原樣回傳；其中一段在 -70 LUFS 閘門以下時，
+警告會說是哪一段。
 取樣率不同的片段也能對齊，用 `reference_sr=` 即可，
 因為響度屬於聲音本身，和取樣無關。
 
