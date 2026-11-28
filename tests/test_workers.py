@@ -17,13 +17,6 @@ import pytest
 import kudio
 from kudio._workers import Workers, chunk_of
 
-# Python 3.12 warns of every fork in a process that has threads, and numpy's BLAS has
-# them; the pools here start as Python starts them by default, as 4.3.0's Pool did
-pytestmark = pytest.mark.filterwarnings(
-    r"ignore:This process \(pid=\d+\) is multi-threaded, use of fork\(\) may lead to "
-    r"deadlocks in the child:DeprecationWarning")
-
-
 def _path(*folders) -> str:
     """PYTHONPATH with *folders* in front of what it was: an environment that finds its
     packages through it keeps them."""

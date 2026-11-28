@@ -43,7 +43,7 @@ pip install kudio
 pip install "kudio[eval,viz]"    # extras go in brackets, by name
 ```
 
-核心安裝會帶入 numpy、scipy、soundfile、soxr、PyYAML、tqdm 和 PyWavelets，
+核心安裝會帶入 numpy、scipy、soundfile、soxr、PyYAML 和 tqdm，
 需要 Python 3.9 以上。選用套件組有：`[viz]` 畫圖、`[eval]` 算 STOI、ESTOI 和 SDR、
 `[pesq]` 算 PESQ、`[dnsmos]` 算 DNSMOS、`[data]` 匯出 dataframe 和 Excel、`[audio]`
 錄音和播放、`[compressed]` 讀 m4a、aac 和 webm。`[all]` 會裝除了 `[pesq]` 以外的全部，`[pesq]` 要編譯 C 程式碼，所以另外裝。

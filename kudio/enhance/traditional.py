@@ -15,6 +15,7 @@ import numpy as np
 from kudio._numbers import within
 from kudio._samples import finite, one_channel
 from kudio.core._policy import sample_rate
+from kudio.enhance import _dwt
 from kudio.exceptions import FeatureError
 
 __all__ = ['trad_enhance', 'wavelet_low_pass_filter']
@@ -24,29 +25,47 @@ def wavelet_low_pass_filter(y: np.ndarray, thres: float = 0.8,
                             wavelet: str = 'db2') -> np.ndarray:
     """Soft-threshold the detail coefficients of a wavelet decomposition.
 
-    The threshold is *thres* times the clip's peak, ``max |y|``. The result
-    has the input's length; a silent clip comes back as it went in.
+    The clip is taken down with periodization as many levels as its length
+    allows, every detail coefficient is moved towards zero by *thres* times the
+    clip's peak, ``max |y|``, and the clip is put back together. The result has
+    the input's length, in float32 for float16 and float32 audio and in float64
+    otherwise. A silent clip, and one too short for a single level (fewer than
+    2(L - 1) samples for a filter of L taps: 6 for db2), come back as they went
+    in, as a copy.
+
+    :param wavelet: a discrete wavelet by name, in any case: ``haar``,
+        ``db1`` to ``db38``, ``sym2`` to ``sym20``, ``coif1`` to ``coif17``,
+        ``bior1.1`` to ``bior6.8``, ``rbio1.1`` to ``rbio6.8`` or ``dmey``,
+        106 in all, with PyWavelets' filters and its results to the bit; or a
+        ``pywt.Wavelet``.
+    :raises ValueError: for a name that is none of those.
+    :raises TypeError: for no name, or a value that is neither a name nor a
+        wavelet.
     """
-    # float32 stays float32, as pywt keeps it
     y = one_channel(y, 'wavelet_low_pass_filter', FeatureError)
     if y.ndim != 1:
         raise FeatureError(f"wavelet_low_pass_filter() takes mono audio, got shape {y.shape}")
     finite(y, 'wavelet_low_pass_filter', FeatureError)
     thres = within(thres, 'thres', 'wavelet_low_pass_filter', FeatureError, low=0)
+    bank = _dwt.filter_bank(wavelet, 'wavelet_low_pass_filter')
     # the peak, not the signed maximum: a clip below zero throughout got a
     # negative threshold and came back unfiltered
     level = thres * float(np.nanmax(np.abs(y))) if y.size else 0.0
     if not level > 0:
-        # a threshold of zero makes pywt divide by zero: NaN everywhere
+        # a threshold of zero divides zero by zero below: NaN everywhere
         return y.copy()
-    # pywt brings scipy.fft and scipy.special with it, 0.23 s of importing
-    # that `import kudio` would otherwise spend on every script
-    import pywt
-    coeff = pywt.wavedec(y, wavelet, mode='periodization')
-    coeff[1:] = (pywt.threshold(i, value=level, mode='soft')
-                 for i in coeff[1:])
+    coeff = _dwt.wavedec(y, bank)
+    if len(coeff) == 1:
+        return y.copy()
+    for k in range(1, len(coeff)):
+        magnitude = np.absolute(coeff[k])
+        with np.errstate(divide='ignore'):
+            # a coefficient of zero gives 1 - inf, which the clip makes 0
+            keep = 1 - level / magnitude
+            keep.clip(min=0, max=None, out=keep)
+            coeff[k] = coeff[k] * keep
     # periodization rounds an odd length up by one sample
-    return pywt.waverec(coeff, wavelet, mode='periodization')[:len(y)]
+    return _dwt.waverec(coeff, bank)[:len(y)]
 
 
 def trad_enhance(y: np.ndarray, sr: int) -> np.ndarray:

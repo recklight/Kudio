@@ -126,11 +126,9 @@ Without that share, four workers on a 20-thread CPU each start 20: SDR of
 with four workers of 5 threads. The rows come back in the order of
 the items. For a given number of BLAS threads they hold the same numbers as
 one process, to the last bit; across thread counts the dot products of
-SI-SDR and SDR can differ by about 1e-14. pystoi adds noise from numpy's
-global generator, 2.2e-16 in size, inside ESTOI, which moves its last
-digits; I seed that generator with 0 before each side of each item and put
-its state back afterwards, so an item scores the same in any process and in
-any order. A script that passes *jobs* above 1 needs the
+SI-SDR and SDR can differ by about 1e-14. I seed numpy's global generator
+with 0 before each side of each item and put its state back afterwards, so
+an item scores the same in any process and in any order. A script that passes *jobs* above 1 needs the
 ``if __name__ == '__main__':`` guard any spawned pool needs.
 """
 from __future__ import annotations

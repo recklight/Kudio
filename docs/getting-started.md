@@ -10,8 +10,8 @@ see when something goes wrong: the exceptions and the logging.
 pip install kudio
 ```
 
-The core install brings numpy, scipy, soundfile, soxr, PyYAML, tqdm and
-PyWavelets. That is enough for files, features, effects, loudness, the
+The core install brings numpy, scipy, soundfile, soxr, PyYAML and tqdm.
+That is enough for files, features, effects, loudness, the
 reference-free report, denoising, dataset synthesis and the metrics that need
 no outside package. `import kudio` imports none of the optional packages
 below, so a missing extra shows up when you call the function that needs it
@@ -38,8 +38,8 @@ pip install "kudio[eval,viz]"
 
 | Extra | Installs | What it enables |
 |---|---|---|
-| `audio` | PyAudio, sounddevice | recording and playback: [`record`][kudio.core.stream.record], [`StreamRecorder`][kudio.core.stream.StreamRecorder], [`play_audio`][kudio.core.stream.play_audio], the stream readers, [`list_devices`][kudio.util.check.list_devices] |
-| `eval` | pystoi, mir_eval below 0.9 | STOI, ESTOI and SDR in [`score`][kudio.core.evaluator.score]; STOI and SDR in [`AudioEvaluate`][kudio.core.evaluator.AudioEvaluate] and [`eval_metrics`][kudio.core.evaluator.eval_metrics] |
+| `audio` | sounddevice | recording and playback: [`record`][kudio.core.stream.record], [`StreamRecorder`][kudio.core.stream.StreamRecorder], [`play_audio`][kudio.core.stream.play_audio], the stream readers, [`list_devices`][kudio.util.check.list_devices] |
+| `eval` | nothing | kept so that `pip install "kudio[eval]"` still installs: STOI, ESTOI and SDR need no package |
 | `pesq` | pesq | PESQ, ITU-T P.862 and P.862.2, in [`pesq`][kudio.core.evaluator.pesq], `score` and `AudioEvaluate`, and the PESQ inside [`composite`][kudio.core.quality.composite] |
 | `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos] and [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808], predicted P.835 and P.808 opinion scores with no clean reference |
 | `viz` | matplotlib | the plotting helpers in [`kudio.util.visual`][kudio.util.visual] |
@@ -65,21 +65,14 @@ and `[all]` leaves them out as well. Four of the others have a catch:
     where to get it.
 
 `audio`
-:   Two PortAudio bindings, because kudio uses both: `record` and
-    `list_devices` run on sounddevice, the streaming classes on PyAudio, and
-    the two number devices independently
-    ([Recording and live views](guide/live-audio.md)). PyAudio publishes
-    wheels for Windows only, so elsewhere pip builds it from source, which
-    takes a C compiler, the Python headers and PortAudio's: `portaudio19-dev`
-    and `python3-dev` on Debian and Ubuntu, `brew install portaudio` and the
-    Xcode command-line tools on macOS. On Linux, sounddevice also needs the
-    system's PortAudio library.
+:   sounddevice, a PortAudio binding, for recording, playback and the device
+    list, with one index for each device
+    ([Recording and live views](guide/live-audio.md)). Its wheels for Windows
+    and macOS carry PortAudio; on Linux it needs the system's PortAudio
+    library, `libportaudio2` on Debian and Ubuntu, and nothing is compiled.
 
 `eval`
-:   mir_eval stays below 0.9 because SDR calls its `bss_eval_sources`, which
-    0.8 deprecates and says 0.9 will remove. kudio keeps that notice to
-    itself, since the pin already deals with it and there is nothing for a
-    caller to change.
+:   Empty. STOI, ESTOI and SDR are computed by kudio itself.
 
 [`check_metrics_install`][kudio.core.evaluator.check_metrics_install] says
 which metric back-ends a machine has; [Measuring quality](guide/metrics.md)
@@ -374,9 +367,9 @@ Three kinds of failure fall outside `KudioError`, or only partly inside it:
   `TimeoutError` ([Recording and live views](guide/live-audio.md)).
 - `play_audio` does not raise when it cannot play something, a missing file
   included. It returns a short message saying what went wrong, and `None`
-  when it played, so check what it returns. A missing PyAudio or sounddevice
-  is the exception: that is a `DependencyError`, as it is for the rest of
-  live audio.
+  when it played, so check what it returns. A missing sounddevice is the
+  exception: that is a `DependencyError`, as it is for the rest of live
+  audio.
 
 ## Logging
 

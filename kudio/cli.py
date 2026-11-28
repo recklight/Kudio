@@ -294,23 +294,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_devices(kudio) -> None:
-    # the two backends number devices independently, so print both spaces
-    # rather than let an index from one be pasted into the other
-    print("sounddevice indices — use with kudio.record(device=...)")
+    # one numbering for record, Recorder and the stream classes; the host API
+    # tells apart the same microphone under MME, WASAPI and WDM-KS
+    print("Devices — the index is device= of kudio.record, Recorder, StreamRecorder "
+          "and LocalStreamReader")
     try:
         for d in kudio.list_devices():
+            api = f" ({d['api']})" if d.get('api') else ""
             print(f"  [{d['index']:>2}] in={d['max_input_channels']} "
                   f"out={d['max_output_channels']} "
-                  f"fs={int(d['default_samplerate'])}  {_one_line(d['name'])}")
-    except Exception as e:
-        print(f"  unavailable: {e}")
-
-    print("\nPyAudio indices — use with kudio.Recorder / stream readers")
-    try:
-        with kudio.CheckDevice() as cd:
-            for d in cd.system_devices():
-                print(f"  [{d['index']:>2}] in={d['in']} out={d['out']} "
-                      f"fs={int(d['fs'])}  {_one_line(d['Device'])} ({d['api']})")
+                  f"fs={int(d['default_samplerate'])}  {_one_line(d['name'])}{api}")
     except Exception as e:
         print(f"  unavailable: {e}")
 

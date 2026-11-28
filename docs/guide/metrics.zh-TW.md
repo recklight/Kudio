@@ -67,12 +67,11 @@ sdr      13.325
 它們也各自是獨立的函式，參數順序相同：[`snr`][kudio.core.evaluator.snr]、
 [`si_sdr`][kudio.core.evaluator.si_sdr]、
 [`segmental_snr`][kudio.core.evaluator.segmental_snr] 和
-[`sdi`][kudio.core.evaluator.sdi]。`stoi`、`estoi` 和 `sdr` 需要 `kudio[eval]`；
+[`sdi`][kudio.core.evaluator.sdi]，以及 `stoi`、`estoi` 和 `sdr`；
 `pesq` 需要 `kudio[pesq]`，而且取樣率必須是 8 或 16 kHz。指名一個跑不了的指標時，
 `score` 會引發例外，而不是把它略過：未知的名稱是 `ValueError`，缺少套件則是
 [`DependencyError`][kudio.exceptions.DependencyError]，訊息裡會寫出要安裝的選用套件組。
 
-mir_eval 為什麼限制在 0.9 以下，[入門](../getting-started.md)有說明。
 [`check_metrics_install`][kudio.core.evaluator.check_metrics_install] 回傳
 `(pesq_ok, stoi_ok, sdr_ok)`，也就是這台電腦有哪些後端；每個缺少的後端，
 它在每個行程裡只記錄一次安裝提示。`AudioEvaluate` 和 `eval_metrics` 也會呼叫它，
@@ -307,8 +306,8 @@ ValueError: snr(): ref is 64000 samples and deg 16000: comparing them leaves 480
     數字比較。
 
 `stoi`、`estoi`
-:   短時客觀可懂度（short-time objective intelligibility）[^stoi]，透過 `pystoi`
-    計算。它先把兩個訊號重新取樣到 10 kHz、去掉靜音音框，再比較三分之一八度頻帶
+:   短時客觀可懂度（short-time objective intelligibility）[^stoi]，數字和 pystoi
+    相同。它先把兩個訊號重新取樣到 10 kHz、去掉靜音音框，再比較三分之一八度頻帶
     裡的短時包絡，所以增益、極性和一毫秒的延遲幾乎動不了它，雜訊則會。
     它能容忍的也差不多就這些：晚 5 ms 得到 0.85，晚 10 ms 得到 0.63，
     大約就是 5 dB 雜訊的代價（0.61）。擴充版的 `estoi` 在 5 dB 混音上得到 0.31，
@@ -318,7 +317,7 @@ ValueError: snr(): ref is 64000 samples and deg 16000: comparing them leaves 480
     `AudioEvaluate` 則把它排除在平均之外。
 
 `sdr`
-:   BSS Eval 的 SDR[^bss]，透過 `mir_eval` 計算。它從參考訊號到輸出擬合出最佳的
+:   BSS Eval 的 SDR[^bss]，數字和 mir_eval 逐位元相同。它從參考訊號到輸出擬合出最佳的
     512 tap 濾波器（512 是 mir_eval 的長度，論文本身沒有固定），只把這個濾波器產生不出來的部分算成失真。增益、極性、低通，
     以及最多 511 個樣本的延後開始，都會部分或完全被容忍，所以晚一個樣本得到
     91.3 dB。這個濾波器是因果的，提早開始的輸出完全享受不到這些：早一個樣本
@@ -699,7 +698,7 @@ SI-SDR 減去它所來自的混合訊號的 SI-SDR，SDRi 則是用 BSS Eval 的
 事。[^convtasnet]
 [`si_sdr_improvement`][kudio.core.separation.si_sdr_improvement] 和
 [`sdr_improvement`][kudio.core.separation.sdr_improvement] 依序接受參考訊號、
-輸出和輸入；後者需要 mir_eval（`kudio[eval]`），和 `score` 裡的 `sdr` 一樣。
+輸出和輸入；兩者都不需要額外的套件。
 
 ```python
 print(f"{kudio.si_sdr_improvement(clean, enhanced, noisy):.2f}")

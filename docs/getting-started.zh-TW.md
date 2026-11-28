@@ -9,7 +9,7 @@
 pip install kudio
 ```
 
-核心安裝會帶入 numpy、scipy、soundfile、soxr、PyYAML、tqdm 和 PyWavelets。
+核心安裝會帶入 numpy、scipy、soundfile、soxr、PyYAML 和 tqdm。
 這樣就夠處理檔案、特徵、效果、響度、不需參考訊號的檢查報告、降噪、資料集合成，以及
 不需要外部套件的那些指標。`import kudio` 不會匯入下面任何一個選用套件，所以缺少某個
 選用套件組時，要到你呼叫需要它的函式時才會發現（畫圖工具則是在匯入
@@ -32,8 +32,8 @@ pip install "kudio[eval,viz]"
 
 | 套件組 | 會安裝 | 用途 |
 |---|---|---|
-| `audio` | PyAudio、sounddevice | 錄音與播放：[`record`][kudio.core.stream.record]、[`StreamRecorder`][kudio.core.stream.StreamRecorder]、[`play_audio`][kudio.core.stream.play_audio]、串流讀取器、[`list_devices`][kudio.util.check.list_devices] |
-| `eval` | pystoi、0.9 以下的 mir_eval | [`score`][kudio.core.evaluator.score] 裡的 STOI、ESTOI 和 SDR；[`AudioEvaluate`][kudio.core.evaluator.AudioEvaluate] 和 [`eval_metrics`][kudio.core.evaluator.eval_metrics] 裡的 STOI 和 SDR |
+| `audio` | sounddevice | 錄音與播放：[`record`][kudio.core.stream.record]、[`StreamRecorder`][kudio.core.stream.StreamRecorder]、[`play_audio`][kudio.core.stream.play_audio]、串流讀取器、[`list_devices`][kudio.util.check.list_devices] |
+| `eval` | 不裝任何東西 | 留著，讓 `pip install "kudio[eval]"` 照樣能裝：STOI、ESTOI 和 SDR 都不需要額外的套件 |
 | `pesq` | pesq | [`pesq`][kudio.core.evaluator.pesq]、`score` 和 `AudioEvaluate` 裡的 PESQ（ITU-T P.862 和 P.862.2），以及 [`composite`][kudio.core.quality.composite] 內部用的 PESQ |
 | `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos] 和 [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808]，不需乾淨參考訊號的 P.835 和 P.808 主觀分數預測 |
 | `viz` | matplotlib | [`kudio.util.visual`][kudio.util.visual] 裡的畫圖工具 |
@@ -56,18 +56,13 @@ pip install "kudio[eval,viz]"
     [`FeatureError`][kudio.exceptions.FeatureError]，告訴你去哪裡取得。
 
 `audio`
-:   兩套 PortAudio 繫結，因為 kudio 兩套都用：`record` 和 `list_devices` 用
-    sounddevice，串流類別用 PyAudio，而兩者的裝置編號各自獨立
-    （[錄音與即時檢視](guide/live-audio.md)）。PyAudio 只提供 Windows 的 wheel，
-    其他平台上 pip 會從原始碼建置，需要 C 編譯器、Python 標頭檔和 PortAudio 的標頭檔：
-    Debian 和 Ubuntu 上是 `portaudio19-dev` 和 `python3-dev`，macOS 上是
-    `brew install portaudio` 加上 Xcode 命令列工具。在 Linux 上，sounddevice 另外還需要
-    系統的 PortAudio 函式庫。
+:   PortAudio 的繫結 sounddevice，用來錄音、播放和列出裝置，每個裝置只有一個編號
+    （[錄音與即時檢視](guide/live-audio.md)）。它在 Windows 和 macOS 的 wheel 自帶
+    PortAudio；Linux 上需要系統的 PortAudio 函式庫，Debian 和 Ubuntu 是
+    `libportaudio2`，不需要編譯任何東西。
 
 `eval`
-:   mir_eval 維持在 0.9 以下，因為 SDR 用到它的 `bss_eval_sources`，0.8 已經把它標為
-    棄用，並表示 0.9 會移除。這個提示 kudio 會自己吃掉，因為版本限制已經處理了這件事，
-    呼叫端也沒有什麼要改的。
+:   空的。STOI、ESTOI 和 SDR 都由 kudio 自己算。
 
 [`check_metrics_install`][kudio.core.evaluator.check_metrics_install] 會告訴你這台電腦
 有哪些指標後端；它回傳什麼，[品質評估](guide/metrics.md)有說明。
@@ -326,8 +321,8 @@ pesq
 - 等待超過 `timeout=` 的緩衝區會引發內建的 `TimeoutError`
   （[錄音與即時檢視](guide/live-audio.md)）。
 - `play_audio` 無法播放時不會引發例外，連檔案不存在也一樣。它會回傳一段簡短的訊息說明
-  出了什麼問題，播放成功則回傳 `None`，所以請檢查回傳值。缺少 PyAudio 或 sounddevice
-  是例外：那是 `DependencyError`，跟其他即時音訊功能一樣。
+  出了什麼問題，播放成功則回傳 `None`，所以請檢查回傳值。缺少 sounddevice 是例外：
+  那是 `DependencyError`，跟其他即時音訊功能一樣。
 
 ## 記錄 {#logging}
 

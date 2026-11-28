@@ -6,21 +6,20 @@ kudio 大部分的功能，處理的都是已經存成檔案的音訊。這一�
 ## 哪些需要 audio 選用套件組 {#what-needs-the-audio-extra}
 
 ```bash
-pip install "kudio[audio]"     # PyAudio and sounddevice
+pip install "kudio[audio]"     # sounddevice
 ```
 
-kudio 透過兩套 PortAudio 的 Python 繫結存取硬體，而且每一套都只在需要時才匯入，
-所以兩套都沒裝，`import kudio` 也能用。PyAudio 只提供 Windows 的 wheel；
-Linux 和 macOS 要建置它需要什麼，[入門](../getting-started.md)有說明。
-表格最後一列的類別兩套都不需要，核心安裝就能執行。
+kudio 透過 PortAudio 的 Python 繫結 sounddevice 存取硬體，而且只在需要時才匯入，
+所以沒裝它，`import kudio` 也能用。它在 Windows 和 macOS 的 wheel 自帶 PortAudio；
+Linux 上用系統的，Debian 和 Ubuntu 是 `libportaudio2`，不需要編譯任何東西。
+表格最後一列的類別不需要任何套件，核心安裝就能執行。
 
 | 後端 | 用到它的功能 |
 |---|---|
-| sounddevice | [`record`][kudio.core.stream.record]、[`list_devices`][kudio.util.check.list_devices]、[`play_audio`][kudio.core.stream.play_audio] |
-| PyAudio | [`StreamRecorder`][kudio.core.stream.StreamRecorder]、[`Recorder`][kudio.core.stream.Recorder]、[`LocalStreamReader`][kudio.core.stream.LocalStreamReader]、[`RemoteStreamReader`][kudio.core.stream.RemoteStreamReader]、[`CheckDevice`][kudio.util.check.CheckDevice]、播放開啟中 `wave.Wave_read` 的 `play_audio`，以及沒有 sounddevice 時播放其他任何東西的 `play_audio` |
+| sounddevice | [`record`][kudio.core.stream.record]、[`list_devices`][kudio.util.check.list_devices]、[`play_audio`][kudio.core.stream.play_audio]、[`StreamRecorder`][kudio.core.stream.StreamRecorder]、[`Recorder`][kudio.core.stream.Recorder]、[`LocalStreamReader`][kudio.core.stream.LocalStreamReader]、[`RemoteStreamReader`][kudio.core.stream.RemoteStreamReader]、[`CheckDevice`][kudio.util.check.CheckDevice] |
 | 都不需要 | [`SpectrogramStream`][kudio.core.spectrogram.SpectrogramStream]、[`StreamEnhancer`][kudio.enhance.streaming.StreamEnhancer]、[`AudioBuffer`][kudio.core.buffer.AudioBuffer]、[`FetchBuffer`][kudio.core.buffer.FetchBuffer] |
 
-沒有這組套件時，這裡所有需要繫結的功能都會引發
+沒有這組套件時，這裡所有需要 sounddevice 的功能都會引發
 [`DependencyError`][kudio.exceptions.DependencyError]，訊息會寫出 `kudio[audio]`；
 它同時也是 `ImportError`。在沒有 PortAudio 函式庫的 Linux 電腦上裝了 sounddevice，
 不算缺少選用套件組，因為 pip 修不了，所以這時引發的是
@@ -89,7 +88,7 @@ kudio.save_wave("take.wav", y, rec.sr)
 在 16 kHz 是 64 ms），所以讀數大約每秒更新 15 次。
 
 第二次呼叫 `stop()` 會回傳同一段錄音，不是空陣列。`stop()` 也會關掉錄音器的
-PyAudio 實例，之後再 `start()` 會用同樣的設定重新開啟串流，接著錄同一段，
+串流，之後再 `start()` 會用同樣的設定重新開啟串流，接著錄同一段，
 就像「暫停」按鈕一樣。如果裝置重新開啟時的取樣率或聲道數不同，`start()` 會引發
 `DeviceError`，而不是把兩段接成一段；[`reset()`][kudio.core.stream.StreamRecorder.reset]
 會把目前的錄音丟掉，所以要錄新的一段，請先呼叫它。它在開啟中的串流上也能用，
@@ -111,23 +110,21 @@ PyAudio 實例，之後再 `start()` 會用同樣的設定重新開啟串流，�
 
 ## 選擇裝置 {#choosing-a-device}
 
-sounddevice 和 PyAudio 對同一批裝置各自編號，所以一份清單裡的編號，在另一份裡
-可能指向別的裝置，或根本不存在。請傳給每個函式它所用後端的編號：
+每個裝置只有一個編號，就是 sounddevice 的。
+[`list_devices()`][kudio.util.check.list_devices] 和
+[`CheckDevice().system_devices()`][kudio.util.check.CheckDevice.system_devices]
+都用它列出同一批裝置，並標出各自的 host API；`record`、`Recorder`、`StreamRecorder`
+和 `LocalStreamReader` 的 `device` 收的也都是它。在 shell 裡，`kudio devices`
+會印出這份清單（[命令列](../cli.md)）。
 
-| 編號來源 | 傳給 |
-|---|---|
-| [`list_devices()`][kudio.util.check.list_devices]（sounddevice） | `record(device=...)` |
-| [`CheckDevice().system_devices()`][kudio.util.check.CheckDevice.system_devices]（PyAudio） | `StreamRecorder`、`Recorder`、`LocalStreamReader` |
-
-在 shell 裡，`kudio devices` 會印出兩份清單，並分別標明編號該傳給誰
-（[命令列](../cli.md)）。
-
-不給 `device` 時，各處挑的輸入不一定相同。`record` 用的是 sounddevice 的預設輸入，
-`Recorder` 用的是 PortAudio 的，但 `StreamRecorder` 和 `LocalStreamReader` 會經過
-[`CheckDevice.input_device`][kudio.util.check.CheckDevice.input_device]，它會試過
-PyAudio 知道的每個裝置，取**最後一個**能以輸入開啟的，不管它屬於哪個 host API；
-`system_devices` 列的就是這些裝置，並標出各自的 host API。所以只要用哪個輸入錄音有
-差別，就請傳 `device`。想知道 `StreamRecorder`
+不給 `device` 時，各處都用同一條規則挑輸入，也就是
+[`CheckDevice.default_input`][kudio.util.check.CheckDevice.default_input]：系統有預設
+輸入就用它，它啟動不了就是 `DeviceError`，不會改用別支麥克風。麥克風全在 WDM-KS 上的
+Windows 電腦沒有預設輸入，這時從清單最後往前，取第一個開得起來、也啟動得了的輸入，
+不管它屬於哪個 host API，所以 Windows 列出了但沒有連線的藍牙耳機會被跳過。試裝置的方式
+和錄音時一樣，帶著回呼函式，因為 WDM-KS 不開其他的串流。取樣率仍然照你給的：`record`
+和 `Recorder` 向裝置要的就是給它們的取樣率，只接受 44.1 kHz 的裝置不接受 16 kHz，
+`record` 這時是 `DeviceError`。所以只要用哪個輸入錄音有差別，就請傳 `device`。想知道 `StreamRecorder`
 最後選了什麼，請在建立它之前呼叫 `logging.basicConfig(level=logging.INFO)`，
 kudio 就會記錄裝置的編號、名稱，以及它選的取樣率。
 
@@ -318,17 +315,15 @@ print(kudio.play_audio(tone, 16000))
 unsupported dtype: float64
 ```
 
-`tone.astype(np.float32)` 就能播；`file_load` 回傳的本來就是 float32。有安裝
-sounddevice 時，陣列會交給它，它在背景播放並立刻回傳，所以如果腳本下一行就結束，
-聲音會被切掉；`sounddevice.wait()` 會阻塞到播完為止。沒有 sounddevice 時，
-陣列改走 PyAudio，它會阻塞到播完。不論走哪一邊，`(frames, channels)` 的陣列
-都會用同樣數量的聲道播放。兩個都沒裝時，`play_audio` 會引發 `DependencyError`。
+`tone.astype(np.float32)` 就能播；`file_load` 回傳的本來就是 float32。陣列在背景
+播放，呼叫立刻回傳，所以如果腳本下一行就結束，聲音會被切掉；`sounddevice.wait()`
+會阻塞到播完為止。`(frames, channels)` 的陣列會用同樣數量的聲道播放。沒有
+sounddevice 時，`play_audio` 會引發 `DependencyError`。
 
 路徑的讀法和 `file_load` 一樣，所以它打得開的都能播：FLAC 和 FLOAT WAV，
 [有 ffmpeg 的話](audio-files.md#formats-soundfile-does-not-read)還有 m4a 和 webm。讀不了
-的檔案則回傳訊息，原因寫進記錄。開啟中的 `wave.Wave_read` 會原樣交給 PyAudio；32 位元
-整數的檔案在那裡會照 32 位元整數播放，雖然讓 PyAudio 自己判斷的話，它會把這個
-樣本寬度當成 float32。
+的檔案則回傳訊息，原因寫進記錄。開啟中的 `wave.Wave_read` 會播完才回傳，照它存的
+整數播放：8 位元無號、16 和 32 位元照原樣，24 位元放在 32 位元的高位。
 
 ## 較底層的元件 {#the-lower-level-pieces}
 
@@ -338,22 +333,23 @@ sounddevice 時，陣列會交給它，它在背景播放並立刻回傳，所�
 
 ### Recorder {#recorder}
 
-[`Recorder`][kudio.core.stream.Recorder] 是建立在 PyAudio 上、會阻塞的固定長度
-錄音器，回傳的是 int16 而不是 float32：
+[`Recorder`][kudio.core.stream.Recorder] 是會阻塞的固定長度錄音器，回傳的是 int16
+而不是 float32：
 
 ```python
 import kudio
 
-with kudio.Recorder(record_times=3, rate=16000) as r:   # PortAudio's default input
+with kudio.Recorder(record_times=3, rate=16000) as r:   # the system's default input
     y = r.start_record()                       # int16, (n,) for mono
     r.save("take.wav")                         # 16-bit WAV; True or False
 ```
 
 它照給定的裝置、取樣率和聲道數開啟，不會改用別的設定：裝置不接受時，
-[`start_record()`][kudio.core.stream.Recorder.start_record] 會引發 PyAudio 的
-`OSError`，而不是 `DeviceError`。它每次讀取每個聲道 `frames_per_buffer`（512）
-個樣本，共讀 `int(rate / frames_per_buffer * record_times)` 次，所以在 16 kHz
-錄三秒是讀 93 次：每個聲道 47,616 個樣本，也就是 2.976 秒。
+[`start_record()`][kudio.core.stream.Recorder.start_record] 會引發 sounddevice 的
+`PortAudioError`，而不是 `DeviceError`；裝置不再送資料時，在錄音該結束後十秒會是
+`DeviceError`。它每次取每個聲道 `frames_per_buffer`（512）個樣本，共取
+`int(rate / frames_per_buffer * record_times)` 次，所以在 16 kHz 錄三秒是 93 個
+區塊：每個聲道 47,616 個樣本，也就是 2.976 秒。
 [`save(resample=...)`][kudio.core.stream.Recorder.save] 會逐聲道對擷取到的內容
 重新取樣，所以那 2.976 秒在新的取樣率下仍然是 2.976 秒，每個音高也都維持原樣。
 記憶體裡的陣列，則可以用 [`resample`][kudio.core.io.resample] 沿著 frames 軸
@@ -369,8 +365,8 @@ kudio.save_wave("take-8k.wav", y8, 8000)
 
 ### LocalStreamReader {#localstreamreader}
 
-[`LocalStreamReader`][kudio.core.stream.LocalStreamReader] 透過 PyAudio 開啟輸入，
-把每個區塊交給 `AudioBuffer`、交給 `on_frame` 回呼函式，或兩者都給：
+[`LocalStreamReader`][kudio.core.stream.LocalStreamReader] 開啟輸入，把每個區塊
+交給 `AudioBuffer`、交給 `on_frame` 回呼函式，或兩者都給：
 
 ```python
 import time
@@ -379,7 +375,7 @@ import numpy as np
 import kudio
 
 chunks = []
-reader = kudio.LocalStreamReader(device=1,          # a PyAudio index
+reader = kudio.LocalStreamReader(device=1,          # from kudio.list_devices()
                                  rate=16000, frame_size=1024,
                                  on_frame=chunks.append)
 if reader.get_status():                        # False: no input would open
@@ -399,8 +395,9 @@ if reader.get_status():                        # False: no input would open
 會引發 `DeviceError`。
 
 `on_frame` 在 PortAudio 的執行緒上執行，所以請把區塊存起來就回傳，處理留到別的
-地方做。在它裡面引發的例外，kudio 會攔下來並記錄，串流繼續進行。如果不攔，
-PyAudio 會印出 traceback 並中止串流，一個出錯的區塊就會讓整段錄音結束。
+地方做；區塊是它自己的一份複本，可以留著。在它裡面引發的例外，kudio 會攔下來並
+記錄，串流繼續進行。如果不攔，sounddevice 會印出 traceback 並停止串流，一個出錯的
+區塊就會讓整段錄音結束。
 
 ### AudioBuffer 和 FetchBuffer {#audiobuffer-and-fetchbuffer}
 
@@ -446,7 +443,7 @@ kudio 不會送任何東西來啟動串流：連線一建立，伺服器就開�
 文字 `stop` 時停止，`terminate()` 在關閉之前會送出它。其他指令用
 [`sock_send()`][kudio.core.stream.RemoteStreamReader.sock_send] 送，而且要在
 `start()` 之前：讀取執行緒一開始跑，就會讀同一個 socket，回覆可能被當成區塊
-放進緩衝區。`initialize_params` 即使在本機不播放任何東西，也會開啟 PyAudio，
+放進緩衝區。`initialize_params` 即使在本機不播放任何東西，也會匯入 sounddevice，
 所以這個類別同樣需要 `kudio[audio]`。
 
 !!! warning "分成許多小封包的區塊"

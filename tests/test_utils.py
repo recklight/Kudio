@@ -66,7 +66,9 @@ def test_list_devices_shape_and_filtering():
     assert isinstance(every, list)
     for d in every:
         assert set(d) == {'index', 'name', 'max_input_channels',
-                          'max_output_channels', 'default_samplerate'}
+                          'max_output_channels', 'default_samplerate', 'api'}
+    apis = [api['name'] for api in sd.query_hostapis()]
+    assert [d['api'] for d in every] == [apis[d['hostapi']] for d in sd.query_devices()]
 
     inputs = list_devices('input')
     assert all(d['max_input_channels'] > 0 for d in inputs)

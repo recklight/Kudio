@@ -7,7 +7,6 @@ The SNR family (:func:`snr`, :func:`si_sdr`, :func:`segmental_snr`,
 :func:`sdi`) and :func:`lsd` are pure numpy. The rest are optional
 dependencies::
 
-    pip install "kudio[eval]"   # mir_eval + pystoi: SDR, STOI
     pip install "kudio[pesq]"   # pesq: PESQ -- built from source, needs a C compiler
 
 **Which PESQ.** ITU-T P.862 scores narrowband speech and P.862.2 wideband.
@@ -155,9 +154,9 @@ def _checked_pair(ref, deg, caller: str) -> Tuple[np.ndarray, np.ndarray]:
 def _overflows(ref: np.ndarray, deg: np.ndarray) -> bool:
     """Whether a back-end squaring the pair could overflow float64.
 
-    pystoi and mir_eval square and sum inside, where kudio cannot catch it:
-    on 3 s of speech, pystoi's STOI comes back nan at 1e153 of full scale and
-    0.0, the worst score there is, from 1e154; mir_eval's SDR is nan from
+    STOI and BSS Eval square and sum inside, where kudio cannot catch it:
+    on 3 s of speech, STOI comes back nan at 1e153 of full scale and
+    0.0, the worst score there is, from 1e154; BSS Eval's SDR is nan from
     1e152. The pair's energy with 1024 times to spare refuses from about
     1e150 on such a clip, and normal audio is 150 orders of magnitude clear
     of it.
@@ -644,8 +643,7 @@ METRICS = ('snr', 'si_sdr', 'segsnr', 'sdi', 'pesq', 'stoi', 'estoi', 'sdr',
 _DEFAULT = ('snr', 'si_sdr', 'segsnr', 'sdi', 'pesq', 'stoi', 'estoi', 'sdr')
 
 #: optional metric -> (module it needs, the extra that installs it)
-_BACKEND = {'pesq': ('pesq', 'pesq'), 'stoi': ('pystoi', 'eval'),
-            'estoi': ('pystoi', 'eval'), 'sdr': ('mir_eval', 'eval'),
+_BACKEND = {'pesq': ('pesq', 'pesq'),
             'csig': ('pesq', 'pesq'), 'cbak': ('pesq', 'pesq'),
             'covl': ('pesq', 'pesq')}
 
@@ -660,7 +658,7 @@ _COMPOSITE = ('csig', 'cbak', 'covl')
 _CSII = {'csii_high': 'high', 'csii_mid': 'mid', 'csii_low': 'low'}
 
 
-#: what pystoi returns instead of a score when a clip is too short for it
+#: what STOI returns instead of a score when a clip is too short for it
 _STOI_TOO_SHORT = 1e-5 + 1e-12
 
 
@@ -703,24 +701,23 @@ def _compute(name: str, ref: np.ndarray, deg: np.ndarray, sr: int,
     if name in ('stoi', 'estoi'):
         too_short = ("the pair needs about 0.4 s of speech left once its silent "
                      "frames are removed, and has less")
-        # under 25.6 ms, one 256-sample frame at pystoi's 10 kHz, pystoi
-        # raises numpy's AxisError instead of answering
+        # under 25.6 ms, one 256-sample frame at STOI's 10 kHz, there is no
+        # frame to take the loudest of
         if len(ref) * 10000 < 256 * sr:
             return scored_nan(name, too_short)
         if _overflows(ref, deg):
             return _too_loud(name, ref, deg)
-        # pystoi adds noise from numpy's global generator before normalising,
-        # so on digital silence its answer would depend on the draw
+        # digital silence has no envelope: ESTOI would divide zero by zero
         for label, y in (('ref', ref), ('deg', deg)):
             if not np.any(y):
                 return scored_nan(name, f"{label} is digital silence throughout, so "
                                         f"there is no envelope to correlate")
-        from pystoi import stoi
+        from kudio.core._stoi import stoi
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             value = float(stoi(ref, deg, sr, extended=(name == 'estoi')))
         if value <= _STOI_TOO_SHORT:
-            # pystoi's answer when under 30 frames survive its silence removal
+            # STOI's answer when under 30 frames survive its silence removal
             # (about 0.4 s): a placeholder, not a score, and averaged into a
             # mean it reads as the worst intelligibility there is
             return scored_nan(name, too_short)
@@ -731,16 +728,11 @@ def _compute(name: str, ref: np.ndarray, deg: np.ndarray, sr: int,
         for label, y in (('ref', ref), ('deg', deg)):
             if not np.any(y):
                 return scored_nan(name, f"{label} is digital silence throughout, which "
-                                        f"mir_eval's bss_eval_sources refuses to score")
+                                        f"bss_eval_sources refuses to score")
         if _overflows(ref, deg):
             return _too_loud(name, ref, deg)
-        import mir_eval
-        with warnings.catch_warnings():
-            # mir_eval 0.8 warns that bss_eval_sources is going; [eval] pins
-            # mir_eval below 0.9, so there is nothing for a caller to change
-            warnings.simplefilter("ignore", FutureWarning)
-            value, *_ = mir_eval.separation.bss_eval_sources(
-                ref.reshape(1, -1), deg.reshape(1, -1))
+        from kudio.core._bss import bss_eval_sources
+        value, *_ = bss_eval_sources(ref.reshape(1, -1), deg.reshape(1, -1))
         value = float(value[0])
         if not math.isfinite(value):
             # a one-sample pair comes back inf
@@ -902,8 +894,8 @@ def check_metrics_install() -> Tuple[bool, bool, bool]:
     per process, with how to install it; nothing is installed automatically.
     """
     pesq_ok = _has_module("pesq")
-    stoi_ok = _has_module("pystoi")
-    sdr_ok = _has_module("mir_eval")
+    stoi_ok = True                      # kudio's own STOI
+    sdr_ok = True                       # kudio's own BSS Eval
     for ok, what, hint in (
             (pesq_ok, "PESQ", 'pip install "kudio[pesq]" (builds from source: '
                               "needs a C compiler -- on Windows, the MSVC "

@@ -50,7 +50,11 @@ def pytest_sessionstart(session):
     """Stop a run that is there to hold kudio against librosa and cannot:
     ``KUDIO_REQUIRE_LIBROSA=0.11`` with no librosa, or with another one. Every
     such test skips where librosa is missing, and a CI job of nothing but skips
-    passes."""
+    passes. The same for PyWavelets, ``KUDIO_REQUIRE_PYWAVELETS=1``, and
+    mir_eval, ``KUDIO_REQUIRE_MIR_EVAL=1``, and pystoi, ``KUDIO_REQUIRE_PYSTOI=1``."""
+    _required("KUDIO_REQUIRE_PYWAVELETS", "pywt")
+    _required("KUDIO_REQUIRE_MIR_EVAL", "mir_eval")
+    _required("KUDIO_REQUIRE_PYSTOI", "pystoi")
     wanted = os.environ.get("KUDIO_REQUIRE_LIBROSA")
     if not wanted:
         return
@@ -63,6 +67,17 @@ def pytest_sessionstart(session):
     if found != wanted and not found.startswith(f"{wanted}."):
         raise pytest.UsageError(f"KUDIO_REQUIRE_LIBROSA={wanted}, and librosa {found} is "
                                 f"installed")
+
+
+def _required(variable, module):
+    """``KUDIO_REQUIRE_PYWAVELETS=1`` and the like: the run stops where the package the
+    comparison is with does not import, as it would otherwise skip and pass."""
+    if os.environ.get(variable) != "1":
+        return
+    try:
+        __import__(module)
+    except ImportError as e:
+        raise pytest.UsageError(f"{variable}=1, and {module} does not import: {e}") from e
 
 
 @pytest.fixture(scope="session")

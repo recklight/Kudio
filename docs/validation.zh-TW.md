@@ -791,7 +791,7 @@ librosa 做、跟得多近；最後兩節說明怎麼執行這些腳本，以及
 
 `snr`、`si_sdr`、`segmental_snr` 和 `sdi` 各是幾行 numpy，定義在
 [品質評估](guide/metrics.md#what-each-metric-sees)。`stoi` 和 `estoi` 是 pystoi，`sdr`
-是 mir_eval 的 BSS Eval。kudio 把兩者裁到共同的長度再傳下去，所以它們的數字就是這些
+是照 mir_eval 做的 BSS Eval。kudio 把兩者裁到共同的長度再傳下去，所以它們的數字就是這些
 套件的數字。
 
 ## kudio 和 librosa {#kudio-and-librosa}
@@ -863,6 +863,65 @@ librosa 1.0.1 的音高也不會漂，但長的片段裡，它在高頻純音旁
 不加 `--all` 時，音高只比九分之一的案例，也就是測試取的那些；`--long` 再加上 60 秒和
 300 秒的純音。這裡的數字來自 Python 3.9.13 上
 的 librosa 0.11.0，以及 Python 3.13.9 上的 librosa 1.0.1。
+
+## kudio 和 PyWavelets {#kudio-and-pywavelets}
+
+`wavelet_low_pass_filter` 用 kudio 自己的離散小波轉換（periodization 模式）拆開和組回片段，
+106 個離散小波的濾波器是從 PyWavelets[^pywt] 照抄來的。PyWavelets 以 MIT 授權釋出，它的
+授權聲明放在 `kudio/enhance/_wavelet_filters.py` 的開頭，這要謝謝它的作者們。每一個加總的
+順序都和 PyWavelets 的 C 程式相同；coiflet 的 float32 濾波器是 PyWavelets 用它自己的表
+以 float32 算出來的，不是 float64 的濾波器四捨五入，kudio 也用這些值，所以結果和 PyWavelets
+逐位元相同。`tests/test_against_pywavelets.py` 拿 kudio 和它比；CI 上做比對的工作設了
+`KUDIO_REQUIRE_PYWAVELETS=1`，PyWavelets 匯入不了就停下來，不讓測試跳過。
+
+| 和 PyWavelets 比的 | 案例 | 差異 |
+|---|---|---|
+| 每個離散小波的四個濾波器，float64 和 float32 | 106 | 0 |
+| `dwt` 和 `idwt` 各一層：1 到 20 個樣本的每一種長度，以及 31、101、1001，float32 和 float64 | 各 4876 | 0 |
+| `wavedec`、`threshold(mode='soft')`、`waverec` 對 `wavelet_low_pass_filter`：1 到 4097 個樣本的 14 種長度、兩種門檻輪流、float32 和 float64 | 2862 | 0 |
+| 同上，樣本是 float16、big-endian 的 float32 和 float64、int16、uint8 | 40 | 0 |
+| `pywt.Wavelet`，以及用同樣的濾波器、取別的名字做出來的 | 20 | 0 |
+
+數字來自 Python 3.9.13 上的 PyWavelets 1.6.0（numpy 2.0.2），以及 Python 3.13.9 上的
+PyWavelets 1.10.0（numpy 2.5.5）。
+
+## kudio 和 mir_eval {#kudio-and-mir_eval}
+
+`score` 裡的 `sdr`、[`bss_eval`][kudio.core.separation.bss_eval] 和
+[`sdr_improvement`][kudio.core.separation.sdr_improvement] 跑的 BSS Eval[^bss]，
+一步一步、一個呼叫一個呼叫照著 mir_eval[^mireval] 0.8.2 的 `bss_eval_sources`，所以數字
+和 mir_eval 逐位元相同，也不需要裝 mir_eval。mir_eval 以 MIT 授權釋出，它的授權聲明放在
+`kudio/core/_bss.py` 的開頭，這要謝謝它的作者們。參考訊號讓正規方程式奇異時，例如兩個只有
+兩個樣本、一個是另一個兩倍的參考訊號，mir_eval 0.8.2 會改用最小平方解；但在 numpy 2.5 上，它用來攔這個錯誤的名稱
+已經不在了，會變成 `AttributeError`，所以比對前先把那個名稱補回去。
+`tests/test_against_mir_eval.py` 拿 kudio 和它比，CI 上做比對的工作設了
+`KUDIO_REQUIRE_MIR_EVAL=1`。
+
+| 和 mir_eval 0.8.2（numpy 2.5.5）比的 | 案例 | 差異 |
+|---|---|---|
+| `bss_eval_sources`，一個來源：1 到 3000 個樣本，float32 和 float64 | 12 | 0 |
+| 兩個來源，有和沒有排列搜尋，5 到 1500 個樣本 | 12 | 0 |
+| 三個來源，600 個樣本 | 4 | 0 |
+| 讓正規方程式奇異的兩個參考訊號，用最小平方解 | 1 | 0 |
+| 帶混音的 `bss_eval`、`score(['sdr'])`、`sdr_improvement` | 4 | 0 |
+
+## kudio 和 pystoi {#kudio-and-pystoi}
+
+`score` 裡的 `stoi` 和 `estoi`，一步一步照著 pystoi[^pystoi] 0.4.1 做：它重新取樣到
+10 kHz 的方法、去掉靜音音框、三分之一八度頻帶，以及 30 個音框的片段。pystoi 以 MIT 授權
+釋出，它的授權聲明放在 `kudio/core/_stoi.py` 的開頭，這要謝謝它的作者。有一步沒照做：
+pystoi 的 ESTOI 在兩次正規化之前，各從 numpy 的全域亂數加一次機器精度大小的雜訊，這會
+動到設了種子的腳本裡其他的亂數，也讓 ESTOI 的最後幾位數每次呼叫都不同。
+`tests/test_against_pystoi.py` 拿 kudio 和雜訊換成零的 pystoi 比，也和原本的 pystoi 比；
+CI 上做比對的工作設了 `KUDIO_REQUIRE_PYSTOI=1`。
+
+| 和 pystoi 0.4.1 比的 | 案例 | 差異 |
+|---|---|---|
+| STOI 和 ESTOI，雜訊換成零：8 到 48 kHz、0.5 到 4 秒、float32 和 float64 | 72 | 0 |
+| 同上，邊界情形：剛好剩 30 個音框、停頓在峰值下 42 dB | 4 | 0 |
+| STOI，原本的 pystoi | 1 | 0 |
+| ESTOI，原本的 pystoi | 1 | 小於 1e-15 |
+| `score(['stoi', 'estoi'])` | 2 | 0 |
 
 ## 執行這些腳本 {#running-the-scripts}
 
@@ -960,7 +1019,7 @@ sounddevice 和 pyloudnorm，以及 librosa 和它帶來的 numba、scikit-learn
 `DependencyError`，以檔案本身的取樣率則照樣讀得進來，`kudio convert --rate` 以 2 結束。
 `tests/test_package.py` 檢查 `import kudio` 不會載入 matplotlib、pandas、librosa、soxr、
 scipy.signal、PyWavelets 和 tqdm 中的任何一個，也檢查 kudio 和產生文件圖片的程式都沒有
-匯入 librosa 或 numba。
+匯入 librosa 或 numba，kudio 也沒有匯入 PyWavelets。
 
 [^hl08]: Y. Hu and P. C. Loizou, "Evaluation of objective quality measures for speech enhancement", IEEE Trans. Audio, Speech, Lang. Process. 16(1), pp. 229-238, 2008, doi:10.1109/TASL.2007.911054.
 [^hl06]: Y. Hu and P. C. Loizou, "Evaluation of objective measures for speech enhancement", Proc. Interspeech 2006, doi:10.21437/Interspeech.2006-84.
@@ -986,6 +1045,7 @@ scipy.signal、PyWavelets 和 tqdm 中的任何一個，也檢查 kudio 和產�
 [^r76]: L. R. Rabiner, M. J. Cheng, A. E. Rosenberg and C. A. McGonegal, "A comparative performance study of several pitch detection algorithms", IEEE Trans. Acoust., Speech, Signal Process. 24(5), pp. 399-418, 1976, doi:10.1109/TASSP.1976.1162846.
 [^mireval]: C. Raffel, B. McFee, E. J. Humphrey, J. Salamon, O. Nieto, D. Liang and D. P. W. Ellis, "mir_eval: a transparent implementation of common MIR metrics", Proc. ISMIR 2014, pp. 367-372, doi:10.5281/zenodo.1416528.
 [^bss]: E. Vincent, R. Gribonval and C. Févotte, "Performance measurement in blind audio source separation", IEEE Trans. Audio, Speech, Lang. Process. 14(4), pp. 1462-1469, 2006, doi:10.1109/TSA.2005.858005.
+[^pystoi]: M. Pariente, pystoi, <https://github.com/mpariente/pystoi>, under the MIT licence; STOI after C. H. Taal, R. C. Hendriks, R. Heusdens and J. Jensen, IEEE Trans. Audio, Speech, Lang. Process. 19(7), pp. 2125-2136, 2011, and ESTOI after J. Jensen and C. H. Taal, IEEE/ACM Trans. Audio, Speech, Lang. Process. 24(11), pp. 2009-2022, 2016.
 [^upit]: M. Kolbæk, D. Yu, Z.-H. Tan and J. Jensen, "Multitalker speech separation with utterance-level permutation invariant training of deep recurrent neural networks", IEEE/ACM Trans. Audio, Speech, Lang. Process. 25(10), pp. 1901-1913, 2017, doi:10.1109/TASLP.2017.2726762.
 [^convtasnet]: Y. Luo and N. Mesgarani, "Conv-TasNet: surpassing ideal time-frequency magnitude masking for speech separation", IEEE/ACM Trans. Audio, Speech, Lang. Process. 27(8), pp. 1256-1266, 2019, doi:10.1109/TASLP.2019.2915167.
 [^bd06]: N. Brümmer and J. du Preez, "Application-independent evaluation of speaker detection", Computer Speech and Language 20(2-3), pp. 230-275, 2006, doi:10.1016/j.csl.2005.08.001.
@@ -1004,6 +1064,7 @@ scipy.signal、PyWavelets 和 tqdm 中的任何一個，也檢查 kudio 和產�
 [^vkh18b]: S. Van Kuyk, W. B. Kleijn and R. C. Hendriks, "An evaluation of intrusive instrumental intelligibility metrics", IEEE/ACM Trans. Audio, Speech, Lang. Process. 26(11), pp. 2153-2166, 2018, doi:10.1109/TASLP.2018.2856374.
 [^ksg04]: A. Kraskov, H. Stögbauer and P. Grassberger, "Estimating mutual information", Phys. Rev. E 69(6), 066138, 2004, doi:10.1103/PhysRevE.69.066138.
 [^librosa]: B. McFee, C. Raffel, D. Liang, D. P. W. Ellis, M. McVicar, E. Battenberg and O. Nieto, "librosa: Audio and music signal analysis in Python", Proc. 14th Python in Science Conference (SciPy 2015), pp. 18-24, doi:10.25080/Majora-7b98e3ed-003. Code: <https://github.com/librosa/librosa>, under the ISC licence.
+[^pywt]: G. R. Lee, R. Gommers, F. Wasilewski, K. Wohlfahrt and A. O'Leary, "PyWavelets: A Python package for wavelet analysis", Journal of Open Source Software 4(36), 1237, 2019, doi:10.21105/joss.01237. Code: <https://github.com/PyWavelets/pywt>, under the MIT licence.
 [^gl84]: D. W. Griffin and J. S. Lim, "Signal estimation from modified short-time Fourier transform", IEEE Trans. Acoust., Speech, Signal Process. 32(2), pp. 236-243, 1984, doi:10.1109/TASSP.1984.1164317.
 [^s98]: M. Slaney, "Auditory Toolbox, version 2", Technical Report 1998-010, Interval Research Corporation, 1998.
 [^dm80]: S. B. Davis and P. Mermelstein, "Comparison of parametric representations for monosyllabic word recognition in continuously spoken sentences", IEEE Trans. Acoust., Speech, Signal Process. 28(4), pp. 357-366, 1980, doi:10.1109/TASSP.1980.1163420.

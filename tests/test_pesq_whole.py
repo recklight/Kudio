@@ -213,18 +213,17 @@ def test_too_short_gives_both_lengths_when_they_differ(package):
 
 @pytest.fixture
 def with_stoi(package, monkeypatch):
-    """PESQ and a stand-in pystoi both installed, as most users have them:
-    the pair is cut for STOI and PESQ still gets it whole."""
+    """PESQ installed and a stand-in STOI that keeps what it is given: the pair
+    is cut for STOI and PESQ still gets it whole."""
+    from kudio.core import _stoi
     lengths = []
-    module = types.ModuleType('pystoi')
 
     def stoi(ref, deg, fs, extended=False):
         lengths.append((len(ref), len(deg)))
         return 0.5
 
-    module.stoi = stoi
-    monkeypatch.setitem(sys.modules, 'pystoi', module)
-    monkeypatch.setattr(evaluator, '_has_module', lambda name: name in ('pesq', 'pystoi'))
+    monkeypatch.setattr(_stoi, 'stoi', stoi)
+    monkeypatch.setattr(evaluator, '_has_module', lambda name: name == 'pesq')
     return lengths
 
 

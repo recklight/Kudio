@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Audio device discovery and validation (requires PyAudio)."""
+"""Audio device discovery and validation, through sounddevice (``kudio[audio]``).
+
+One numbering for every device: sounddevice's, which is PortAudio's. The index
+:func:`list_devices` and :meth:`CheckDevice.system_devices` print is the one
+:func:`kudio.record`, :class:`kudio.Recorder`, :class:`kudio.StreamRecorder` and
+:class:`kudio.LocalStreamReader` take. Given no device, every one of them takes
+the input :meth:`CheckDevice.default_input` names.
+"""
 from __future__ import annotations
 
 import logging
@@ -20,22 +27,21 @@ log = logging.getLogger(__name__)
 
 
 def list_devices(kind: Optional[str] = None) -> List[dict]:
-    """Devices as **sounddevice** sees them.
-
-    This is the index space :func:`kudio.record` accepts. It is *not* the same
-    numbering as :class:`CheckDevice`, which enumerates through PyAudio for the
-    streaming/recorder classes — PortAudio's two Python bindings index devices
-    independently, so an index from one must never be passed to the other.
+    """Every device sounddevice knows, by the index all of kudio's recording and
+    playback takes.
 
     :param kind: ``'input'``, ``'output'``, or ``None`` for every device.
     :returns: ``[{'index', 'name', 'max_input_channels',
-        'max_output_channels', 'default_samplerate'}, ...]``
+        'max_output_channels', 'default_samplerate', 'api'}, ...]``, ``api``
+        naming the host API: the same microphone is a device under MME, another
+        under WASAPI and another under WDM-KS.
 
     >>> [d['name'] for d in kudio.list_devices('input')]        # doctest: +SKIP
     """
     if kind not in (None, 'input', 'output'):
         raise ValueError(f"kind must be 'input', 'output' or None, got {kind!r}")
     sd = _sounddevice()
+    apis = [api.get('name', '') for api in sd.query_hostapis()]
 
     devices = []
     for index, info_ in enumerate(sd.query_devices()):
@@ -45,12 +51,14 @@ def list_devices(kind: Optional[str] = None) -> List[dict]:
             continue
         if kind == 'output' and outputs < 1:
             continue
+        api = info_.get('hostapi')
         devices.append({
             'index': index,
             'name': info_.get('name', ''),
             'max_input_channels': inputs,
             'max_output_channels': outputs,
             'default_samplerate': float(info_.get('default_samplerate', 0.0)),
+            'api': apis[api] if isinstance(api, int) and 0 <= api < len(apis) else '',
         })
     return devices
 
@@ -69,20 +77,82 @@ def _sounddevice():
         from kudio.exceptions import DependencyError
         raise DependencyError('sounddevice', extra='audio') from e
     except OSError as e:
-        from kudio.exceptions import DeviceError
         raise DeviceError(
             f"sounddevice is installed but could not load PortAudio ({e}). "
             f"Install the PortAudio library: libportaudio2 on Debian and "
             f"Ubuntu, portaudio on Homebrew.") from e
 
 
-def _pyaudio():
-    try:
-        import pyaudio
-        return pyaudio
-    except ImportError as e:
-        from kudio.exceptions import DependencyError
-        raise DependencyError('PyAudio', extra='audio') from e
+def _nothing(*args) -> None:
+    """A callback for a stream that is opened and closed and never started."""
+
+
+class _PortAudio:
+    """sounddevice asked what CheckDevice asks. The answers are dictionaries with
+    the keys code built on CheckDevice reads: ``index``, ``name``, ``hostApi``,
+    ``maxInputChannels``, ``maxOutputChannels``, ``defaultSampleRate``
+    (``check.p.get_default_input_device_info()['index']``, say)."""
+
+    def __init__(self):
+        self.sd = _sounddevice()
+
+    def get_device_count(self) -> int:
+        return len(self.sd.query_devices())
+
+    def get_device_info_by_index(self, index: int) -> dict:
+        d = self.sd.query_devices(index)
+        return {'index': index, 'name': d.get('name', ''), 'hostApi': d.get('hostapi'),
+                'maxInputChannels': d.get('max_input_channels', 0),
+                'maxOutputChannels': d.get('max_output_channels', 0),
+                'defaultLowInputLatency': d.get('default_low_input_latency'),
+                'defaultLowOutputLatency': d.get('default_low_output_latency'),
+                'defaultHighInputLatency': d.get('default_high_input_latency'),
+                'defaultHighOutputLatency': d.get('default_high_output_latency'),
+                'defaultSampleRate': d.get('default_samplerate')}
+
+    def get_host_api_info_by_index(self, api: int) -> dict:
+        h = self.sd.query_hostapis(api)
+        return {'index': api, 'name': h.get('name', ''), 'deviceCount': len(h.get('devices', ())),
+                'defaultInputDevice': h.get('default_input_device', -1),
+                'defaultOutputDevice': h.get('default_output_device', -1)}
+
+    def get_default_input_device_info(self) -> dict:
+        """The system's default input; OSError where there is none, as on a
+        Windows machine whose MME lists no input."""
+        try:
+            d = self.sd.query_devices(kind='input')
+        except Exception as e:                              # noqa: BLE001
+            raise OSError("No Default Input Device Available") from e
+        index = d.get('index')
+        if index is None:
+            index = next(i for i, x in enumerate(self.sd.query_devices())
+                         if x.get('name') == d.get('name') and x.get('hostapi') == d.get('hostapi'))
+        return self.get_device_info_by_index(int(index))
+
+    def opens(self, device: int, rate: int, channels: int, frames: int) -> None:
+        """Open an input stream on *device* and close it again; raises where the
+        device does not take these settings. With a callback, as the streams
+        that record are opened: WDM-KS, where a Windows machine may have every
+        microphone it has, opens no stream without one ("Blocking API not
+        supported")."""
+        stream = self.sd.RawInputStream(device=device, samplerate=rate, channels=channels,
+                                        dtype='int16', blocksize=frames, callback=_nothing)
+        stream.close()
+
+    def starts(self, device: int, rate: int, channels: int, frames: int) -> None:
+        """Open an input stream on *device*, start it, stop it and close it; raises
+        where any of that fails. A Bluetooth headset Windows lists while it is not
+        connected opens, and does not start."""
+        stream = self.sd.RawInputStream(device=device, samplerate=rate, channels=channels,
+                                        dtype='int16', blocksize=frames, callback=_nothing)
+        try:
+            stream.start()
+            stream.stop()
+        finally:
+            stream.close()
+
+    def terminate(self) -> None:
+        """Nothing to close: sounddevice keeps PortAudio for the life of the process."""
 
 
 def is_available() -> bool:
@@ -96,8 +166,8 @@ def check_device() -> bool:
     """List system devices and probe an input; True on success.
 
     The input probed is the one :meth:`CheckDevice.input_device` picks with no
-    arguments: the last input-capable device PyAudio lists, at the first of
-    16000, 22050 and 44100 Hz it opens at.
+    arguments (:meth:`CheckDevice.default_input`), at the first of 16000, 22050
+    and 44100 Hz it opens at.
     """
     try:
         with CheckDevice() as cd:
@@ -111,7 +181,7 @@ def check_device() -> bool:
 
 
 class CheckDevice:
-    """Query/validate PortAudio devices.
+    """Query and validate PortAudio devices, by sounddevice's index.
 
     >>> with CheckDevice() as cd:
     ...     devices = cd.system_devices()
@@ -123,7 +193,7 @@ class CheckDevice:
                      16000, 11025, 8000, 6000]
 
     def __init__(self, frame_size: int = 1024):
-        self.p = _pyaudio().PyAudio()
+        self.p = _PortAudio()
         self.frame_size = frame_size
         self.device: Optional[int] = None
         self.rate: Optional[int] = None
@@ -144,8 +214,7 @@ class CheckDevice:
 
     def system_devices(self) -> List[dict]:
         """Return `[{'Device', 'index', 'fs', 'out', 'in', 'api'}, ...]`, every
-        device of every host API in PyAudio's index order, `api` naming the
-        host API.
+        device of every host API in index order, `api` naming the host API.
 
         All of them, because input_device() picks from all of them. On a
         Windows 11 machine with no default recording device, MME, DirectSound
@@ -172,9 +241,9 @@ class CheckDevice:
         return device_list
 
     def _describe(self, device) -> str:
-        """The device's info for a message, or just its index when PyAudio
-        cannot describe it -- an index out of range used to raise from inside
-        the message meant to explain it."""
+        """The device's info for a message, or just its index when PortAudio
+        cannot describe it: an index out of range raised from inside the
+        message meant to explain it."""
         try:
             return str(self.get_device_info(device))
         except Exception:                                   # noqa: BLE001
@@ -185,24 +254,63 @@ class CheckDevice:
 
     def _is_input_device(self, device: int, sr: Optional[int] = None,
                          channels: Optional[int] = None) -> bool:
-        pyaudio = _pyaudio()
         try:
             info = self.get_device_info(device)
             if not info["maxInputChannels"] > 0:
                 return False
             sr = int(info["defaultSampleRate"]) if sr is None else sr
-            stream = self.p.open(
-                format=pyaudio.paInt16,
-                channels=channels or 1,
-                input=True,
-                input_device_index=device,
-                rate=sr,
-                frames_per_buffer=self.frame_size)
-            stream.close()
+            self.p.opens(device, sr, channels or 1, self.frame_size)
             return True
         except Exception as e:
             log.debug("Device probe failed (device=%s, sr=%s): %s", device, sr, e)
             return False
+
+    def _starts(self, device: int) -> bool:
+        try:
+            info = self.get_device_info(device)
+            if not info["maxInputChannels"] > 0:
+                return False
+            self.p.starts(device, int(info["defaultSampleRate"]), 1, self.frame_size)
+            return True
+        except Exception as e:
+            log.debug("Device does not start (device=%s): %s", device, e)
+            return False
+
+    def default_input(self) -> int:
+        """The input a recording takes when it is given none.
+
+        The system's default input, when there is one; when it does not start,
+        that is an error, and another microphone is not taken in its place.
+        With no default input, as on a Windows machine whose microphones are
+        all on WDM-KS, the last input that opens and starts, going back from
+        the end of the list. The device taken is logged at INFO.
+
+        :raises DeviceError: when the default input does not start, or no
+            input starts.
+        """
+        try:
+            default = int(self.p.get_default_input_device_info()["index"])
+        except Exception:                                   # noqa: BLE001 - none there
+            default = None
+        if default is not None:
+            if not self._starts(default):
+                raise DeviceError(f"the system's default input, device {default}, does not "
+                                  f"start: {self._describe(default)}; `kudio devices` lists "
+                                  f"the others, and device= picks one")
+            device = default
+        else:
+            device = next((d for d in reversed(range(self.p.get_device_count()))
+                           if self._starts(d)), None)
+            if device is None:
+                raise DeviceError("No microphone found on this system")
+        name = self._describe(device)
+        try:
+            name = self.get_device_info(device)["name"]
+        except Exception:                                   # noqa: BLE001
+            pass
+        log.info("No device given: input %s, %s%s", device, " ".join(str(name).split()),
+                 "" if default is not None else " (the system names no default input)")
+        return device
 
     def check_available_rate(self, device: int) -> Union[List[int], bool]:
         """Return the standard sample rates the device accepts, or False."""
@@ -217,19 +325,15 @@ class CheckDevice:
                      ) -> Tuple[int, int, int]:
         """Resolve and validate an input device; returns (device, rate, channels).
 
-        Missing arguments are auto-detected (last input-capable device, first
-        working rate of 16000/22050/44100, mono).
+        Missing arguments are auto-detected: the device by
+        :meth:`default_input`, the first working rate of 16000/22050/44100,
+        mono.
 
         :raises DeviceError: when there is no input, or the device, rate or
             channel count will not open.
         """
         if device is None:
-            mics = [d for d in range(self.p.get_device_count())
-                    if self._is_input_device(d)]
-            if not mics:
-                raise DeviceError("No microphone found on this system")
-            log.info("Found %d microphone(s)", len(mics))
-            device = mics[-1]
+            device = self.default_input()
         if not self._is_input_device(device):
             raise DeviceError(f"Device unusable: {self._describe(device)}")
 

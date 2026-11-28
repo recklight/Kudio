@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """Audio streaming: playback, local recording, and remote (TCP) streams.
 
-PyAudio is an optional dependency (``pip install "kudio[audio]"``); it is only
-imported when a stream/recorder is actually created, so the package can be
-used for offline processing without any audio hardware.
+They run on sounddevice, an optional dependency (``pip install "kudio[audio]"``)
+imported only when a stream or recorder is created, so the package can be used
+for offline processing without any audio hardware. Every device index here is
+sounddevice's, the one :func:`kudio.list_devices` prints.
 """
 from __future__ import annotations
 
@@ -21,7 +22,8 @@ from kudio._samples import as_float, channels_last
 from kudio.core._policy import warn
 from kudio.core.buffer import AudioBuffer
 from kudio.core.io import PathLike, _check_rate, _read_native, _reason, check_file
-from kudio.exceptions import DependencyError, DeviceError
+from kudio.exceptions import DeviceError
+from kudio.util import check as _check
 from kudio.util.check import CheckDevice
 
 __all__ = [
@@ -42,14 +44,18 @@ log = logging.getLogger(__name__)
 
 def record(seconds: float, sr: int = 16000, channels: int = 1,
            device: Optional[int] = None) -> np.ndarray:
-    """Blocking record for *seconds* via sounddevice (modern backend).
+    """Blocking record for *seconds* via sounddevice.
 
     Returns float32 samples, shape ``(n,)`` for mono else ``(n, channels)``.
     Requires ``kudio[audio]``.
 
-    *device* is a **sounddevice** index — get one from
-    :func:`kudio.list_devices`, not from :class:`kudio.CheckDevice`, which
-    numbers devices through PyAudio for the streaming classes.
+    *device* is an index from :func:`kudio.list_devices`, the same numbering
+    :class:`kudio.CheckDevice` and the streaming classes use. Omitted, it is
+    the input :meth:`kudio.CheckDevice.default_input` names: the system's
+    default input, or with none, the last input that opens and starts.
+
+    :raises DeviceError: when the device does not record, with its index, or
+        when no input is given and none starts.
 
     :raises ValueError: for *seconds* that are not a number of 0 or more, an
         *sr* that is not a positive whole rate and *channels* that are not a
@@ -60,28 +66,39 @@ def record(seconds: float, sr: int = 16000, channels: int = 1,
     seconds = within(seconds, 'seconds', 'record', low=0, of=' of seconds')
     channels = count(channels, 'channels', 'record')
     sd = _sounddevice()
+    if device is None:
+        with CheckDevice() as check:
+            device = check.default_input()
     frames = int(seconds * sr)
-    data = sd.rec(frames, samplerate=sr, channels=channels,
-                  dtype='float32', device=device)
-    sd.wait()
+    try:
+        data = sd.rec(frames, samplerate=sr, channels=channels,
+                      dtype='float32', device=device)
+        sd.wait()
+    except Exception as e:
+        raise DeviceError(f"record(): device {device} did not record at {sr} Hz: {e}; "
+                          f"`kudio devices` lists the devices, and device= picks one") from e
     return data.squeeze()
 
-#: PortAudio's code for 32-bit float samples (``pyaudio.paFloat32``), for
-#: ``LocalStreamReader(wav_format=...)``.
+#: PortAudio's code for 32-bit float samples (``paFloat32``), for
+#: ``LocalStreamReader(wav_format=...)``: the stream gives float32.
 PA_FLOAT32 = 1
-#: PortAudio's code for 16-bit integer samples (``pyaudio.paInt16``), the
-#: default ``wav_format``.
+#: PortAudio's code for 16-bit integer samples (``paInt16``), the default
+#: ``wav_format``: the stream gives int16.
 PA_INT16 = 8
+#: the sample type each code opens a stream with
+_DTYPES = {PA_FLOAT32: 'float32', PA_INT16: 'int16'}
 
 
-def _pyaudio():
-    try:
-        import pyaudio
-        return pyaudio
-    except ImportError as e:
-        # a DependencyError like every other extra, so `except
-        # kudio.KudioError` catches it too; it is still an ImportError
-        raise DependencyError('PyAudio', extra='audio') from e
+def _pcm(raw: bytes, width: int, channels: int) -> np.ndarray:
+    """Integer PCM bytes as a wave file holds them, as frames sounddevice plays:
+    8-bit unsigned, 16 and 32 bits as they are, 24 bits widened to 32."""
+    if width == 3:
+        b = np.frombuffer(raw, np.uint8).reshape(-1, 3).astype(np.int32)
+        y = (b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)) << 8
+    else:
+        y = np.frombuffer(raw, {1: np.uint8, 2: '<i2', 4: '<i4'}[width]).astype(
+            {1: np.uint8, 2: np.int16, 4: np.int32}[width])
+    return y.reshape(-1, channels)
 
 
 def wave_decode(in_data: bytes, channels: int) -> np.ndarray:
@@ -141,9 +158,11 @@ def play_audio(wav: Union[str, Path, wave.Wave_read, np.ndarray],
     read the way :func:`kudio.file_load` reads one, so whatever that opens
     plays, at its own rate and with all its channels.
     Returns an error message string when the audio cannot be played, else
-    ``None``.
+    ``None``. An array is queued and the call returns while it plays; an open
+    ``wave.Wave_read`` plays to its end before the call returns. *channels* is
+    not read: a 1-D array plays as one channel.
 
-    :raises DependencyError: when neither sounddevice nor PyAudio is there.
+    :raises DependencyError: when sounddevice is not there.
     """
     if isinstance(wav, (str, Path)):
         if not Path(wav).is_file():
@@ -159,55 +178,30 @@ def play_audio(wav: Union[str, Path, wave.Wave_read, np.ndarray],
         if wav.dtype not in (np.int16, np.float32):
             log.error("play_audio: unsupported dtype %s", wav.dtype)
             return f"unsupported dtype: {wav.dtype}"
+        sd = _check._sounddevice()
         try:
-            import sounddevice as sd
             sd.play(wav, rate)
-            return None
-        except Exception:
-            pass  # fall back to pyaudio
-        pyaudio = _pyaudio()
-        pya = pyaudio.PyAudio()
-        try:
-            fmt = pyaudio.paInt16 if wav.dtype == np.int16 else pyaudio.paFloat32
-            # the array's own channel count, as sounddevice uses it: a stereo
-            # array opened as one channel played at half speed
-            n_channels = wav.shape[1] if wav.ndim == 2 else channels
-            stream = pya.open(format=fmt, channels=n_channels, rate=rate,
-                              output=True)
-            stream.write(wav.tobytes())
-            stream.stop_stream()
-            stream.close()
             return None
         except Exception as e:
             log.error("play_audio failed: %s", e)
-            return "can't be played by pyaudio"
-        finally:
-            pya.terminate()
+            return f"can't be played: {e}"
 
     if isinstance(wav, wave.Wave_read):
-        pyaudio = _pyaudio()
-        pya = pyaudio.PyAudio()
+        sd = _check._sounddevice()
         try:
-            # `wave` only reads integer PCM, but PyAudio maps a 4-byte width
-            # to float32, which played a PCM_32 file as noise
-            width = wav.getsampwidth()
-            fmt = pyaudio.paInt32 if width == 4 else pya.get_format_from_width(width)
-            stream = pya.open(format=fmt,
-                              channels=wav.getnchannels(),
-                              rate=wav.getframerate(),
-                              output=True)
-            data = wav.readframes(1024)
-            while data != b'':
-                stream.write(data)
+            # `wave` reads integer PCM alone; a 4-byte width is 32-bit integers
+            width, n_channels = wav.getsampwidth(), wav.getnchannels()
+            dtype = {1: 'uint8', 2: 'int16', 3: 'int32', 4: 'int32'}[width]
+            with sd.OutputStream(samplerate=wav.getframerate(), channels=n_channels,
+                                 dtype=dtype) as stream:
                 data = wav.readframes(1024)
-            stream.stop_stream()
-            stream.close()
+                while data != b'':
+                    stream.write(_pcm(data, width, n_channels))
+                    data = wav.readframes(1024)
             return None
         except Exception as e:
             log.error("play_audio failed: %s", e)
             return "can't be played"
-        finally:
-            pya.terminate()
 
     return "unsupported input"
 
@@ -229,14 +223,13 @@ class Recorder:
         channels = count(channels, 'channels', 'Recorder')
         frames_per_buffer = count(frames_per_buffer, 'frames_per_buffer', 'Recorder')
         within(record_times, 'record_times', 'Recorder', low=0, of=' of seconds')
-        pyaudio = _pyaudio()
-        self.format = pyaudio.paInt16
+        self._sd = _check._sounddevice()
+        self.format = PA_INT16
         self.input_device_index = device
         self.record_times = record_times
         self.rate = rate
         self.channels = channels
         self.frames_per_buffer = frames_per_buffer
-        self.p = pyaudio.PyAudio()
         self.stream = None
         self.frames: Optional[np.ndarray] = None  # interleaved int16 samples
 
@@ -248,30 +241,52 @@ class Recorder:
 
     def terminate(self) -> None:
         if self.stream is not None:
-            self.stream.stop_stream()
+            self.stream.stop()
             self.stream.close()
             self.stream = None
-        self.p.terminate()
 
     close = terminate
 
     def start_record(self) -> np.ndarray:
-        """Record for ``record_times`` seconds; returns the waveform, with one
-        column per channel (squeezed for mono)."""
-        self.stream = self.p.open(
-            format=self.format,
-            channels=self.channels,
-            input_device_index=self.input_device_index,
-            rate=self.rate,
-            input=True,
-            frames_per_buffer=self.frames_per_buffer)
+        """Record for ``record_times`` seconds, a whole number of buffers;
+        returns the waveform, int16, with one column per channel (squeezed for
+        mono). Samples the computer was too late for are said in the log.
+
+        :raises DeviceError: when the device has not delivered the take ten
+            seconds after it should have.
+        """
+        n_reads = int(self.rate / self.frames_per_buffer * self.record_times)
+        wanted = n_reads * self.frames_per_buffer * self.channels
+        chunks: List[np.ndarray] = []
+        got = [0]
+        done = threading.Event()
+
+        def take(in_data, frame_count, time_info, status):
+            # a callback stream, which every host API opens: WDM-KS opens no other
+            if status and getattr(status, 'input_overflow', False):
+                log.warning("Recorder: input overflow, samples were lost")
+            if got[0] < wanted:
+                block = np.frombuffer(bytes(in_data), dtype=np.int16)[:wanted - got[0]]
+                chunks.append(block)
+                got[0] += block.size
+                if got[0] >= wanted:
+                    done.set()
 
         log.info("Recording %d second(s)...", self.record_times)
-        chunks = []
-        n_reads = int(self.rate / self.frames_per_buffer * self.record_times)
-        for _ in range(n_reads):
-            rec = self.stream.read(self.frames_per_buffer)
-            chunks.append(np.frombuffer(rec, dtype=np.int16))
+        if wanted:
+            device = self.input_device_index
+            if device is None:
+                with CheckDevice() as check:
+                    device = check.default_input()
+            self.stream = self._sd.RawInputStream(
+                samplerate=self.rate, channels=self.channels, dtype='int16',
+                device=device, blocksize=self.frames_per_buffer, callback=take)
+            self.stream.start()
+            finished = done.wait(n_reads * self.frames_per_buffer / self.rate + 10)
+            self.terminate()
+            if not finished:
+                raise DeviceError(f"Recorder: the device gave {got[0] // self.channels} of "
+                                  f"{wanted // self.channels} frames")
         self.frames = np.concatenate(chunks) if chunks else np.empty(0, np.int16)
         per_channel = [self.frames[c::self.channels] for c in range(self.channels)]
         return np.array(per_channel).T.squeeze()
@@ -323,7 +338,7 @@ class RemoteStreamReader(threading.Thread):
         self.frame_size_: Optional[int] = None
         self.receive_buffer_size_: Optional[int] = None
 
-        self.p = None
+        self._sd = None
         self.isReceiving = threading.Event()
         self.isPlaying = threading.Event()
 
@@ -373,20 +388,18 @@ class RemoteStreamReader(threading.Thread):
     def initialize_params(self, frame_size: int = 2048,
                           wav_format: str = '16bit') -> None:
         _format = PA_FLOAT32 if wav_format.lower() == '32bit' else PA_INT16
-        pyaudio = _pyaudio()
-        self.p = pyaudio.PyAudio()
+        self._sd = _check._sounddevice()
         self.frame_size_ = frame_size
         self.receive_buffer_size_ = frame_size * (2 if _format == PA_INT16 else 4)
         self.stream_dtype = _format
         self.data_type = np.int16 if _format == PA_INT16 else np.float32
 
     def play_remote_audio(self, rate: int, channels: int = 1) -> None:
-        self.play_stream = self.p.open(format=self.stream_dtype,
-                                       channels=channels,
-                                       rate=rate,
-                                       output=True,
-                                       frames_per_buffer=self.frame_size_)
-        if self.play_stream.is_active():
+        self.play_stream = self._sd.RawOutputStream(samplerate=rate, channels=channels,
+                                                    dtype=_DTYPES[self.stream_dtype],
+                                                    blocksize=self.frame_size_)
+        self.play_stream.start()
+        if self.play_stream.active:
             self.isPlaying.set()
             log.info("Stream: play stream opened")
 
@@ -445,14 +458,12 @@ class RemoteStreamReader(threading.Thread):
         if self.is_alive() or self.isReceiving.is_set():
             self.isReceiving.clear()
             log.info("Stream: receiving stopped")
-        if self.play_stream is not None and self.play_stream.is_active():
+        if self.play_stream is not None and self.play_stream.active:
             self.isPlaying.clear()
-            self.play_stream.stop_stream()
+            self.play_stream.stop()
             self.play_stream.close()
             self.play_stream = None
             log.info("Stream: play stream stopped")
-        if self.p is not None:
-            self.p.terminate()
 
 
 class LocalStreamReader:
@@ -474,8 +485,9 @@ class LocalStreamReader:
                  buffer: Optional[AudioBuffer] = None,
                  on_frame: Optional[Callable[[np.ndarray], None]] = None):
         """
-        :param device: **PyAudio** input index. Omitted, the last device
-            that opens as an input (:meth:`kudio.CheckDevice.input_device`).
+        :param device: input index from :func:`kudio.list_devices`. Omitted,
+            the last device that opens as an input
+            (:meth:`kudio.CheckDevice.input_device`).
         :param rate: sample rate, a request. Omitted or refused, the first of
             16000, 22050 and 44100 the device accepts, else its own default;
             :meth:`get_setup` says what was opened.
@@ -487,7 +499,8 @@ class LocalStreamReader:
             :class:`AudioBuffer` **drops** frames once it is full, which is
             correct for a monitor and wrong for a recording; a callback lets
             the caller decide. It runs on PortAudio's thread, so it must
-            return promptly — append, do not process.
+            return promptly — append, do not process. The chunk is its own
+            copy, which the callback may keep.
         """
         self.audio_buffer = buffer
         self.on_frame = on_frame
@@ -502,7 +515,7 @@ class LocalStreamReader:
         self.isListening = threading.Event()
         self.play_stream = None
         self.rec_stream = None
-        self.p = None
+        self._sd = None
 
         self.set_stream(device, rate, channels, frame_size, wav_format)
 
@@ -517,11 +530,7 @@ class LocalStreamReader:
             log.error("Stream: unsupported wav_format %r", wav_format)
             self.isInitial.clear()
             return False
-        pyaudio = _pyaudio()
-        if self.p is not None:
-            # a retry used to leave the previous PortAudio instance running
-            self.p.terminate()
-        self.p = pyaudio.PyAudio()
+        self._sd = _check._sounddevice()
         try:
             with CheckDevice() as check:
                 self.device_, self.rate_, self.channels_ = \
@@ -530,8 +539,6 @@ class LocalStreamReader:
             # no usable input device yet — stay uninitialized so the caller can
             # retry later (see get_status()) instead of crashing at construction
             log.warning("Stream: no input device available (%s)", e)
-            self.p.terminate()
-            self.p = None
             self.isInitial.clear()
             return False
 
@@ -556,66 +563,67 @@ class LocalStreamReader:
     def play_audio(self) -> None:
         """Open a playback stream that echoes the microphone input."""
         self._require_device("play_audio")
-        self.play_stream = self.p.open(
-            format=self.format,
-            channels=self.channels_,
-            rate=self.rate_,
-            output=True,
-            frames_per_buffer=self.frame_size_)
-        if self.play_stream.is_active():
+        self.play_stream = self._sd.RawOutputStream(
+            samplerate=self.rate_, channels=self.channels_,
+            dtype=_DTYPES[self.format], blocksize=self.frame_size_)
+        self.play_stream.start()
+        if self.play_stream.active:
             self.isBroadcasting.set()
             log.info("Stream: broadcasting started")
         else:
             log.error("Stream: broadcasting failed")
 
     def _callback(self, in_data, frame_count, time_info, status):
-        import pyaudio
         if self.isListening.is_set():
             if self.isBroadcasting.is_set():
                 self.play_stream.write(in_data)
-            data = np.frombuffer(in_data, dtype=self.data_type)
+            # PortAudio's buffer is gone once this returns: the chunk is a copy
+            data = np.frombuffer(bytes(in_data), dtype=self.data_type)
             if self.audio_buffer is not None:
                 self.audio_buffer.add(data)
             if self.on_frame is not None:
                 try:
                     self.on_frame(data)
                 except Exception:
-                    # caught here so one bad frame costs one frame: PyAudio
-                    # would print the traceback and stop calling back, and
-                    # the take would end without anyone stopping it
+                    # caught here so one bad frame costs one frame: sounddevice
+                    # would print the traceback and stop the stream, and the
+                    # take would end without anyone stopping it
                     log.exception("Stream: on_frame callback raised")
-        return in_data, pyaudio.paContinue
 
     def stream_start(self) -> None:
+        """Start capturing.
+
+        :raises DeviceError: when the device opens and will not start, as a
+            Bluetooth headset Windows lists while it is not connected does; the
+            stream is closed again.
+        """
         self._require_device("stream_start")
-        self.rec_stream = self.p.open(
-            format=self.format,
-            channels=self.channels_,
-            input=True,
-            input_device_index=self.device_,
-            rate=self.rate_,
-            frames_per_buffer=self.frame_size_,
-            stream_callback=self._callback)
-        self.rec_stream.start_stream()
+        self.rec_stream = self._sd.RawInputStream(
+            samplerate=self.rate_, channels=self.channels_, dtype=_DTYPES[self.format],
+            device=self.device_, blocksize=self.frame_size_, callback=self._callback)
+        try:
+            self.rec_stream.start()
+        except Exception as e:
+            self.rec_stream.close()
+            self.rec_stream = None
+            raise DeviceError(f"LocalStreamReader.stream_start(): device {self.device_} opened "
+                              f"and did not start: {e}") from e
         self.isListening.set()
 
     def terminate(self) -> None:
         self.isInitial.clear()
         self.isBroadcasting.clear()
-        if self.play_stream is not None and self.play_stream.is_active():
-            self.play_stream.stop_stream()
+        if self.play_stream is not None and self.play_stream.active:
+            self.play_stream.stop()
             self.play_stream.close()
             self.play_stream = None
             log.info("Stream: playing stream stopped")
         if self.rec_stream is not None and self.isListening.is_set():
             self.isListening.clear()
-            self.rec_stream.stop_stream()
+            self.rec_stream.stop()
             self.rec_stream.close()
             self.rec_stream = None
             log.info("Stream: recording stream stopped")
-        if self.p is not None:
-            self.p.terminate()
-            self.p = None
 
 
 class StreamRecorder:
@@ -636,7 +644,7 @@ class StreamRecorder:
     :meth:`elapsed` are safe to poll from a UI timer. Nothing is dropped —
     unlike :class:`AudioBuffer`, which is a monitor and discards when full.
 
-    Requires ``kudio[audio]`` (PyAudio).
+    Requires ``kudio[audio]`` (sounddevice).
     """
 
     def __init__(self, device: Optional[int] = None, sr: Optional[int] = None,
@@ -644,8 +652,9 @@ class StreamRecorder:
                  max_seconds: Optional[float] = 3600.0,
                  monitor: bool = False):
         """
-        :param device: **PyAudio** input index (:class:`kudio.CheckDevice`),
-            not a sounddevice one — the two number devices independently.
+        :param device: input index from :func:`kudio.list_devices`, or
+            :class:`kudio.CheckDevice`, which numbers them the same way.
+            Omitted, the last device that opens as an input.
         :param sr: sample rate. Omitted, the first of 16000, 22050 and 44100
             the device accepts, and its own default only when none of them
             opens.
@@ -720,7 +729,7 @@ class StreamRecorder:
         if self.recording:
             return self
         if not self._reader.get_status():
-            # stop() closes PortAudio; opening it again is what lets one
+            # stop() closes the stream; opening it again is what lets one
             # recorder take a second take instead of failing on a dead handle
             if not self._reader.set_stream(*self._stream_args):
                 raise DeviceError("no input device could be opened")

@@ -59,7 +59,7 @@ def _quiet(**kwargs):
 
 def _score(path_ref, path_deg, sr=SR, metrics=None):
     """kudio.score of one pair, from numpy's global generator seeded with 0
-    as score_dataset seeds it: pystoi's ESTOI draws from it."""
+    as score_dataset seeds it."""
     ref, _ = kudio.file_load(path_ref, sr=None)
     deg, _ = kudio.file_load(path_deg, sr=None)
     np.random.seed(0)
@@ -457,7 +457,7 @@ def test_two_processes_give_what_one_gives(testset):
     land within 1e-12 rather than on the same last bit; segsnr, which has
     none, does."""
     clean, noisy, enhanced = testset
-    metrics = ["si_sdr", "segsnr", "srmr"] + (["estoi"] if _has_module("pystoi") else [])
+    metrics = ["si_sdr", "segsnr", "srmr"] + ["estoi"]
     one = _quiet(deg=enhanced, reference=clean, baseline=noisy, metrics=metrics)
     two = _quiet(deg=enhanced, reference=clean, baseline=noisy, metrics=metrics, jobs=2)
     assert [row["id"] for row in two.rows] == [row["id"] for row in one.rows]

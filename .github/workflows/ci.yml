@@ -45,13 +45,18 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.9"
+      - name: PortAudio, for sounddevice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2
       - name: Install the oldest of everything
         run: |
           python -m pip install --upgrade pip
           pip install "numpy==1.24.*" "scipy==1.10.*" "soundfile==0.12.*" \
-                      "soxr==0.3.2" "PyYAML==6.0" "tqdm==4.60.*" "PyWavelets==1.4.*" \
-                      "matplotlib==3.7.*" "pandas==2.0.*" "openpyxl==3.1.*"
-          pip install -e .[dev,viz]
+                      "soxr==0.3.2" "PyYAML==6.0" "tqdm==4.60.*" \
+                      "matplotlib==3.7.*" "pandas==2.0.*" "openpyxl==3.1.*" \
+                      "sounddevice==0.4.5"
+          pip install -e .[dev,viz,audio]
       - name: What is installed is what was asked for
         run: |
           pip list
@@ -61,8 +66,9 @@ jobs:
 
   librosa:
     # tests/test_against_librosa.py, which holds what kudio computes against what
-    # librosa does: to the bit, for the most part. kudio does not use librosa,
-    # and on the other legs but backends these tests skip.
+    # librosa does: to the bit, for the most part, and test_against_pywavelets.py,
+    # the wavelet filter against PyWavelets, to the bit. kudio uses neither, and
+    # on the other legs but backends these tests skip.
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -72,6 +78,9 @@ jobs:
       # with no librosa, or with another, the run stops: a job of nothing but
       # skips would pass and prove nothing
       KUDIO_REQUIRE_LIBROSA: ${{ matrix.librosa }}
+      KUDIO_REQUIRE_PYWAVELETS: "1"
+      KUDIO_REQUIRE_MIR_EVAL: "1"
+      KUDIO_REQUIRE_PYSTOI: "1"
       # every case before a release, and a sample of them on a push
       KUDIO_LIBROSA_CASES: ${{ startsWith(github.ref, 'refs/tags/v') && 'all' || '' }}
     strategy:
@@ -91,7 +100,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev,viz,check] "librosa==${{ matrix.librosa }}.*"
       - name: Compare
-        run: pytest -rs tests/test_against_librosa.py
+        run: pytest -rs tests/test_against_librosa.py tests/test_against_pywavelets.py tests/test_against_mir_eval.py tests/test_against_pystoi.py
 
   backends:
     # The one leg where the optional metric back-ends are really installed.
@@ -103,19 +112,24 @@ jobs:
     # through their missing-dependency branch, and pyloudnorm so the BS.1770
     # cross-check in test_loudness runs somewhere rather than nowhere.
     #
-    # Left out: [pesq], which ships no wheel and wants a C compiler, and
-    # [audio], whose PyAudio has no Linux wheel either. Keeping those two out
-    # means one failed source build cannot take the back-ends above with it.
+    # [audio] is sounddevice, which needs the system's PortAudio and finds no
+    # sound card here: it imports, lists nothing, and the device code runs
+    # against that. Left out: [pesq], which ships no wheel and wants a C
+    # compiler, so that one failed source build cannot take the rest with it.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+      - name: PortAudio, for sounddevice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2
       - name: Install (with the optional back-ends)
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[dev,eval,dnsmos,viz,check]
+          pip install -e .[dev,eval,dnsmos,viz,check,audio]
       - name: Run tests
         run: pytest -q
 

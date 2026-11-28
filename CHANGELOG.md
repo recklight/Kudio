@@ -89,6 +89,28 @@ work shared out among processes no longer waits for ever on one that died.
   it did, 0.25 s on Python 3.9 and 0.33 on 3.13; the first `f0` takes 0.19 s
   where it took 1.35, and the first `resample` 8 ms where it took 1.18 s,
   numba's cache warm (0.23 s against 1.29 and 9 ms against 0.54 s on 3.13).
+- `wavelet_low_pass_filter` computes its own discrete wavelet transform, with
+  PyWavelets' filters for its 106 discrete wavelets, and gives PyWavelets'
+  results to the bit. PyWavelets is not a dependency; `[check]` brings it for
+  `tests/test_against_pywavelets.py`. A name that is none of the 106 is refused
+  before anything else is looked at, a value that is not a name is a
+  `TypeError`, and a clip too short for one level comes back as a copy.
+- Live audio runs on sounddevice alone, and `[audio]` is sounddevice; on Linux
+  it needs the system's `libportaudio2`. Every class and function numbers the
+  devices one way, `list_devices` names each one's host API, and
+  `kudio devices` prints one list. `CheckDevice` tries a device with a
+  callback stream and `Recorder` records with one, which Windows' WDM-KS needs;
+  a device that opens and will not start is a `DeviceError` that names it.
+  Given no device, every one of them takes the system's default input, or with
+  none the last input that opens and starts; a device that does not record is
+  a `DeviceError` from `record` too.
+- `sdr`, `bss_eval` and `sdr_improvement` compute BSS Eval themselves, mir_eval
+  0.8.2's numbers to the bit, and `[eval]` is pystoi alone; `[check]` brings
+  mir_eval for `tests/test_against_mir_eval.py`. References that make the
+  normal equations singular are scored by least squares.
+- `stoi` and `estoi` compute STOI and ESTOI themselves, pystoi 0.4.1's steps
+  without the noise its ESTOI draws from numpy's global random state, and
+  `[eval]` is empty; `[check]` brings pystoi for `tests/test_against_pystoi.py`.
 - `resample`, and with it `file_load(sr=...)`, `save_wave(d_sample=...)`,
   `convert_folder(sr=...)`, `Synthesizer`, `score_dataset(sr=...)`, `telephone`
   and DNSMOS's input, resample with soxr itself. The samples are the same to the

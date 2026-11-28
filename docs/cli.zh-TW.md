@@ -953,25 +953,20 @@ Holm 調整涵蓋了哪些欄，不存在的數字寫成 null。關於區間的�
 
 ### devices {#devices}
 
-列出輸入和輸出裝置，需要 `kudio[audio]`，一律以 0 結束。兩套音訊後端的裝置編號各自獨立，
-所以它會印出兩份清單，並標明哪些函式用哪一份的編號：sounddevice 的編號給
-[`record`][kudio.core.stream.record]，PyAudio 的編號給串流類別。一份清單裡的編號在另一份
-裡沒有意義。沒有安裝這組套件時，它會說缺了什麼：
+列出輸入和輸出裝置，需要 `kudio[audio]`，一律以 0 結束。印出的編號，
+[`record`][kudio.core.stream.record]、`Recorder`、`StreamRecorder` 和 `LocalStreamReader`
+的 `device` 都收。沒有安裝這組套件時，它會說缺了什麼：
 
 ```bash
 kudio devices
 ```
 
 ```text title="輸出"
-sounddevice indices — use with kudio.record(device=...)
+Devices — the index is device= of kudio.record, Recorder, StreamRecorder and LocalStreamReader
   unavailable: 'sounddevice' is required for this feature. Install it with: pip install "kudio[audio]"
-
-PyAudio indices — use with kudio.Recorder / stream readers
-  unavailable: 'PyAudio' is required for this feature. Install it with: pip install "kudio[audio]"
 ```
 
-裝了之後，每個裝置一行：編號、輸入和輸出的聲道數、預設取樣率和名稱，PyAudio 那份
-還會標出 host API。其餘的請看[錄音與即時檢視](guide/live-audio.md)。
+裝了之後，每個裝置一行：編號、輸入和輸出的聲道數、預設取樣率、名稱和 host API。其餘的請看[錄音與即時檢視](guide/live-audio.md)。
 
 ## 結束代碼與 shell 測試 {#exit-codes-and-shell-tests}
 

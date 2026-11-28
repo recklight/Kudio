@@ -67,9 +67,8 @@ def test_score_refuses_what_it_cannot_do(monkeypatch):
     monkeypatch.setattr(evaluator, "_has_module", lambda name: False)
     with pytest.raises(DependencyError, match=r"kudio\[pesq\]"):
         kudio.score(ref, deg, 16000, ['pesq'])
-    with pytest.raises(DependencyError, match=r"kudio\[eval\]"):
-        kudio.score(ref, deg, 16000, ['stoi'])
-    assert set(kudio.score(ref, deg, 16000)) == {'snr', 'si_sdr', 'segsnr', 'sdi'}
+    assert set(kudio.score(ref, deg, 16000)) == {'snr', 'si_sdr', 'segsnr', 'sdi', 'sdr',
+                                                 'stoi', 'estoi'}
 
 
 _ASKED_FOR_ONLY = ('llr', 'is', 'cep', 'wss', 'fwsegsnr', 'lsd', 'csig', 'cbak',
@@ -180,7 +179,7 @@ def test_missing_backends_are_reported_once(monkeypatch, caplog):
         first = len(caplog.records)
         for _ in range(5):
             evaluator.check_metrics_install()
-    assert first == 3 and len(caplog.records) == 3
+    assert first == 1 and len(caplog.records) == 1
 
 
 def test_audio_evaluate_refuses_lists_that_do_not_pair_up(wav_dir):
@@ -222,7 +221,6 @@ def test_pesq_auto_is_what_kudio_always_reported():
 def test_audio_evaluate_keeps_every_file_and_reads_any_format(tmp_path):
     """Means alone cannot be broken down by noise or SNR; scipy's reader
     could not open TIMIT's NIST SPHERE either."""
-    pytest.importorskip("pystoi")
     import soundfile as sf
     from conftest import make_speech
     rng = np.random.default_rng(0)
@@ -278,8 +276,7 @@ def test_stereo_is_refused_by_every_metric_alike():
 
 
 def test_stoi_on_a_clip_too_short_for_it_is_nan():
-    """pystoi's 1e-5 placeholder used to be averaged in as a score."""
-    pytest.importorskip("pystoi")
+    """STOI's 1e-5 placeholder is not a score to average in."""
     import numpy as np
     y = np.sin(2 * np.pi * 300 * np.arange(4000) / 16000)       # 0.25 s
     with pytest.warns(UserWarning, match="0.4 s"):
@@ -289,11 +286,8 @@ def test_stoi_on_a_clip_too_short_for_it_is_nan():
 @pytest.mark.parametrize("name", ["stoi", "estoi"])
 @pytest.mark.parametrize("silent", ["ref", "deg"])
 def test_stoi_of_digital_silence_is_nan_on_every_call(name, silent):
-    """pystoi adds noise from numpy's global generator before it normalises,
-    so on digital silence its answer depends on the draw: ESTOI came out nan
-    in some calls and from 2e-5 to 0.003 in others. Either side silent has
-    no envelope to correlate, and it is nan with one warning each time."""
-    pytest.importorskip("pystoi")
+    """Either side silent has no envelope to correlate, and it is nan with one
+    warning each time."""
     import warnings
     from conftest import make_speech
     speech = make_speech(16000, 6.0).astype(np.float64)
@@ -378,11 +372,10 @@ def test_one_sample_is_a_signal_rather_than_a_shape_error():
 @pytest.mark.parametrize("name, case", [
     ("stoi", "under 25.6 ms"), ("stoi", "silent ref"), ("stoi", "silent deg"),
     ("sdr", "one sample"), ("sdr", "silent ref"), ("sdr", "silent deg")])
-def test_score_gives_nan_where_pystoi_or_mir_eval_would_raise(name, case):
-    """pystoi raises AxisError under 25.6 ms, and mir_eval refuses a silent
+def test_score_gives_nan_where_pystoi_or_bss_eval_would_raise(name, case):
+    """pystoi raises AxisError under 25.6 ms, and BSS Eval refuses a silent
     side and gives inf for one sample; through score each is nan with one
     warning, as every metric gives."""
-    pytest.importorskip("pystoi" if name == "stoi" else "mir_eval")
     import warnings
     from conftest import make_speech
     speech = make_speech(16000, 6.0).astype(np.float64)

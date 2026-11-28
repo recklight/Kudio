@@ -75,9 +75,9 @@ def test_all_is_curated():
 
 def test_import_is_lightweight():
     """`import kudio` must not drag in matplotlib / pandas, or librosa, which
-    no metric needs. Nor scipy.signal and pywt: 0.48 s of importing between
-    them, left to the functions that use them. Nor tqdm, 50 ms on its own,
-    which only the batch helpers' progress bars need.
+    no metric needs. Nor scipy.signal, left to the functions that use it, or pywt,
+    which nothing in kudio imports. Nor tqdm, 50 ms on its own, which only the
+    batch helpers' progress bars need.
 
     Uses a subprocess so other test modules (which import pandas at collection
     time) don't pollute the check.
@@ -162,9 +162,8 @@ def _imports(*folder):
 DECLARED = {
     'numpy': ('numpy', None), 'scipy': ('scipy', None), 'soundfile': ('soundfile', None),
     'soxr': ('soxr', None), 'yaml': ('PyYAML', None), 'tqdm': ('tqdm', None),
-    'pywt': ('PyWavelets', None), 'pyaudio': ('PyAudio', 'audio'),
-    'sounddevice': ('sounddevice', 'audio'), 'mir_eval': ('mir_eval', 'eval'),
-    'pystoi': ('pystoi', 'eval'), 'pesq': ('pesq', 'pesq'),
+    'sounddevice': ('sounddevice', 'audio'),
+    'pesq': ('pesq', 'pesq'),
     'onnxruntime': ('onnxruntime', 'dnsmos'), 'matplotlib': ('matplotlib', 'viz'),
     'pandas': ('pandas', 'data'), 'openpyxl': ('openpyxl', 'data'),
     'audioread': ('audioread', 'compressed'),
@@ -321,13 +320,52 @@ def test_librosa_is_there_to_be_measured_against_and_for_nothing_else():
         assert name == 'check' or not any('librosa' in spec for spec in specs), name
 
 
+def test_pywavelets_is_there_to_be_measured_against_and_for_nothing_else():
+    """The wavelet filter has its own transform; PyWavelets is what it is held to."""
+    extras = _extras()
+    assert 'PyWavelets>=1.4' in extras['check']
+    assert 'PyWavelets' not in _core_dependencies()
+    for name, specs in extras.items():
+        assert name == 'check' or not any('PyWavelets' in spec for spec in specs), name
+    assert 'pywt' not in _imports('kudio')
+
+
+def test_pystoi_is_there_to_be_measured_against_and_eval_is_empty():
+    extras = _extras()
+    assert 'pystoi>=0.3.3' in extras['check'] and extras['eval'] == []
+    for name, specs in extras.items():
+        assert name == 'check' or not any('pystoi' in spec for spec in specs), name
+    assert 'pystoi' not in _imports('kudio')
+    job = _workflow()['jobs']['librosa']
+    assert job['env']['KUDIO_REQUIRE_PYSTOI'] == '1'
+    assert 'tests/test_against_pystoi.py' in '\n'.join(s.get('run', '') for s in job['steps'])
+
+
+def test_mir_eval_is_there_to_be_measured_against_and_for_nothing_else():
+    extras = _extras()
+    assert 'mir_eval>=0.7,<0.9' in extras['check']
+    for name, specs in extras.items():
+        assert name == 'check' or not any('mir_eval' in spec for spec in specs), name
+    assert 'mir_eval' not in _imports('kudio')
+    job = _workflow()['jobs']['librosa']
+    assert job['env']['KUDIO_REQUIRE_MIR_EVAL'] == '1'
+    assert 'tests/test_against_mir_eval.py' in '\n'.join(s.get('run', '') for s in job['steps'])
+
+
+def test_the_comparison_with_pywavelets_runs_and_cannot_skip():
+    job = _workflow()['jobs']['librosa']
+    assert job['env']['KUDIO_REQUIRE_PYWAVELETS'] == '1'
+    runs = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert 'tests/test_against_pywavelets.py' in runs and 'check' in _installed_extras(runs)
+
+
 def test_the_oldest_leg_runs_on_the_floors():
     """Each of them, or a floor is a claim nothing in the project tries."""
     runs = '\n'.join(step.get('run', '') for step in _workflow()['jobs']['oldest']['steps'])
     pinned = dict(re.findall(r'"([A-Za-z0-9]+)==([\d.]+)', runs))
     extras = _extras()
     for spec in (re.findall(r'"([^"]+)"', _core_dependencies())
-                 + extras['viz'] + extras['data']):
+                 + extras['viz'] + extras['data'] + extras['audio']):
         name, floor = re.fullmatch(r'([A-Za-z0-9]+)>=([\d.]+)', spec).groups()
         assert pinned[name].rstrip('.') == floor, (spec, pinned.get(name))
     assert 'pytest' in runs
@@ -458,6 +496,19 @@ def test_some_ci_leg_installs_the_optional_backends_and_runs_the_suite():
                 f"job {name} installs the back-ends but never runs the suite")
             return
     pytest.fail("no CI job installs [eval] and [check] and then runs the suite")
+
+
+def test_live_audio_is_sounddevice_alone():
+    """One binding of PortAudio and one numbering of the devices. On Linux it
+    needs the system's PortAudio, which a CI leg installs to run the suite with it."""
+    assert _extras()['audio'] == ['sounddevice>=0.4.5']
+    assert 'pyaudio' not in _imports('kudio')
+    for name, job in _workflow()['jobs'].items():
+        runs = '\n'.join(step.get('run', '') for step in job.get('steps', []))
+        if 'audio' in _installed_extras(runs):
+            assert 'libportaudio2' in runs and 'pytest' in runs, name
+            return
+    pytest.fail("no CI job installs [audio]")
 
 
 def test_the_release_checks_the_artifacts_before_uploading_them():

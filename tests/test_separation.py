@@ -198,7 +198,7 @@ def test_sdri_subtracts_the_mixture_as_every_estimate(mir_eval):
     assert score.sdri == tuple(a - b for a, b in zip(score.sdr, of_mixture))
 
 
-def test_sdr_improvement_is_the_difference_of_two_sdrs_from_score(mir_eval):
+def test_sdr_improvement_is_the_difference_of_two_sdrs_from_score():
     ref = make_speech(SR, 6.0, seed=0).astype(np.float64)[SR:3 * SR]
     noise = np.random.default_rng(2).standard_normal(ref.size)
     mixture = ref + 0.3 * noise
@@ -208,13 +208,20 @@ def test_sdr_improvement_is_the_difference_of_two_sdrs_from_score(mir_eval):
     assert sdr_improvement(ref, deg, mixture) == expected
 
 
-def test_one_source_has_no_interference(mir_eval):
+def test_singular_normal_equations_are_solved_by_least_squares():
+    """Two references of two samples, one twice the other, make the normal equations
+    singular; BSS Eval goes on by least squares and both estimates score."""
+    score = bss_eval(np.array([[1.0, 0.0], [2.0, 0.0]]), np.array([[0.9, 0.1], [2.2, -0.3]]))
+    assert all(np.isfinite(v) for v in score.sdr)
+
+
+def test_one_source_has_no_interference():
     refs = _sources(1, n=SR)
     score = bss_eval(refs, _separated(refs))
     assert score.sir == (math.inf,)
 
 
-def test_a_silent_estimate_is_nan_with_one_warning(mir_eval):
+def test_a_silent_estimate_is_nan_with_one_warning():
     refs = _sources(2, n=SR)
     ests = _separated(refs)
     ests[1] = 0.0

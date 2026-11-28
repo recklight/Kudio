@@ -374,7 +374,7 @@ def test_the_signature_refuses_the_rates_the_metric_refuses(sr):
     for own, spec in module._SPECS.items():
         if not spec.rate:
             continue
-        package = {'pesq': 'pesq', 'stoi': 'pystoi', 'estoi': 'pystoi'}.get(own)
+        package = {'pesq': 'pesq'}.get(own)
         if package is not None and not evaluator._has_module(package):
             continue
         try:
@@ -498,24 +498,22 @@ def test_score_s_own_arguments_leave_stoi_and_the_composite_alone():
         signature(['stoi'], SR)
     assert signature(['csig', 'covl'], SR, pesq_mode='nb') == signature(['csig', 'covl'], SR)
     clean, deg = _pair()
-    if evaluator._has_module('pystoi'):
-        assert kudio.score(clean, deg, SR, ['stoi'], pesq_mode='nb', pesq_scale='raw') == \
-            kudio.score(clean, deg, SR, ['stoi'])
+    assert kudio.score(clean, deg, SR, ['stoi'], pesq_mode='nb', pesq_scale='raw') == \
+        kudio.score(clean, deg, SR, ['stoi'])
     if evaluator._has_module('pesq'):
         assert kudio.score(clean, deg, SR, ['csig'], pesq_mode='nb') == \
             kudio.score(clean, deg, SR, ['csig'])
 
 
 def test_sdr_needs_no_rate_and_writes_one_given():
-    """mir_eval's BSS Eval takes no rate: the same samples score the same
+    """BSS Eval takes no rate: the same samples score the same
     whatever rate score() is told. A rate that is given is written, for the
     pair."""
     assert 'sr' not in parse_signature(signature(['sdr']))
     assert parse_signature(signature(['sdr'], 16000))['sr'] == '16000'
     assert signature(['sdr'], 8000) != signature(['sdr'], 16000)
-    if evaluator._has_module('mir_eval'):
-        clean, deg = _pair()
-        assert kudio.score(clean, deg, 8000, ['sdr']) == kudio.score(clean, deg, 16000, ['sdr'])
+    clean, deg = _pair()
+    assert kudio.score(clean, deg, 8000, ['sdr']) == kudio.score(clean, deg, 16000, ['sdr'])
 
 
 def test_order_aliases_and_repeats_do_not_change_it():
@@ -534,12 +532,12 @@ def test_order_aliases_and_repeats_do_not_change_it():
 def test_pesq_and_stoi_at_16_khz(versions):
     assert signature(['pesq', 'stoi'], 16000) == (
         f"kudio:{VERSION}|sr:16000|pair:aligned=no,cut=shorter,limit=0.5,whole=pesq|"
-        f"pesq:mode=wb,scale=lqo|stoi|pkg:pesq=0.0.4,pystoi=0.4.1")
+        f"pesq:mode=wb,scale=lqo|stoi|pkg:pesq=0.0.4")
     assert signature(['stoi', 'pesq'], 8000, pesq_mode='nb', pesq_scale='raw', n=824,
                      ci=dict(kind='paired_ci', method='bca', confidence=0.95,
                              n_resamples=10000, seed=0, groups='speaker')) == (
         f"kudio:{VERSION}|sr:8000|pair:aligned=no,cut=shorter,limit=0.5,whole=pesq|"
-        f"pesq:mode=nb,scale=raw|stoi|pkg:pesq=0.0.4,pystoi=0.4.1|n:824|"
+        f"pesq:mode=nb,scale=raw|stoi|pkg:pesq=0.0.4|n:824|"
         f"ci:kind=paired_ci,method=bca,confidence=0.95,n_resamples=10000,seed=0,"
         f"groups=speaker")
 
@@ -547,8 +545,8 @@ def test_pesq_and_stoi_at_16_khz(versions):
 def test_each_back_end_is_named_and_the_list_is_sorted(versions):
     def pkg(names, sr=SR):
         return parse_signature(signature(names, sr)).get('pkg')
-    assert pkg(['estoi']) == {'pystoi': '0.4.1'}
-    assert pkg(['sdr_improvement']) == pkg(['bss_eval']) == {'mir_eval': '0.8.2'}
+    assert pkg(['estoi']) is pkg(['stoi']) is None
+    assert pkg(['sdr_improvement']) is pkg(['bss_eval']) is pkg(['sdr']) is None
     assert pkg(['csig']) == {'pesq': '0.0.4'}
     assert pkg({'dnsmos_p808': {'session': object()}}) == {'onnxruntime': '1.19.2'}
     assert pkg({'dnsmos_p808': {'session': object()}}, 48000) == \
@@ -557,9 +555,9 @@ def test_each_back_end_is_named_and_the_list_is_sorted(versions):
         assert pkg(names) is None
     every = pkg({**_every_metric(), 'dnsmos': {'session': object()},
                  'dnsmos_p808': {'session': object()}})
-    assert list(every) == ['mir_eval', 'onnxruntime', 'pesq', 'pystoi']
+    assert list(every) == ['onnxruntime', 'pesq']
     resampled = pkg({'stoi': {}, 'sdr': {}, 'dnsmos': {'session': object()}}, 48000)
-    assert list(resampled) == ['mir_eval', 'onnxruntime', 'pystoi', 'soxr']
+    assert list(resampled) == ['onnxruntime', 'soxr']
 
 
 def test_settings_are_written_to_the_last_digit(versions):
@@ -578,12 +576,12 @@ def test_settings_are_written_to_the_last_digit(versions):
     assert signature({'der': {'collar': -0.0}}) == signature(['der'])
 
 
-def test_bss_eval_s_permutation_is_signed_without_mir_eval(versions):
+def test_bss_eval_s_permutation_is_signed_and_no_package(versions):
     fields = [parse_signature(signature({'bss_eval': o}))
               for o in ({}, {'permutation': (1, 0)})]
     assert fields[0]['bss_eval'] == {'permutation': 'best_sir'}
     assert fields[1]['bss_eval'] == {'permutation': 'given'}
-    assert fields[0]['pkg'] == fields[1]['pkg'] == {'mir_eval': '0.8.2'}
+    assert 'pkg' not in fields[0] and 'pkg' not in fields[1]
 
 
 def test_eer_and_min_dcf_need_no_rate(versions):
@@ -650,7 +648,7 @@ def test_a_package_is_named_with_its_installed_version_or_missing(monkeypatch):
     monkeypatch.setattr(metadata, 'version', version)
     assert module._installed('onnxruntime') == '1.17.1'
     assert module._installed('pesq') == 'missing'
-    assert parse_signature(signature(['sdr'], SR))['pkg'] == {'mir_eval': 'missing'}
+    assert parse_signature(signature(['pesq'], SR))['pkg'] == {'pesq': 'missing'}
     for dist in ('onnxruntime-openvino', 'onnxruntime-qnn'):
         monkeypatch.setattr(metadata, 'version', lambda d, dist=dist: (
             '1.20.0' if d == dist else version('none')))

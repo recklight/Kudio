@@ -48,7 +48,7 @@ What it records:
   signature made today still says what ran after the default changes. A
   metric that nothing changes is its name alone.
 * ``pkg``, the version of every package that computes one of the metrics, as
-  installed here, or ``missing``: pesq, pystoi, mir_eval and onnxruntime,
+  installed here, or ``missing``: pesq and onnxruntime,
   and the soxr that resamples DNSMOS's input at any rate but 16 kHz. A
   DNSMOS field also names the model file, with the first 8 hex
   digits of its SHA-256, where it can tell which file ran, and the
@@ -150,7 +150,7 @@ _SCORE_ONLY = MappingProxyType({
     'pesq_scale': "read by score()'s pesq entry alone.",
 })
 _SDR_ONLY = MappingProxyType(dict(
-    _SCORE_ONLY, sr="mir_eval takes no rate: BSS Eval's 512-tap filter is counted in "
+    _SCORE_ONLY, sr="BSS Eval takes no rate: its 512-tap filter is counted in "
                     "samples, so the same samples score the same whatever rate is "
                     "named; a rate that is given is still written, for the pair."))
 
@@ -166,9 +166,9 @@ _SPECS: Mapping[str, _Spec] = MappingProxyType({
     'segmental_snr': _Spec(rate=False, pair=True, takes=('frame_length', 'hop_length')),
     'sdi': _Spec(rate=False, pair=True),
     'pesq': _Spec(rate=True, pair=True, takes=('mode', 'scale'), packages=('pesq',)),
-    'stoi': _Spec(rate=True, pair=True, packages=('pystoi',), ignores=_SCORE_ONLY),
-    'estoi': _Spec(rate=True, pair=True, packages=('pystoi',), ignores=_SCORE_ONLY),
-    'sdr': _Spec(rate=False, pair=True, packages=('mir_eval',), ignores=_SDR_ONLY),
+    'stoi': _Spec(rate=True, pair=True, ignores=_SCORE_ONLY),
+    'estoi': _Spec(rate=True, pair=True, ignores=_SCORE_ONLY),
+    'sdr': _Spec(rate=False, pair=True, ignores=_SDR_ONLY),
     'lsd': _Spec(rate=True, pair=True,
                  takes=('n_fft', 'hop_length', 'scale', 'match_gain', 'eps')),
     # Hu and Loizou's measures and the composite
@@ -187,10 +187,9 @@ _SPECS: Mapping[str, _Spec] = MappingProxyType({
     'siib_gauss': _AT_RATE,
     # several sources
     'si_sdr_improvement': _Spec(rate=False, pair=True),
-    'sdr_improvement': _Spec(rate=False, pair=True, packages=('mir_eval',)),
+    'sdr_improvement': _Spec(rate=False, pair=True),
     'pit_si_sdr': _Spec(rate=False, pair=True),
-    'bss_eval': _Spec(rate=False, pair=True, takes=('permutation',),
-                      packages=('mir_eval',)),
+    'bss_eval': _Spec(rate=False, pair=True, takes=('permutation',)),
     # no reference
     'srmr': _Spec(rate=True, pair=False,
                   takes=('fast', 'norm', 'min_cf', 'max_cf', 'drop_silence')),
@@ -422,7 +421,7 @@ def _mcd(o, sr, name) -> _Run:
 
 
 def _bss_eval(o, sr, name) -> _Run:
-    # without one, mir_eval keeps the permutation with the highest mean SIR
+    # without one, BSS Eval keeps the permutation with the highest mean SIR
     return _Run((('permutation', 'best_sir' if o['permutation'] is None else 'given'),))
 
 

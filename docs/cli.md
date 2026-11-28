@@ -1105,26 +1105,21 @@ the progress bar and the warnings.
 ### devices
 
 Lists the input and output devices, needs `kudio[audio]`, and always exits 0.
-The two audio back-ends number devices independently, so it prints both lists
-with a label saying which functions take which index: sounddevice indices go
-to [`record`][kudio.core.stream.record], PyAudio indices to the streaming
-classes. An index from one list means nothing in the other. Without the extra
-it says what is missing:
+The index is the one [`record`][kudio.core.stream.record], `Recorder`,
+`StreamRecorder` and `LocalStreamReader` all take as `device`. Without the
+extra it says what is missing:
 
 ```bash
 kudio devices
 ```
 
 ```text title="Output"
-sounddevice indices — use with kudio.record(device=...)
+Devices — the index is device= of kudio.record, Recorder, StreamRecorder and LocalStreamReader
   unavailable: 'sounddevice' is required for this feature. Install it with: pip install "kudio[audio]"
-
-PyAudio indices — use with kudio.Recorder / stream readers
-  unavailable: 'PyAudio' is required for this feature. Install it with: pip install "kudio[audio]"
 ```
 
 With the extra installed each device is one line: its index, input and output
-channel counts, default rate and name, and in the PyAudio list its host API.
+channel counts, default rate, name and host API.
 [Recording and live views](guide/live-audio.md) covers the rest.
 
 ## Exit codes and shell tests

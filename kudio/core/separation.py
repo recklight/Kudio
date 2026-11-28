@@ -10,7 +10,7 @@ the sources, the criterion of utterance-level permutation invariant training
 [KYTJ17] used for scoring. With the SI-SDR of every pairing in hand that is a
 linear assignment problem, and :func:`scipy.optimize.linear_sum_assignment`
 solves it exactly, as torchmetrics' speaker-wise PIT does. :func:`bss_eval`
-runs mir_eval's ``bss_eval_sources`` [VGF06], which tries every permutation
+runs ``bss_eval_sources`` as mir_eval 0.8.2 has it [VGF06], which tries every permutation
 and keeps the one with the highest mean SIR unless it is given one. The two
 rules can pick differently where a separator leaves the sources mixed, so
 each returns the permutation it used, and :func:`bss_eval` takes the one
@@ -53,14 +53,12 @@ refused past ``kudio.core.evaluator.MAX_LENGTH_MISMATCH``, as for a pair.
 """
 from __future__ import annotations
 
-import warnings
 from typing import List, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
 
 from kudio.core import evaluator as _evaluator
 from kudio.core._policy import faint, scored_nan, signal, warn
-from kudio.exceptions import DependencyError
 
 __all__ = ['si_sdr_improvement', 'sdr_improvement', 'pit_si_sdr', 'bss_eval',
            'PitScore', 'BssEval']
@@ -296,20 +294,9 @@ def si_sdr_improvement(ref, deg, mixture) -> float:
 
 # --- BSS Eval --------------------------------------------------------------------
 
-def _mir_eval():
-    try:
-        import mir_eval
-    except ImportError as e:
-        raise DependencyError('mir_eval', extra='eval') from e
-    return mir_eval
-
-
-def _bss_eval_sources(mir_eval, refs: np.ndarray, ests: np.ndarray, permute: bool):
-    with warnings.catch_warnings():
-        # mir_eval 0.8 warns that bss_eval_sources is going; [eval] pins
-        # mir_eval below 0.9, so there is nothing for a caller to change
-        warnings.simplefilter("ignore", FutureWarning)
-        return mir_eval.separation.bss_eval_sources(refs, ests, compute_permutation=permute)
+def _bss_eval_sources(refs: np.ndarray, ests: np.ndarray, permute: bool):
+    from kudio.core._bss import bss_eval_sources
+    return bss_eval_sources(refs, ests, compute_permutation=permute)
 
 
 def bss_eval(refs, ests, mixture=None, *, permutation: Optional[Sequence[int]] = None
@@ -327,29 +314,29 @@ def bss_eval(refs, ests, mixture=None, *, permutation: Optional[Sequence[int]] =
     in its examples. SDR is the target's energy over everything else, SIR
     over the interference, and SAR the target and interference together over
     the artifacts, in dB (the paper's eqs. 13, 14 and 16). The numbers are
-    mir_eval's, unchanged:
-    ``mir_eval.separation.bss_eval_sources(refs, ests)``. SDRi is each
-    source's SDR minus the SDR of the mixture taken as every estimate.
+    those of mir_eval 0.8.2's ``mir_eval.separation.bss_eval_sources(refs,
+    ests)`` to the bit, and mir_eval is not needed. SDRi is each source's SDR
+    minus the SDR of the mixture taken as every estimate.
 
     :param permutation: which estimate goes with each reference, as
-        :func:`pit_si_sdr` returns it. Without one, mir_eval decomposes every
-        estimate against every source, ``k * k`` decompositions, and keeps
-        the permutation with the highest mean SIR.
+        :func:`pit_si_sdr` returns it. Without one, every estimate is
+        decomposed against every source, ``k * k`` decompositions, and the
+        permutation with the highest mean SIR is kept.
     :raises ValueError: as :func:`pit_si_sdr`, and for a *permutation* that
         is not one of the estimates' indices.
-    :raises DependencyError: without mir_eval (``kudio[eval]``).
     :returns: a :class:`BssEval`. Every number is nan, with one warning,
-        where mir_eval cannot score the signals: empty ones, a reference or
+        where BSS Eval cannot score the signals: empty ones, a reference or
         an estimate that is digital silence throughout, and signals too loud
         to square. With one source there is no interference, and its SIR is
-        inf, as mir_eval gives it.
+        inf. Where the normal equations are singular, as two references of
+        two samples, one twice the other, make them, they are solved by least
+        squares.
     """
-    mir_eval = _mir_eval()
     refs, ests, mixture = _checked('bss_eval', refs, ests, mixture)
-    return _bss('bss_eval', mir_eval, refs, ests, mixture, permutation)
+    return _bss('bss_eval', refs, ests, mixture, permutation)
 
 
-def _bss(name: str, mir_eval, refs: List[np.ndarray], ests: List[np.ndarray],
+def _bss(name: str, refs: List[np.ndarray], ests: List[np.ndarray],
          mixture: Optional[np.ndarray], permutation) -> BssEval:
     """:func:`bss_eval` on signals already checked and cut to one length."""
     k = len(refs)
@@ -384,14 +371,14 @@ def _bss(name: str, mir_eval, refs: List[np.ndarray], ests: List[np.ndarray],
     refs_ = np.vstack(refs)
     ests_ = np.vstack(ests)
     if permutation is None:
-        sdr, sir, sar, order = _bss_eval_sources(mir_eval, refs_, ests_, True)
+        sdr, sir, sar, order = _bss_eval_sources(refs_, ests_, True)
         order = tuple(int(i) for i in order)
     else:
         order = given
-        sdr, sir, sar, _ = _bss_eval_sources(mir_eval, refs_, ests_[list(order)], False)
+        sdr, sir, sar, _ = _bss_eval_sources(refs_, ests_[list(order)], False)
     sdri = None
     if mixture is not None:
-        of_mixture, *_ = _bss_eval_sources(mir_eval, refs_, np.tile(mixture, (k, 1)), False)
+        of_mixture, *_ = _bss_eval_sources(refs_, np.tile(mixture, (k, 1)), False)
         sdri = tuple(float(a) - float(b) for a, b in zip(sdr, of_mixture))
     return BssEval(tuple(float(v) for v in sdr), tuple(float(v) for v in sir),
                    tuple(float(v) for v in sar), sdri, order)
@@ -408,10 +395,8 @@ def sdr_improvement(ref, deg, mixture) -> float:
     other sources count as interference, see :func:`bss_eval`.
 
     :raises ValueError: as :func:`si_sdr_improvement`.
-    :raises DependencyError: without mir_eval (``kudio[eval]``).
     :returns: the improvement in dB; nan, with one warning, as
         :func:`bss_eval` gives nan.
     """
-    mir_eval = _mir_eval()
     ref, deg, mixture = _single('sdr_improvement', ref, deg, mixture)
-    return _bss('sdr_improvement', mir_eval, [ref], [deg], mixture, None).sdri[0]
+    return _bss('sdr_improvement', [ref], [deg], mixture, None).sdri[0]

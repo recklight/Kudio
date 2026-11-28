@@ -189,27 +189,18 @@ def test_devices_puts_each_device_on_one_line(capsys):
     # Windows's name for a Bluetooth hands-free endpoint, line break included
     name = "Headset (@System32\\drivers\\bthhfenum.sys,#2;%1 Hands-Free%0\r\n;(Buds))"
 
-    class Pyaudio:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def system_devices(self):
-            return [{"index": 3, "in": 1, "out": 0, "fs": 8000.0, "Device": name,
-                     "api": "Windows WDM-KS"}]
-
     fake = types.SimpleNamespace(
         list_devices=lambda: [{"index": 1, "max_input_channels": 1, "max_output_channels": 0,
-                               "default_samplerate": 8000.0, "name": name}],
-        CheckDevice=Pyaudio)
+                               "default_samplerate": 8000.0, "name": name,
+                               "api": "Windows WDM-KS"},
+                              {"index": 2, "max_input_channels": 0, "max_output_channels": 2,
+                               "default_samplerate": 44100.0, "name": "Speakers", "api": ""}])
     _cmd_devices(fake)
     lines = capsys.readouterr().out.splitlines()
     flat = "Headset (@System32\\drivers\\bthhfenum.sys,#2;%1 Hands-Free%0 ;(Buds))"
-    assert lines[1] == f"  [ 1] in=1 out=0 fs=8000  {flat}"
-    assert lines[4] == f"  [ 3] in=1 out=0 fs=8000  {flat} (Windows WDM-KS)"
-    assert len(lines) == 5
+    assert lines[0].startswith("Devices — the index is device= of kudio.record")
+    assert lines[1:] == [f"  [ 1] in=1 out=0 fs=8000  {flat} (Windows WDM-KS)",
+                         "  [ 2] in=0 out=2 fs=44100  Speakers"]
 
 
 def test_vad_command_exits_nonzero_on_silence(tmp_path, capsys):

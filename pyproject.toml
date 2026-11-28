@@ -36,15 +36,15 @@ dependencies = [
     "soxr>=0.3.2",
     "PyYAML>=6.0",
     "tqdm>=4.60",
-    "PyWavelets>=1.4",
 ]
 
 [project.optional-dependencies]
-audio = ["PyAudio>=0.2.13", "sounddevice>=0.4.5"]     # live capture / playback
-# bss_eval_sources, which `sdr` calls, is deprecated in mir_eval 0.8 and
-# announced for removal in 0.9, so the upper bound is load-bearing rather than
-# caution.
-eval = ["mir_eval>=0.7,<0.9", "pystoi>=0.3.3"]  # STOI / SDR (PESQ: see [pesq])
+# live capture and playback. On Linux sounddevice needs the system's PortAudio
+# (libportaudio2 on Debian and Ubuntu); nothing is compiled.
+audio = ["sounddevice>=0.4.5"]
+# empty: STOI, ESTOI and SDR need nothing. Kept, so that `pip install
+# "kudio[eval]"` still installs.
+eval = []
 # PESQ (ITU-T P.862 / P.862.2). PyPI carries `pesq` as source only, so this
 # compiles it: it needs a C compiler -- the MSVC Build Tools on Windows. That
 # is why it is an extra of its own and not part of [eval] or [all], which
@@ -63,10 +63,13 @@ all = ["kudio[audio,eval,dnsmos,viz,data,compressed]"]
 dev = ["pytest>=7.0", "kudio[data]"]   # [data] lets the full test suite run
 # Independent implementations the suite measures itself against. Nothing in
 # kudio imports these; they are here so test_loudness can hold our own BS.1770
-# meter against someone else's, and test_against_librosa our spectrograms, pitch
-# and time stretch against librosa's. Separate from [dev] because [dev] has to
-# stay small enough to install anywhere, while CI can afford this.
-check = ["pyloudnorm>=0.1", "librosa>=0.11"]
+# meter against someone else's, test_against_librosa our spectrograms, pitch
+# and time stretch against librosa's, test_against_pywavelets the wavelet
+# filter against PyWavelets', test_against_mir_eval BSS Eval against
+# mir_eval's, whose bss_eval_sources 0.9 drops, and test_against_pystoi STOI
+# against pystoi's. Separate from [dev] because [dev] has to stay small
+# enough to install anywhere, while CI can afford this.
+check = ["pyloudnorm>=0.1", "librosa>=0.11", "PyWavelets>=1.4", "mir_eval>=0.7,<0.9", "pystoi>=0.3.3"]
 # The toolchain mkdocs.yml needs. MkDocs stays below 2.0, which drops the
 # plugin system Material and mkdocstrings are built on. mkdocstrings-python 2.0
 # is a real floor: it brings the griffe that tools/docs/griffe_markdown.py hooks
@@ -101,3 +104,7 @@ kudio = ["py.typed"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+    # OpenBLAS's own threads, there once numpy is imported, make Python 3.12 warn at every fork of the pool
+    'ignore:This process \(pid=\d+\) is multi-threaded, use of fork\(\) may lead to deadlocks in the child:DeprecationWarning',
+]

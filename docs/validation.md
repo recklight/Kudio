@@ -1012,7 +1012,7 @@ On purpose
 
 `snr`, `si_sdr`, `segmental_snr` and `sdi` are a few lines of numpy each,
 defined on [Measuring quality](guide/metrics.md#what-each-metric-sees).
-`stoi` and `estoi` are pystoi, and `sdr` is mir_eval's BSS Eval. kudio cuts
+`stoi` and `estoi` are pystoi, and `sdr` is BSS Eval as mir_eval has it. kudio cuts
 the pair to the length it shares and passes it on, so their numbers are those
 packages' numbers.
 
@@ -1095,6 +1095,74 @@ leaves 130.6.
 Without `--all` one pitch case in nine is compared, the ones the tests take;
 `--long` adds the tones of 60 and 300 s. The numbers here are from librosa 0.11.0
 on Python 3.9.13 and librosa 1.0.1 on Python 3.13.9.
+
+## kudio and PyWavelets
+
+`wavelet_low_pass_filter` takes a clip apart and puts it back together with a
+discrete wavelet transform of kudio's own, in periodization mode, and the filters
+of the 106 discrete wavelets of PyWavelets[^pywt], copied from it. PyWavelets is
+under the MIT licence, whose notice is at the head of
+`kudio/enhance/_wavelet_filters.py`, and I thank its authors. Every sum runs in
+the order PyWavelets' C code runs it, and for the coiflets kudio keeps the float32
+filters PyWavelets computes in float32 from tables of its own, which are not its
+float64 filters rounded; so the results are PyWavelets' to the bit.
+`tests/test_against_pywavelets.py` holds kudio to it, and the comparison job on CI
+sets `KUDIO_REQUIRE_PYWAVELETS=1`, which stops the run where PyWavelets does not
+import instead of letting the tests skip.
+
+| Compared with PyWavelets | Cases | Difference |
+|---|---|---|
+| the four filters of each discrete wavelet, in float64 and in float32 | 106 | 0 |
+| `dwt` and `idwt`, one level each: every length from 1 to 20 samples, and 31, 101 and 1001, in float32 and float64 | 4876 each | 0 |
+| `wavedec`, `threshold(mode='soft')` and `waverec` against `wavelet_low_pass_filter`: 14 lengths from 1 to 4097 samples, two thresholds in turn, float32 and float64 | 2862 | 0 |
+| the same with float16, big-endian float32 and float64, int16 and uint8 samples | 40 | 0 |
+| a `pywt.Wavelet`, and one made from the same filters under another name | 20 | 0 |
+
+The numbers are from PyWavelets 1.6.0 with numpy 2.0.2 on Python 3.9.13, and
+PyWavelets 1.10.0 with numpy 2.5.5 on Python 3.13.9.
+
+## kudio and mir_eval
+
+`sdr` in `score`, [`bss_eval`][kudio.core.separation.bss_eval] and
+[`sdr_improvement`][kudio.core.separation.sdr_improvement] run BSS Eval[^bss]
+as mir_eval[^mireval] 0.8.2's `bss_eval_sources` runs it, step for step and call
+for call, so the numbers are mir_eval's to the bit and mir_eval is not needed.
+mir_eval is under the MIT licence, whose notice is at the head of
+`kudio/core/_bss.py`, and I thank its authors. Where the references make the
+normal equations singular, two references of two samples, one twice the other,
+for instance, mir_eval 0.8.2 goes on by least squares; with numpy 2.5 the name it catches the error by is
+gone and it raises `AttributeError` instead, so the comparison puts that name
+back first. `tests/test_against_mir_eval.py` holds kudio to it, and the
+comparison job on CI sets `KUDIO_REQUIRE_MIR_EVAL=1`.
+
+| Compared with mir_eval 0.8.2 (numpy 2.5.5) | Cases | Difference |
+|---|---|---|
+| `bss_eval_sources`, one source: 1 to 3000 samples, float32 and float64 | 12 | 0 |
+| two sources, with and without the permutation search, 5 to 1500 samples | 12 | 0 |
+| three sources, 600 samples | 4 | 0 |
+| two references that make the normal equations singular, by least squares | 1 | 0 |
+| `bss_eval` with the mixture, `score(['sdr'])`, `sdr_improvement` | 4 | 0 |
+
+## kudio and pystoi
+
+`stoi` and `estoi` in `score` are pystoi[^pystoi] 0.4.1's steps, one for one: its
+resampler to 10 kHz, its removal of silent frames, its one-third-octave bands and
+its 30-frame segments. pystoi is under the MIT licence, whose notice is at the
+head of `kudio/core/_stoi.py`, and I thank its author. One step is left out:
+pystoi's ESTOI adds noise of machine-epsilon size, drawn from numpy's global
+random state, before each of its two normalisations, which moves a seeded
+script's other random numbers and ESTOI's last digits from one call to the next.
+`tests/test_against_pystoi.py` holds kudio to pystoi with that noise put to
+zeros, and against pystoi as it is; the comparison job on CI sets
+`KUDIO_REQUIRE_PYSTOI=1`.
+
+| Compared with pystoi 0.4.1 | Cases | Difference |
+|---|---|---|
+| STOI and ESTOI, its noise put to zeros: 8 to 48 kHz, 0.5 to 4 s, float32 and float64 | 72 | 0 |
+| the same at the edges: exactly 30 frames left, pauses 42 dB under the peak | 4 | 0 |
+| STOI, pystoi as it is | 1 | 0 |
+| ESTOI, pystoi as it is | 1 | under 1e-15 |
+| `score(['stoi', 'estoi'])` | 2 | 0 |
 
 ## Running the scripts
 
@@ -1213,7 +1281,7 @@ rate it is read, and `kudio convert --rate` exits with 2.
 `tests/test_package.py` checks that `import kudio` loads none of matplotlib,
 pandas, librosa, soxr, scipy.signal, PyWavelets and tqdm, and that nothing in
 kudio, nor what makes the figures of the documentation, imports librosa or
-numba.
+numba, and that kudio does not import PyWavelets.
 
 [^hl08]: Y. Hu and P. C. Loizou, "Evaluation of objective quality measures for speech enhancement", IEEE Trans. Audio, Speech, Lang. Process. 16(1), pp. 229-238, 2008, doi:10.1109/TASL.2007.911054.
 [^hl06]: Y. Hu and P. C. Loizou, "Evaluation of objective measures for speech enhancement", Proc. Interspeech 2006, doi:10.21437/Interspeech.2006-84.
@@ -1239,6 +1307,7 @@ numba.
 [^r76]: L. R. Rabiner, M. J. Cheng, A. E. Rosenberg and C. A. McGonegal, "A comparative performance study of several pitch detection algorithms", IEEE Trans. Acoust., Speech, Signal Process. 24(5), pp. 399-418, 1976, doi:10.1109/TASSP.1976.1162846.
 [^mireval]: C. Raffel, B. McFee, E. J. Humphrey, J. Salamon, O. Nieto, D. Liang and D. P. W. Ellis, "mir_eval: a transparent implementation of common MIR metrics", Proc. ISMIR 2014, pp. 367-372, doi:10.5281/zenodo.1416528.
 [^bss]: E. Vincent, R. Gribonval and C. Févotte, "Performance measurement in blind audio source separation", IEEE Trans. Audio, Speech, Lang. Process. 14(4), pp. 1462-1469, 2006, doi:10.1109/TSA.2005.858005.
+[^pystoi]: M. Pariente, pystoi, <https://github.com/mpariente/pystoi>, under the MIT licence; STOI after C. H. Taal, R. C. Hendriks, R. Heusdens and J. Jensen, IEEE Trans. Audio, Speech, Lang. Process. 19(7), pp. 2125-2136, 2011, and ESTOI after J. Jensen and C. H. Taal, IEEE/ACM Trans. Audio, Speech, Lang. Process. 24(11), pp. 2009-2022, 2016.
 [^upit]: M. Kolbæk, D. Yu, Z.-H. Tan and J. Jensen, "Multitalker speech separation with utterance-level permutation invariant training of deep recurrent neural networks", IEEE/ACM Trans. Audio, Speech, Lang. Process. 25(10), pp. 1901-1913, 2017, doi:10.1109/TASLP.2017.2726762.
 [^convtasnet]: Y. Luo and N. Mesgarani, "Conv-TasNet: surpassing ideal time-frequency magnitude masking for speech separation", IEEE/ACM Trans. Audio, Speech, Lang. Process. 27(8), pp. 1256-1266, 2019, doi:10.1109/TASLP.2019.2915167.
 [^bd06]: N. Brümmer and J. du Preez, "Application-independent evaluation of speaker detection", Computer Speech and Language 20(2-3), pp. 230-275, 2006, doi:10.1016/j.csl.2005.08.001.
@@ -1257,6 +1326,7 @@ numba.
 [^vkh18b]: S. Van Kuyk, W. B. Kleijn and R. C. Hendriks, "An evaluation of intrusive instrumental intelligibility metrics", IEEE/ACM Trans. Audio, Speech, Lang. Process. 26(11), pp. 2153-2166, 2018, doi:10.1109/TASLP.2018.2856374.
 [^ksg04]: A. Kraskov, H. Stögbauer and P. Grassberger, "Estimating mutual information", Phys. Rev. E 69(6), 066138, 2004, doi:10.1103/PhysRevE.69.066138.
 [^librosa]: B. McFee, C. Raffel, D. Liang, D. P. W. Ellis, M. McVicar, E. Battenberg and O. Nieto, "librosa: Audio and music signal analysis in Python", Proc. 14th Python in Science Conference (SciPy 2015), pp. 18-24, doi:10.25080/Majora-7b98e3ed-003. Code: <https://github.com/librosa/librosa>, under the ISC licence.
+[^pywt]: G. R. Lee, R. Gommers, F. Wasilewski, K. Wohlfahrt and A. O'Leary, "PyWavelets: A Python package for wavelet analysis", Journal of Open Source Software 4(36), 1237, 2019, doi:10.21105/joss.01237. Code: <https://github.com/PyWavelets/pywt>, under the MIT licence.
 [^gl84]: D. W. Griffin and J. S. Lim, "Signal estimation from modified short-time Fourier transform", IEEE Trans. Acoust., Speech, Signal Process. 32(2), pp. 236-243, 1984, doi:10.1109/TASSP.1984.1164317.
 [^s98]: M. Slaney, "Auditory Toolbox, version 2", Technical Report 1998-010, Interval Research Corporation, 1998.
 [^dm80]: S. B. Davis and P. Mermelstein, "Comparison of parametric representations for monosyllabic word recognition in continuously spoken sentences", IEEE Trans. Acoust., Speech, Signal Process. 28(4), pp. 357-366, 1980, doi:10.1109/TASSP.1980.1163420.

@@ -24,9 +24,9 @@ means with bootstrap confidence intervals, a sign-flip test against a
 baseline, a signature line that says how the numbers were computed, and the
 BibTeX keys for kudio and every work behind them.
 
-The core install is numpy, scipy, soundfile and soxr, with PyYAML, tqdm and
-PyWavelets; plotting, dataframes, PESQ, STOI and SDR, DNSMOS, live audio and
-the compressed formats are extras. WAV, FLAC, OGG, MP3 and AIFF are read with
+The core install is numpy, scipy, soundfile and soxr, with PyYAML and tqdm;
+plotting, dataframes, PESQ, STOI and SDR, DNSMOS, live audio and the
+compressed formats are extras. WAV, FLAC, OGG, MP3 and AIFF are read with
 that; m4a, aac and webm take `pip install "kudio[compressed]"` and ffmpeg on
 the PATH.
 
@@ -39,8 +39,7 @@ and how closely it agrees with its reference; this README is the short tour.
 
 ```bash
 pip install kudio                # core: I/O, features, effects, synthesis, metrics
-pip install "kudio[audio]"       # + live capture / playback (PyAudio, sounddevice)
-pip install "kudio[eval]"        # + STOI / SDR back-ends (pystoi, mir_eval)
+pip install "kudio[audio]"       # + live capture / playback (sounddevice)
 pip install "kudio[pesq]"        # + PESQ (pesq) -- builds from source, needs a C compiler
 pip install "kudio[dnsmos]"      # + DNSMOS perceptual score (onnxruntime)
 pip install "kudio[viz]"         # + plotting helpers (matplotlib)
@@ -211,7 +210,7 @@ print(kudio.composite(ref, est, sr))           # CSIG/CBAK/COVL, wideband PESQ i
 print(kudio.ncm(ref, est, sr), kudio.csii(ref, est, sr))  # intelligibility; CSII at 3 levels
 print(kudio.si_sdr_improvement(ref, est, noisy))  # SI-SDRi over the input
 s = kudio.pit_si_sdr(sources, separated, mixture)  # (sources, samples); matched by best mean
-print(s.permutation, s.si_sdri)               # kudio.bss_eval for SDR/SIR/SAR, via mir_eval
+print(s.permutation, s.si_sdri)               # kudio.bss_eval for SDR/SIR/SAR
 ev = kudio.AudioEvaluate(clean_files, noisy_files, pesq_mode="nb", pesq_scale="raw")
 ev.eval("ddae", enhanced_files)
 ev.get_df()                                    # means, with a Baseline row
@@ -252,12 +251,10 @@ with kudio.StreamRecorder(sr=16000) as rec:           # ...or stop when you like
 wave = rec.stop()
 ```
 
-> **Device indices are backend-specific.** `record()` runs on sounddevice, so
-> its `device=` comes from `kudio.list_devices()`. The streaming classes
-> (`Recorder`, `LocalStreamReader`) run on PyAudio and take indices from
-> `CheckDevice.system_devices()`. The two are numbered independently — an index
-> from one must never be handed to the other. `kudio devices` prints both,
-> labelled.
+> **One index per device.** `record()`, `Recorder`, `StreamRecorder` and
+> `LocalStreamReader` take the index `kudio.list_devices()` and
+> `CheckDevice.system_devices()` both print, with each device's host API.
+> `kudio devices` prints the list.
 
 ## Command line
 

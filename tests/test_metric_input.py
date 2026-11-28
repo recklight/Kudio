@@ -55,11 +55,10 @@ PAIRED = {
     'pit_si_sdr': lambda r, d, sr: kudio.pit_si_sdr(r, d),
     'mcd': kudio.mcd,
 }
-if importlib.util.find_spec('mir_eval') is not None:
-    PAIRED.update({
-        'sdr_improvement': lambda r, d, sr: kudio.sdr_improvement(r, d, MIX),
-        'bss_eval': lambda r, d, sr: kudio.bss_eval(r, d, MIX),
-    })
+PAIRED.update({
+    'sdr_improvement': lambda r, d, sr: kudio.sdr_improvement(r, d, MIX),
+    'bss_eval': lambda r, d, sr: kudio.bss_eval(r, d, MIX),
+})
 #: name -> what to call with (y, sr)
 SINGLE = {'srmr': kudio.srmr, 'wada_snr': kudio.wada_snr}
 #: the ones that take a rate
@@ -278,12 +277,12 @@ def test_score_says_once_that_a_pair_is_faint():
     assert len(said) == 1 and said[0].startswith("score(): "), said
 
 
-@pytest.mark.parametrize("name, package", [('stoi', 'pystoi'), ('estoi', 'pystoi'),
-                                           ('sdr', 'mir_eval')])
+@pytest.mark.parametrize("name, package", [('stoi', None), ('estoi', None), ('sdr', None)])
 def test_a_back_end_that_would_overflow_says_so_instead_of_scoring(name, package):
-    """pystoi gives 0.0, the worst STOI there is, from 1e154 of full scale,
-    and mir_eval nan from 1e152."""
-    pytest.importorskip(package)
+    """STOI gives 0.0, the worst there is, from 1e154 of full scale,
+    and BSS Eval nan from 1e152."""
+    if package:
+        pytest.importorskip(package)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         value = kudio.score(REF * 1e160, DEG * 1e160, SR, [name])[name]

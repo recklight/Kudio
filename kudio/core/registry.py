@@ -20,8 +20,7 @@ Names. Every name :func:`kudio.score` takes is here, with the same spelling,
 and so is every public metric function under its own name. Where the two
 differ, both are entries: ``segsnr`` and ``segmental_snr``, ``is`` and
 ``itakura_saito``, ``csig`` and ``composite``. ``stoi``, ``estoi`` and
-``sdr`` exist only as names of :func:`kudio.score`, which runs pystoi and
-mir_eval for them.
+``sdr`` exist only as names of :func:`kudio.score`.
 
 References. Every BibTeX entry is copied from a footnote of the guide or of
 the validation page: authors, title, venue, volume, issue, pages, year, DOI
@@ -568,16 +567,16 @@ def _build() -> Dict[str, MetricInfo]:
                 "Corrigendum 2 (2018). 8 and 16 kHz only.",
                 _PESQ, section='pesq'),
         _metric('stoi', 'STOI', 'higher', (-1.0, 1.0), '',
-                "None; pystoi's STOI, at its own 10 kHz.",
+                "None; STOI as pystoi computes it, at its own 10 kHz.",
                 ('taal2011stoi',), function='kudio.score', field='stoi',
                 section=_SNR_SECTION),
         _metric('estoi', 'ESTOI', 'higher', (-1.0, 1.0), '',
-                "None; pystoi's extended STOI, at its own 10 kHz.",
+                "None; extended STOI as pystoi computes it, at its own 10 kHz.",
                 ('jensen2016estoi',), function='kudio.score', field='estoi',
                 section=_SNR_SECTION),
         _metric('sdr', 'SDR', 'higher', (None, None), 'dB',
-                "None; mir_eval's bss_eval_sources, with its 512-tap "
-                "distortion filter. Not comparable with SI-SDR.",
+                "None; BSS Eval's bss_eval_sources as mir_eval computes it, "
+                "with its 512-tap distortion filter. Not comparable with SI-SDR.",
                 ('vincent2006bss',), function='kudio.score', field='sdr',
                 section=_SNR_SECTION),
         _metric('lsd', 'LSD', 'lower', (0.0, None), '',
@@ -660,7 +659,7 @@ def _build() -> Dict[str, MetricInfo]:
                 ('kolbaek2017upit', 'leroux2019sdr', 'luo2019convtasnet'),
                 section=_SEPARATION_SECTION),
         _metric('bss_eval', 'SDR, SIR, SAR', 'higher', (None, None), 'dB',
-                "permutation: mir_eval's own by default, the highest mean SIR; "
+                "permutation: BSS Eval's own by default, the highest mean SIR; "
                 "pit_si_sdr's to score a table with one assignment. With the "
                 "mixture, SDRi too.",
                 ('vincent2006bss',), section=_SEPARATION_SECTION),

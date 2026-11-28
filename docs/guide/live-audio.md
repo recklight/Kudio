@@ -7,23 +7,22 @@ the network, drawing or denoising it while the take runs, and playing it back.
 ## What needs the audio extra
 
 ```bash
-pip install "kudio[audio]"     # PyAudio and sounddevice
+pip install "kudio[audio]"     # sounddevice
 ```
 
-kudio reaches the hardware through two Python bindings of PortAudio and
-imports each one only when it needs it, so `import kudio` works without
-either. PyAudio publishes wheels for Windows only;
-[Getting started](../getting-started.md) says what Linux and macOS need to
-build it. The classes in the last row of the table need neither package and
-run on the core install.
+kudio reaches the hardware through sounddevice, a Python binding of PortAudio,
+and imports it only when it needs it, so `import kudio` works without it.
+Its wheels for Windows and macOS carry PortAudio; on Linux it uses the
+system's, `libportaudio2` on Debian and Ubuntu, and nothing is compiled. The
+classes in the last row of the table need no package and run on the core
+install.
 
 | Backend | Used by |
 |---|---|
-| sounddevice | [`record`][kudio.core.stream.record], [`list_devices`][kudio.util.check.list_devices], [`play_audio`][kudio.core.stream.play_audio] |
-| PyAudio | [`StreamRecorder`][kudio.core.stream.StreamRecorder], [`Recorder`][kudio.core.stream.Recorder], [`LocalStreamReader`][kudio.core.stream.LocalStreamReader], [`RemoteStreamReader`][kudio.core.stream.RemoteStreamReader], [`CheckDevice`][kudio.util.check.CheckDevice], `play_audio` on an open `wave.Wave_read`, and for anything else when sounddevice is missing |
-| neither | [`SpectrogramStream`][kudio.core.spectrogram.SpectrogramStream], [`StreamEnhancer`][kudio.enhance.streaming.StreamEnhancer], [`AudioBuffer`][kudio.core.buffer.AudioBuffer], [`FetchBuffer`][kudio.core.buffer.FetchBuffer] |
+| sounddevice | [`record`][kudio.core.stream.record], [`list_devices`][kudio.util.check.list_devices], [`play_audio`][kudio.core.stream.play_audio], [`StreamRecorder`][kudio.core.stream.StreamRecorder], [`Recorder`][kudio.core.stream.Recorder], [`LocalStreamReader`][kudio.core.stream.LocalStreamReader], [`RemoteStreamReader`][kudio.core.stream.RemoteStreamReader], [`CheckDevice`][kudio.util.check.CheckDevice] |
+| none | [`SpectrogramStream`][kudio.core.spectrogram.SpectrogramStream], [`StreamEnhancer`][kudio.enhance.streaming.StreamEnhancer], [`AudioBuffer`][kudio.core.buffer.AudioBuffer], [`FetchBuffer`][kudio.core.buffer.FetchBuffer] |
 
-Without the extra, everything here that needs a binding raises
+Without the extra, everything here that needs sounddevice raises
 [`DependencyError`][kudio.exceptions.DependencyError] naming `kudio[audio]`;
 it is an `ImportError` as well. sounddevice installed on a Linux machine
 without the PortAudio library is not a missing extra, since pip cannot fix it,
@@ -101,8 +100,7 @@ loud it sounds; measure that on the finished take with
 second.
 
 A second `stop()` returns the same take, not an empty array. `stop()` also
-shuts down the recorder's PyAudio instance, and a `start()` after it opens the
-stream again with the same settings and carries on the same take, the way a
+closes the recorder's stream, and a `start()` after it opens the stream again with the same settings and carries on the same take, the way a
 Pause button would. If the device comes back at another rate or channel count,
 `start()` raises `DeviceError` rather than join the two in one take;
 [`reset()`][kudio.core.stream.StreamRecorder.reset] throws the take away, so
@@ -128,25 +126,25 @@ below both accept; `reset()` starts the drain position over.
 
 ## Choosing a device
 
-sounddevice and PyAudio number the same devices independently, so an index
-from one list can name a different device in the other, or none at all. Pass
-each function an index from the backend it runs on:
+Every device has one index, sounddevice's.
+[`list_devices()`][kudio.util.check.list_devices] and
+[`CheckDevice().system_devices()`][kudio.util.check.CheckDevice.system_devices]
+list the same devices by it, each with its host API, and `record`, `Recorder`,
+`StreamRecorder` and `LocalStreamReader` all take it as `device`. From a
+shell, `kudio devices` prints the list ([Command line](../cli.md)).
 
-| Index from | Pass it to |
-|---|---|
-| [`list_devices()`][kudio.util.check.list_devices] (sounddevice) | `record(device=...)` |
-| [`CheckDevice().system_devices()`][kudio.util.check.CheckDevice.system_devices] (PyAudio) | `StreamRecorder`, `Recorder`, `LocalStreamReader` |
-
-From a shell, `kudio devices` prints both lists, each labelled with where its
-indices go ([Command line](../cli.md)).
-
-Leaving `device` out does not pick the same input everywhere. `record` takes
-sounddevice's default input and `Recorder` PortAudio's, but `StreamRecorder`
-and `LocalStreamReader` go through
-[`CheckDevice.input_device`][kudio.util.check.CheckDevice.input_device], which
-tries every device PyAudio knows and takes the **last** one that opens as an
-input, from whichever host API it belongs to; `system_devices` lists the same
-devices and names the host API of each. So whenever it matters which input
+Leaving `device` out picks the same input everywhere, by
+[`CheckDevice.default_input`][kudio.util.check.CheckDevice.default_input]: the
+system's default input when there is one, and a `DeviceError` when it does not
+start, rather than another microphone in its place. A Windows machine whose
+microphones are all on WDM-KS has no default input; there it is the **last**
+input that opens and starts, going back from the end of the list, whichever
+host API it belongs to, so a Bluetooth headset Windows lists while it is not
+connected is passed over. Each device is tried the way a recording opens it,
+with a callback, since WDM-KS opens no other stream. The rate is still yours:
+`record` and `Recorder` ask the device for the one they are given, and a
+device that takes only 44.1 kHz refuses 16 kHz with a `DeviceError` from
+`record`. So whenever it matters which input
 records, pass `device`. To see what `StreamRecorder` settled on, call
 `logging.basicConfig(level=logging.INFO)` before creating it; kudio then logs
 the device's index and name and the rate it chose.
@@ -363,20 +361,17 @@ unsupported dtype: float64
 ```
 
 `tone.astype(np.float32)` plays; `file_load` returns float32 already. An array
-goes to sounddevice when it is installed, which plays in the background and
-returns at once, so a script that ends on the next line cuts the sound off;
-`sounddevice.wait()` blocks until it has finished. Without sounddevice the
-array goes through PyAudio, which blocks until the end. Either way a
-`(frames, channels)` array plays on as many channels. With neither installed,
-`play_audio` raises `DependencyError`.
+plays in the background and the call returns at once, so a script that ends on
+the next line cuts the sound off; `sounddevice.wait()` blocks until it has
+finished. A `(frames, channels)` array plays on as many channels. Without
+sounddevice, `play_audio` raises `DependencyError`.
 
 A path is read the way `file_load` reads one, so whatever that opens plays:
 FLAC and FLOAT WAV, and
 [with ffmpeg](audio-files.md#formats-soundfile-does-not-read) m4a and webm. A
 file that cannot be read returns a message, and the reason is logged. An open
-`wave.Wave_read` goes to PyAudio as it is; a 32-bit integer file plays as
-32-bit integers there, although PyAudio would take that sample width for
-float32 left to itself.
+`wave.Wave_read` plays to its end before the call returns, as the integers it
+holds: 8-bit unsigned, 16 and 32 bits as they are, 24 bits in the top of 32.
 
 ## The lower-level pieces
 
@@ -388,22 +383,24 @@ over the network.
 ### Recorder
 
 [`Recorder`][kudio.core.stream.Recorder] is the blocking, fixed-length
-recorder on PyAudio, and it returns int16 rather than float32:
+recorder, and it returns int16 rather than float32:
 
 ```python
 import kudio
 
-with kudio.Recorder(record_times=3, rate=16000) as r:   # PortAudio's default input
+with kudio.Recorder(record_times=3, rate=16000) as r:   # the system's default input
     y = r.start_record()                       # int16, (n,) for mono
     r.save("take.wav")                         # 16-bit WAV; True or False
 ```
 
 It opens the device, rate and channel count it is given, with no fallback: a
 device that refuses them makes
-[`start_record()`][kudio.core.stream.Recorder.start_record] raise PyAudio's
-`OSError`, not `DeviceError`. It reads `frames_per_buffer` (512) samples per
-channel at a time, `int(rate / frames_per_buffer * record_times)` times, so
-three seconds at 16 kHz is 93 reads: 47,616 samples per channel, or 2.976 s.
+[`start_record()`][kudio.core.stream.Recorder.start_record] raise
+sounddevice's `PortAudioError`, not `DeviceError`; a device that stops
+delivering is a `DeviceError` ten seconds after the take should have ended.
+It takes `frames_per_buffer` (512) samples per channel at a time,
+`int(rate / frames_per_buffer * record_times)` times, so three seconds at
+16 kHz is 93 buffers: 47,616 samples per channel, or 2.976 s.
 [`save(resample=...)`][kudio.core.stream.Recorder.save] resamples what was
 captured, channel by channel, so those 2.976 s stay 2.976 s at the new rate
 and every pitch stays where it was. For the array in memory,
@@ -420,8 +417,8 @@ kudio.save_wave("take-8k.wav", y8, 8000)
 ### LocalStreamReader
 
 [`LocalStreamReader`][kudio.core.stream.LocalStreamReader] opens an input
-through PyAudio and hands every chunk to an `AudioBuffer`, to an `on_frame`
-callback, or to both:
+and hands every chunk to an `AudioBuffer`, to an `on_frame` callback, or to
+both:
 
 ```python
 import time
@@ -430,7 +427,7 @@ import numpy as np
 import kudio
 
 chunks = []
-reader = kudio.LocalStreamReader(device=1,          # a PyAudio index
+reader = kudio.LocalStreamReader(device=1,          # from kudio.list_devices()
                                  rate=16000, frame_size=1024,
                                  on_frame=chunks.append)
 if reader.get_status():                        # False: no input would open
@@ -451,9 +448,10 @@ which lets a GUI offer to try again. `stream_start()` or `play_audio()` on
 such a reader raises `DeviceError`.
 
 `on_frame` runs on PortAudio's thread, so store the chunk and return, and do
-the processing elsewhere. kudio catches and logs an exception raised inside
-it, and the stream keeps going. Uncaught, PyAudio would print the traceback
-and abort the stream, so one bad chunk would end the take.
+the processing elsewhere; the chunk is a copy of its own, which it may keep.
+kudio catches and logs an exception raised inside it, and the stream keeps
+going. Uncaught, sounddevice would print the traceback and stop the stream, so
+one bad chunk would end the take.
 
 ### AudioBuffer and FetchBuffer
 
@@ -504,8 +502,8 @@ connection is open, and should stop on the text `stop`, which `terminate()`
 sends before closing. Other commands go out with
 [`sock_send()`][kudio.core.stream.RemoteStreamReader.sock_send], before
 `start()`: once the reader thread runs it reads the same socket, and a reply
-can end up in the buffer as a chunk. `initialize_params` opens PyAudio even
-when nothing is played locally, so this class needs `kudio[audio]` too.
+can end up in the buffer as a chunk. `initialize_params` imports sounddevice
+even when nothing is played locally, so this class needs `kudio[audio]` too.
 
 !!! warning "A chunk in many small packets"
     A chunk that arrives in pieces is put back together: after a short first

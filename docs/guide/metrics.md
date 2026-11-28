@@ -72,14 +72,13 @@ sdr      13.325
 kudio. Each is also a function of its own with the same argument order:
 [`snr`][kudio.core.evaluator.snr], [`si_sdr`][kudio.core.evaluator.si_sdr],
 [`segmental_snr`][kudio.core.evaluator.segmental_snr] and
-[`sdi`][kudio.core.evaluator.sdi]. `stoi`, `estoi` and `sdr` need
-`kudio[eval]`; `pesq` needs `kudio[pesq]` and a rate of 8 or 16 kHz. Name a
+[`sdi`][kudio.core.evaluator.sdi], `stoi`, `estoi` and `sdr`; `pesq` needs
+`kudio[pesq]` and a rate of 8 or 16 kHz. Name a
 metric that cannot run and `score` raises instead of leaving it out: an
 unknown name is a `ValueError`, a missing package a
 [`DependencyError`][kudio.exceptions.DependencyError] that names the extra to
 install.
 
-[Getting started](../getting-started.md) has why mir_eval is pinned below 0.9.
 [`check_metrics_install`][kudio.core.evaluator.check_metrics_install] returns
 `(pesq_ok, stoi_ok, sdr_ok)`, which back-ends this machine has, and logs an
 install hint for each missing one once per process.
@@ -345,7 +344,7 @@ moves with the clip's energy, and 138.9 and 144.9 are the same verdict. The
     Compare `sdi` only with figures computed the way it is.
 
 `stoi`, `estoi`
-:   Short-time objective intelligibility,[^stoi] through `pystoi`. It
+:   Short-time objective intelligibility,[^stoi] pystoi's numbers. It
     compares short-time envelopes in one-third-octave bands after resampling
     both signals to 10 kHz and dropping silent frames, so gain, polarity and
     a millisecond of delay barely move it, while noise does. It forgives
@@ -358,7 +357,7 @@ moves with the clip's energy, and 138.9 and 144.9 are the same verdict. The
     warning, and `AudioEvaluate` leaves it out of the mean.
 
 `sdr`
-:   The SDR of BSS Eval,[^bss] through `mir_eval`. It fits the best 512-tap
+:   The SDR of BSS Eval,[^bss] mir_eval's numbers to the bit. It fits the best 512-tap
     filter from the reference to the output (512 is mir_eval's length; the
     paper leaves it open) and counts as distortion only
     what that filter cannot produce. Gain, polarity, a low-pass and a late
@@ -812,8 +811,7 @@ that of the mixture it came from, and SDRi, the same with BSS Eval's
 SDR.[^convtasnet]
 [`si_sdr_improvement`][kudio.core.separation.si_sdr_improvement] and
 [`sdr_improvement`][kudio.core.separation.sdr_improvement] take the
-reference, the output and the input; the second needs mir_eval
-(`kudio[eval]`), as `sdr` in `score` does.
+reference, the output and the input; neither needs a package.
 
 ```python
 print(f"{kudio.si_sdr_improvement(clean, enhanced, noisy):.2f}")

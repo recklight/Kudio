@@ -102,6 +102,8 @@ REFUSED = {
     'bandstop': (lambda: kudio.bandstop(one_bad(VOICE), SR), r"bandstop\(\) got 1 sample\(s\)"),                          # all NaN
     'wavelet': (lambda: kudio.wavelet_low_pass_filter(one_bad(VOICE)), r"wavelet_low_pass_filter\(\) got 1 sample\(s\)"),  # all NaN
     'wavelet thres': (lambda: kudio.wavelet_low_pass_filter(VOICE, thres=NAN), r"wavelet_low_pass_filter\(\): thres .*, got nan"),   # the clip as it was
+    'wavelet of no name, silent clip': (lambda: kudio.wavelet_low_pass_filter(np.zeros(SR), wavelet='db39'), r"wavelet_low_pass_filter\(\): wavelet 'db39' is not a discrete wavelet"),   # the clip as it was
+    'wavelet of no name, no threshold': (lambda: kudio.wavelet_low_pass_filter(VOICE, thres=0, wavelet='morl'), r"wavelet_low_pass_filter\(\): wavelet 'morl' is not a discrete wavelet"),   # the clip as it was
     'trad_enhance': (lambda: kudio.trad_enhance(one_bad(VOICE), SR), r"trad_enhance\(\) got 1 sample\(s\)"),              # NaN to the end
     'mu_law': (lambda: kudio.mu_law(one_bad(VOICE, INF)), r"mu_law\(\) got 1 sample\(s\) that are not finite"),           # 1.0
     'a_law': (lambda: kudio.a_law(one_bad(VOICE)), r"a_law\(\) got 1 sample\(s\) that are not finite"),                   # NaN
@@ -471,12 +473,12 @@ def test_a_take_that_is_none_is_not_recorded(monkeypatch, given, said):
     (kudio.StreamRecorder, dict(sr=-1), "sr must be a positive whole rate"),
     (kudio.StreamRecorder, dict(max_seconds=0), r"StreamRecorder\(\): max_seconds .* above 0, got 0")])
 def test_a_stream_that_is_none_is_not_opened(monkeypatch, make, given, said):
-    from kudio.core import stream
+    from kudio.util import check
 
     def opened():
         pytest.fail("the device was asked")
 
-    monkeypatch.setattr(stream, "_pyaudio", opened)
+    monkeypatch.setattr(check, "_sounddevice", opened)
     with pytest.raises(ValueError, match=said):
         make(**given)
 

@@ -30,12 +30,13 @@ def _path(*folders) -> str:
     return os.pathsep.join([str(f) for f in folders] + ([there] if there else []))
 
 #: put in sys.modules as None before kudio is imported, which makes importing
-#: any of them fail the way a missing package does: kudio's extras, and librosa, which
-#: the tests that compare with it may have brought, with what comes with it
+#: any of them fail the way a missing package does: kudio's extras, and librosa and
+#: PyWavelets, which the tests that compare with them may have brought, with what
+#: comes with librosa
 BLOCKED = ('audioread', 'pesq', 'pystoi', 'mir_eval', 'pandas', 'openpyxl', 'matplotlib',
            'onnxruntime', 'pyaudio', 'sounddevice', 'pyloudnorm', 'librosa', 'numba',
            'llvmlite', 'sklearn', 'joblib', 'pooch', 'lazy_loader', 'msgpack', 'decorator',
-           'resampy', 'samplerate')
+           'resampy', 'samplerate', 'pywt')
 
 #: every module a metric lives in; each has to import with BLOCKED missing
 MODULES = ('kudio', 'kudio.core.evaluator', 'kudio.core.quality', 'kudio.core.srmr',
@@ -85,6 +86,8 @@ SCORES = {
     'eer': 'kudio.eer(np.r_[0.1, 0.4, 0.35, 0.8], np.r_[0, 0, 1, 1])',
     'min_dcf': 'kudio.min_dcf(np.r_[0.1, 0.4, 0.35, 0.8], np.r_[0, 0, 1, 1], p_target=0.01)',
     'si_sdr_improvement': 'kudio.si_sdr_improvement(ref, deg, ref + 2.0 * (deg - ref))',
+    'sdr_improvement': 'kudio.sdr_improvement(ref, deg, ref + 2.0 * (deg - ref))',
+    'bss_eval': 'kudio.bss_eval([ref], [deg]).sdr[0]',
     'cllr': 'kudio.cllr(np.r_[-2.0, 0.5, 1.0, 3.0], np.r_[0, 0, 1, 1])',
     'min_cllr': 'kudio.min_cllr(np.r_[0.1, 0.4, 0.35, 0.8], np.r_[0, 0, 1, 1])',
     'act_dcf': 'kudio.act_dcf(np.r_[-6.0, 5.0, 4.0, 6.0], np.r_[0, 0, 1, 1], p_target=0.01)',
@@ -264,8 +267,7 @@ REST = {
 
 #: what runs nothing here, and why
 NOT_RUN = {
-    'a package of its own': ('pesq', 'sdr_improvement', 'bss_eval',
-                             'dnsmos', 'dnsmos_p808', 'find_dnsmos_model'),
+    'a package of its own': ('pesq', 'dnsmos', 'dnsmos_p808', 'find_dnsmos_model'),
     'a sound device': ('is_available', 'list_devices', 'check_device', 'play_audio', 'record'),
     'another name, with a warning, for one that is run': (
         'w2s', 'f2s', 's2w', 'wav2spec', 'spec2wav', 'wavform2spec', 'spec2wavform', 'wav2mel',
