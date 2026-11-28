@@ -157,8 +157,8 @@ def test_file_load_reads_it_with_and_without_a_rate(tmp_path, audioread, sr, cha
 
 
 def test_every_other_reader_takes_it_too(tmp_path, audioread, played):
-    """file_load opened an m4a at a rate and nothing else did: not without the
-    rate, not audio_info, not play_audio."""
+    """What file_load opens at a rate it opens without one too, and so do
+    audio_info and play_audio."""
     pcm = _tone(44100, 2)
     expected = pcm.astype(np.float32) / 32768
     path = _encoded(tmp_path)

@@ -126,9 +126,9 @@ Without that share, four workers on a 20-thread CPU each start 20: SDR of
 with four workers of 5 threads. The rows come back in the order of
 the items. For a given number of BLAS threads they hold the same numbers as
 one process, to the last bit; across thread counts the dot products of
-SI-SDR and SDR can differ by about 1e-14. I seed numpy's global generator
-with 0 before each side of each item and put its state back afterwards, so
-an item scores the same in any process and in any order. A script that passes *jobs* above 1 needs the
+SI-SDR and SDR can differ by about 1e-14. No metric draws a random number,
+so an item scores the same in any process and in any order. A script that
+passes *jobs* above 1 needs the
 ``if __name__ == '__main__':`` guard any spawned pool needs.
 """
 from __future__ import annotations
@@ -733,7 +733,6 @@ def _free_side(deg: np.ndarray, plan: _Plan, side: _Side) -> None:
 def _score_side(ref: Optional[np.ndarray], ref_error: Optional[str], path: str,
                 plan: _Plan, label: str) -> Dict[str, Any]:
     side = _Side()
-    np.random.seed(0)
     deg, error, said = _load(path, plan, label)
     side.notes.extend(said)
     free_columns = [c for m in plan.free for c in _columns(m)]
@@ -755,17 +754,13 @@ def _score_item(task: Tuple[str, Optional[str], str, Optional[str], _Plan]
     """Every metric of one item, on each side; a top-level function, so that
     a spawned worker can import it."""
     key, ref_path, deg_path, base_path, plan = task
-    state = np.random.get_state()
-    try:
-        ref, ref_error, ref_notes = None, None, []
-        if plan.reference:
-            ref, ref_error, ref_notes = _load(ref_path, plan, 'ref')
-        scored = {'deg': _score_side(ref, ref_error, deg_path, plan, 'deg')}
-        scored['deg']['notes'] = list(dict.fromkeys(ref_notes + scored['deg']['notes']))
-        if base_path is not None:
-            scored['baseline'] = _score_side(ref, ref_error, base_path, plan, 'baseline')
-    finally:
-        np.random.set_state(state)
+    ref, ref_error, ref_notes = None, None, []
+    if plan.reference:
+        ref, ref_error, ref_notes = _load(ref_path, plan, 'ref')
+    scored = {'deg': _score_side(ref, ref_error, deg_path, plan, 'deg')}
+    scored['deg']['notes'] = list(dict.fromkeys(ref_notes + scored['deg']['notes']))
+    if base_path is not None:
+        scored['baseline'] = _score_side(ref, ref_error, base_path, plan, 'baseline')
     return scored
 
 

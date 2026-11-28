@@ -341,7 +341,7 @@ def _takes_an_array():
             else:
                 members = [(name, found)]
             for called, function in members:
-                # what is wrapped is an old name for a function listed here
+                # a wrapper is left out
                 if inspect.isfunction(function) and not hasattr(function, '__wrapped__') and any(
                         'ndarray' in str(p.annotation)
                         for p in inspect.signature(function).parameters.values()):
@@ -485,8 +485,8 @@ def test_a_callback_of_convert_folder_is_held_to_the_layout(tmp_path):
     'reverse', 'Alignment.apply', 'wave_slicing')])          # they only move samples about
 def test_64_bit_integers_are_refused(name):
     """astype(int) and a list of ints give them, and 16-bit samples read on
-    their scale are 288 dB down: vad found no speech in them, loudness
-    measured -inf, and mu_law came back all zeros."""
+    their scale are 288 dB down: vad would find no speech in them, loudness
+    would measure -inf, and mu_law would return zeros."""
     for kind in (np.int64, np.uint64):
         with pytest.raises(ValueError, match=r"^[A-Za-z_0-9.]+\(\): the samples are u?int64, and "
                                              r"no audio file holds 64-bit integers"):

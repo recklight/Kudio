@@ -202,7 +202,7 @@ def test_stereo_comes_back_channels_last_on_both_paths(tmp_path):
         assert abs(peaks[0] - 220) < 5
 
 
-def test_mono_downmix_is_unaffected_by_the_layout_fix(tmp_path):
+def test_mono_downmix_does_not_depend_on_the_layout(tmp_path):
     import numpy as np
     import soundfile as sf
     from kudio import file_load
@@ -392,8 +392,8 @@ def _two_talkers(tmp_path, sine):
 
 
 def test_convert_folder_mirrors_a_list_below_what_it_shares(tmp_path, sine):
-    """A list used to land flat, so two talkers' sx133 collided and the second
-    was renamed sx1332 -- which reads like another sentence."""
+    """A list landing flat would make two talkers' sx133 collide and the second
+    come out as sx1332 -- which reads like another sentence."""
     files = _two_talkers(tmp_path, sine)
     result = kudio.convert_folder(files, tmp_path / "out")
     assert sorted(p.relative_to(tmp_path / "out").as_posix()
@@ -423,9 +423,9 @@ def test_convert_folder_of_files_in_one_folder_stays_flat(wav_dir, tmp_path):
 def test_check_file_never_hands_back_an_occupied_name(tmp_path, sine):
     """A dotted name is a name, not a name plus an extension.
 
-    Numbering 'take.v2.wav' through ``with_suffix`` produced 'take.wav' -- the
-    file belonging to the take next to it -- and the caller then wrote over it
-    in the one mode that exists to leave existing files alone.
+    Numbered through ``with_suffix``, 'take.v2.wav' would become 'take.wav' --
+    the file belonging to the take next to it -- and the caller would write over
+    it in the one mode that exists to leave existing files alone.
     """
     save_wave(tmp_path / "take.wav", sine, 16000)
     save_wave(tmp_path / "take.v2.wav", sine, 16000)
@@ -434,7 +434,7 @@ def test_check_file_never_hands_back_an_occupied_name(tmp_path, sine):
 
     assert not chosen.exists(), "the name handed back has to be free"
     assert chosen != tmp_path / "take.wav", "that file is another recording"
-    assert chosen.name.startswith("take.v2"), "and it should still be this one"
+    assert chosen.name.startswith("take.v2"), "and it has to be this one's name"
 
 
 def test_check_file_logs_the_name_it_actually_chose(tmp_path, sine, caplog):
@@ -461,8 +461,8 @@ def test_convert_folder_without_overwrite_leaves_the_existing_files_alone(tmp_pa
     """The whole point of ``overwrite=False``: nothing already there is lost.
 
     Two takes whose names differ only by a dotted part, converted into a
-    folder that already holds both, used to end with the second one's audio
-    under the first one's name.
+    folder that already holds both, must not end with the second one's
+    audio under the first one's name.
     """
     from conftest import make_sine
 
@@ -491,8 +491,7 @@ def _write_non_finite(path, bad=np.nan, count=10, sr=16000):
     """A one-second 220 Hz tone at 0.3 with *count* samples replaced by *bad*.
 
     Written straight through soundfile: ``save_wave`` refuses it, which is the
-    point, and files like this one are what kudio 3.7.0 and earlier left on
-    disk.
+    point, and such files are on disks all the same.
     """
     y = 0.3 * np.sin(2 * np.pi * 220 * np.arange(sr) / sr)
     y[1000:1000 + count] = bad
@@ -542,7 +541,7 @@ def test_file_load_says_so_when_a_file_holds_nan(tmp_path):
 
 def test_audio_info_does_not_report_a_nan_file_as_silent(tmp_path):
     """``max(0.0, nan)`` keeps the 0.0, so the peak of a 0.3 tone with ten NaN
-    samples in it was reported as digital silence."""
+    samples in it would read as digital silence."""
     path = tmp_path / "take.wav"
     _write_non_finite(path)
 
@@ -621,8 +620,8 @@ NEVER = [(8000, 16000), (16000, 8000), (48000, 44100), (44100, 16000), (16000, 4
 @pytest.mark.parametrize("orig_sr, target_sr", ONE_TOO_MANY + NEVER)
 @pytest.mark.parametrize("res_type", ['soxr_hq', 'soxr_qq', 'fft', 'polyphase'])
 def test_a_second_is_a_second_at_the_other_rate(res_type, orig_sr, target_sr):
-    """A second of 44.1 kHz came back as 48001 samples at 48 kHz: the last one
-    zero, or with the Fourier method the whole second drawn out by it."""
+    """A second of 44.1 kHz is 48000 samples at 48 kHz, not 48001 with the last
+    one zero, or with the Fourier method the whole second drawn out by one."""
     y = (0.5 * np.sin(2 * np.pi * 1000.0 * np.arange(orig_sr) / orig_sr)).astype(np.float32)
     out = kudio.resample(y, orig_sr, target_sr, res_type=res_type)
     assert out.shape == (target_sr,)
@@ -734,8 +733,8 @@ def test_save_wave_resamples_a_stereo_clip_along_its_frames(tmp_path):
     (np.uint8, 128, 0.0),
 ])
 def test_save_wave_scales_each_integer_type_by_its_own_full_scale(tmp_path, dtype, value, expected):
-    """Every integer type used to be divided by 32768: half-scale int32 came
-    out clipped at full scale and uint8 200 as 0.006."""
+    """Divided by 32768 whatever its type, half-scale int32 would come out
+    clipped at full scale and uint8 200 as 0.006."""
     path = tmp_path / "int.wav"
     save_wave(path, np.full(100, value, dtype=dtype), 16000, subtype='FLOAT')
     y, _ = sf.read(str(path))
@@ -744,8 +743,8 @@ def test_save_wave_scales_each_integer_type_by_its_own_full_scale(tmp_path, dtyp
 
 @pytest.mark.parametrize("subtype, bits", [("PCM_24", 24), ("PCM_U8", 8), ("PCM_32", 32)])
 def test_every_pcm_width_is_rounded_not_floored(tmp_path, subtype, bits):
-    """Only PCM_16 used to be rounded here; PCM_24 and PCM_U8 went through
-    libsndfile's flooring and averaged a third and a half of a step low."""
+    """Left to libsndfile's flooring, PCM_24 and PCM_U8 would average a third
+    and a half of a step low."""
     # float32, which is what save_wave works in below DOUBLE
     y = np.random.default_rng(0).uniform(-0.9, 0.9, 20000).astype(np.float32)
     path = tmp_path / f"{subtype}.wav"
@@ -852,8 +851,8 @@ def test_audio_info_treats_an_array_like_a_file():
 
 # -- names with brackets, and every folder reader alike ------------------------
 def test_check_path_lists_rather_than_globs(tmp_path):
-    """[1] is a glob character class: runs/exp[1] could not see its own
-    runs/exp[1]2 and handed that folder back as if it were free."""
+    """[1] is a glob character class: globbed, runs/exp[1] would not see its own
+    runs/exp[1]2 and would hand that folder back as if it were free."""
     (tmp_path / "exp[1]").mkdir()
     (tmp_path / "exp[1]2").mkdir()
     free = Path(check_path(tmp_path / "exp[1]"))
@@ -900,8 +899,9 @@ REFUSED = [(name, value) for name, (_, _, optional, whole) in RATED.items()
 @pytest.mark.parametrize("name, value", [
     pytest.param(n, v, id=f"{n}-{v!r}") for n, v in REFUSED])
 def test_what_is_not_a_rate_is_refused(wav_file, sine, tmp_path, name, value):
-    """True went in as 1 Hz and came back as 1 sample a second, 16000.5 came
-    back labelled 16000, and nan and inf were blamed on the file."""
+    """Unchecked, True would go in as 1 Hz and come back as 1 sample a second,
+    16000.5 would come back labelled 16000, and nan and inf would be blamed on
+    the file."""
     call, argument, optional, whole = RATED[name]
     out = tmp_path / "out"
     with warnings.catch_warnings():

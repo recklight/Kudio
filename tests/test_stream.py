@@ -225,7 +225,7 @@ def test_a_raising_callback_does_not_kill_the_audio_thread():
 
 
 def test_no_playback_backend_is_a_dependency_error(monkeypatch):
-    """A plain ImportError used to escape `except kudio.KudioError`."""
+    """A plain ImportError would escape `except kudio.KudioError`."""
     import builtins
     import kudio
     real_import = builtins.__import__
@@ -328,7 +328,7 @@ def test_input_device_without_a_microphone_is_a_device_error():
     from kudio.exceptions import DeviceError
     with pytest.raises(DeviceError, match="No microphone") as caught:
         check.input_device()
-    # still what code catching the old RuntimeError expects
+    # and a RuntimeError, for code that catches that
     assert isinstance(caught.value, RuntimeError)
 
 
@@ -598,6 +598,25 @@ def test_recorder_says_what_the_device_did_not_give(card, monkeypatch):
                         frames_per_buffer=400) as r:
         with pytest.raises(kudio.DeviceError, match="the device gave 400 of 1600 frames"):
             r.start_record()
+
+
+@pytest.mark.parametrize("why", ["refused", "dead"])
+def test_recorder_names_the_device_and_the_rate_it_does_not_record_at(card, why):
+    """As record() says it: a rate the device does not take, or a device that opens
+    and does not start, is a DeviceError with the device and the rate, the error of
+    sounddevice as its cause, and no stream left open."""
+    if why == "refused":
+        card.refuse = {16000}
+    else:
+        card.dead = {2}
+    with kudio.Recorder(device=2, record_times=0.1, rate=16000) as r:
+        with pytest.raises(kudio.DeviceError, match=r"^Recorder: device 2 did not record at "
+                                                    r"16000 Hz: .+; `kudio devices` lists the "
+                                                    r"devices, and device= picks one$") as caught:
+            r.start_record()
+        assert isinstance(caught.value.__cause__, card.PortAudioError)
+        assert r.stream is None
+    assert all(s.closed for s in card.opened if s.kind == 'RawInputStream')
 
 
 @pytest.mark.parametrize("width", [1, 2, 3, 4])

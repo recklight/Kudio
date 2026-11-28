@@ -640,7 +640,7 @@ def test_a_rate_that_is_not_a_whole_number_is_refused(measure, sr):
                                       (3999, '3999')])
 def test_a_rate_in_khz_or_under_4000_hz_is_refused(measure, sr, said, monkeypatch):
     """Taken for a rate in kHz, and refused before anything is resampled:
-    a rate of 1 was taken up 16000 times and filled the memory."""
+    taken up 16000 times, a rate of 1 would fill the memory."""
     def no_resampling(*args, **kwargs):
         raise AssertionError("resampled a rate it should have refused")
 

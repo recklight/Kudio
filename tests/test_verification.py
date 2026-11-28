@@ -737,7 +737,7 @@ def test_the_docstring_examples_run():
                          ids=['eer', 'det_curve', 'min_dcf'])
 @pytest.mark.parametrize("side", ['scores', 'labels'])
 def test_a_masked_array_with_masked_trials_is_refused(fn, side):
-    """np.asarray drops the mask: a trial masked out of the scores used to be
+    """np.asarray drops the mask: a trial masked out of the scores would be
     counted at the value under the mask: an EER of 0.5 here, where the
     list without it has 0."""
     scores = [0.9, 0.8, 0.1, 0.95]

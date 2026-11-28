@@ -5,7 +5,7 @@
 for a microphone: you cannot monitor a take through a denoiser that only runs
 once the take is over.
 
-Everything needed was already recursive. The decision-directed a priori SNR
+Everything needed is recursive. The decision-directed a priori SNR
 feeds the previous frame's estimate into this one, and MCRA updates its noise
 estimate a frame at a time — both are *state plus an update*, and
 :class:`StreamEnhancer` is the overlap-add machinery around them. It shares
@@ -221,7 +221,7 @@ class StreamEnhancer:
         self._norm[:] = 0.0
         out = self._emit()
         # what lies past the last input sample came out of the zero padding;
-        # left on, 16000 samples in came back as 16383
+        # left on, 16000 samples in would come back as 16383
         extra = self._samples_out - self._samples_in
         if extra > 0:
             out = out[:len(out) - extra]

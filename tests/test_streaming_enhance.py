@@ -77,7 +77,7 @@ def test_nothing_comes_out_before_a_whole_frame_has_arrived():
 
 
 def test_the_total_length_is_the_input_length(noisy_and_clean):
-    """flush() used to hand back the zero padding too: 16000 in, 16383 out."""
+    """flush() hands back no zero padding: 16000 in is 16000 out, not 16383."""
     noisy, _ = noisy_and_clean
     for n in (len(noisy), SR, SR + 77, 100):
         assert len(stream(noisy[:n], method='logmmse')) == n
@@ -227,7 +227,7 @@ def test_make_gain_rule_refuses_a_non_recursive_method():
 
 
 def test_a_stereo_block_is_refused():
-    """reshape(-1) used to read it as one interleaved signal."""
+    """reshape(-1) would read it as one interleaved signal."""
     enhancer = kudio.StreamEnhancer(16000)
     with pytest.raises(FeatureError, match="mono"):
         enhancer.process(np.zeros((1024, 2)))
@@ -235,8 +235,9 @@ def test_a_stereo_block_is_refused():
 
 @pytest.mark.parametrize("bad", [np.nan, np.inf])
 def test_a_block_that_is_not_finite_is_refused_and_forgotten(noisy_and_clean, bad):
-    """One NaN reached the noise estimate, and every block after it was NaN until
-    the next reset(). Refused, the stream goes on from where it was."""
+    """Let through, one NaN would reach the noise estimate, and every block after
+    it would be NaN until the next reset(). Refused, the stream goes on from
+    where it was."""
     noisy = np.asarray(noisy_and_clean[0], dtype=np.float32)[:16000]
     through = kudio.StreamEnhancer(SR)
     plain = [through.process(noisy[:8000]), through.process(noisy[8000:]), through.flush()]

@@ -102,8 +102,8 @@ def test_something_that_is_not_an_impulse_response_is_not_believed(label, signal
 
 
 def test_the_straightness_alone_is_not_enough():
-    """Stated as its own test because it was a real miss: an R² threshold by
-    itself passes the speech fixture."""
+    """Stated as its own test: an R² threshold by itself passes the speech
+    fixture."""
     room = kudio.rt60(make_speech(), SR)
     assert room.fit > 0.9, "the line really does fit"
     assert room.edt / room.t30 > 5, "and the two spans really do disagree"

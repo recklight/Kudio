@@ -25,7 +25,6 @@ MARKER = "<!-- kudio:top-level-index -->"
 _IDENT = re.compile(r"^:::\s+(kudio[\w.]*)\s*$", re.M)
 _TITLE = re.compile(r"^#\s+(.+)$", re.M)
 _ROLE = re.compile(r":(?:func|class|meth|attr|data|mod|exc|obj):`~?([^`]+)`")
-_DEPRECATED = "Deprecated alias for"
 
 
 def _summary(obj) -> str:
@@ -98,22 +97,10 @@ def _overview(config, language: str = "en") -> str:
             home[module] = n
 
     rows: List[List[str]] = [[] for _ in sections]
-    old_names: List[str] = []
     for name in sorted(kudio.__all__, key=str.lower):
         if name.startswith("__"):
             continue
         obj = getattr(kudio, name)
-        if (inspect.isfunction(obj) or inspect.isclass(obj)) \
-                and (inspect.getdoc(obj) or "").startswith(_DEPRECATED):
-            new = obj.__wrapped__
-            # the name the docstring gives, `kudio.util.red` for one that only
-            # moved; and, as below, the module when the new one has no anchor
-            shown = _ROLE.search(inspect.getdoc(obj))
-            shown = shown.group(1) if shown else new.__name__
-            target = f"{new.__module__}.{new.__qualname__}" if inspect.getdoc(new) \
-                else new.__module__
-            old_names.append(f"| `{name}` | [`{shown}`][{target}] |")
-            continue
         if inspect.isfunction(obj) or inspect.isclass(obj):
             module = obj.__module__
             # an object with no docstring gets no anchor of its own in the
@@ -150,9 +137,6 @@ def _overview(config, language: str = "en") -> str:
                 words["full"].format(title=shown, page=Path(page).name), "",
                 words["head"], "|---|---|---|",
                 *(_KIND.sub(lambda m: words[m.group(1)], line) for line in lines), ""]
-    if old_names:
-        out += [words["old"], "", words["old_text"], "",
-                words["old_head"], "|---|---|", *old_names, ""]
     return "\n".join(out)
 
 
@@ -163,19 +147,11 @@ _WORDS = {
         "full": "Documented in full on [{title}]({page}).",
         "head": "| Name | Kind | What it does |",
         "function": "function", "class": "class", "constant": "constant",
-        "old": "## Old names",
-        "old_text": "Still importable, but each call warns and points at the new "
-                    "name. They will be removed in a future release.",
-        "old_head": "| Old name | Use instead |",
     },
     "zh-TW": {
         "full": "完整說明在[{title}]({page})。",
         "head": "| 名稱 | 種類 | 用途（取自 docstring） |",
         "function": "函式", "class": "類別", "constant": "常數",
-        "old": "## 舊名稱 {#old-names}",
-        "old_text": "這些名稱還能匯入，但每次呼叫都會發出警告，並指出新名稱。"
-                    "之後的版本會把它們移除。",
-        "old_head": "| 舊名稱 | 新名稱 |",
     },
 }
 #: The kind cell of a generated row, as written before it is translated.

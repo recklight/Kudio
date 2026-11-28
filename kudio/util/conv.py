@@ -6,7 +6,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, List, Optional, Union
 
-from kudio._deprecation import alias
 from kudio.exceptions import DependencyError
 
 if TYPE_CHECKING:
@@ -15,7 +14,6 @@ if TYPE_CHECKING:
 __all__ = [
     'data2xlsx',
     'lowercase',
-    'upercase',
     'uppercase',
 ]
 
@@ -53,7 +51,7 @@ def data2xlsx(data: Union[dict, pd.DataFrame], xlsx_dir: Union[str, Path],
     xlsx_dir = Path(xlsx_dir)
     xlsx_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    # one writer for both cases: a new file used to skip fit_column entirely
+    # one writer for both cases, so a new file goes through fit_column too
     append = xlsx_dir.is_file()
     with pd.ExcelWriter(xlsx_dir, engine='openpyxl', mode='a' if append else 'w',
                         **({'if_sheet_exists': 'replace'} if append else {})) as writer:
@@ -78,6 +76,3 @@ def uppercase(lst: Iterable) -> List[str]:
     """The strings in *lst*, upper-cased. Anything that is not a string is
     left out."""
     return [_.upper() for _ in lst if isinstance(_, str)]
-
-
-upercase = alias(uppercase, 'upercase', old_prefix='kudio.util')  # the misspelling

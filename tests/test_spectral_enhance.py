@@ -488,8 +488,8 @@ def test_enhance_folder_rejects_an_unknown_method(noisy_folder, tmp_path):
 ])
 def test_enhance_folder_checks_the_noise_settings_before_the_first_file(
         noisy_folder, tmp_path, settings, words):
-    """One error about the typo, where it was "0/3 written, 3 failed" with the
-    same sentence on every file."""
+    """One error about the typo, not "0/3 written, 3 failed" with the same
+    sentence on every file."""
     out = tmp_path / "out"
     with pytest.raises(FeatureError) as caught:
         kudio.enhance_folder(noisy_folder, out, **settings)
@@ -564,8 +564,8 @@ def test_a_custom_enhancer_that_raises_is_a_row(noisy_and_clean):
 
 def test_an_output_the_length_check_refuses_is_a_row(noisy_and_clean):
     """A third of the clip back is past MAX_LENGTH_MISMATCH against the
-    reference. That is this run's failure, in the check's own words; it
-    raised out of compare_enhancers and the rows either side were lost."""
+    reference. That is this run's failure, in the check's own words; raised
+    out of compare_enhancers, it would lose the rows either side."""
     noisy, clean = noisy_and_clean
     results = kudio.compare_enhancers(
         noisy, SR, ['wiener', ('third', lambda y, sr: y[:len(y) // 3]), 'logmmse'],
@@ -760,7 +760,7 @@ def test_the_mask_is_smoothed_by_the_same_box_on_a_short_clip():
 def test_the_result_is_never_louder_than_the_clip(noisy_and_clean, window, hop):
     """Every gain is at most 1. What a gain leaves at the edge of a frame is
     divided by the windows that overlap there, and with nearly none of them
-    0.4 went to 18, or to 40 where a single frame reaches the last sample. A
+    0.4 would go to 18, or to 40 where a single frame reaches the last sample. A
     hop is either refused or leaves the clip no louder."""
     noisy, _ = noisy_and_clean
     quiet = 0.4 * noisy[:SR]

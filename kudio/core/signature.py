@@ -13,9 +13,9 @@ sacreBLEU, which prints with every score a short string that names the
 settings behind it. :func:`signature` is that string for kudio's metrics::
 
     >>> kudio.signature(['pesq'], 16000)                    # doctest: +SKIP
-    'kudio:4.0.0|sr:16000|pair:aligned=no,whole=pesq|pesq:mode=wb,scale=lqo|pkg:pesq=0.0.4'
+    'kudio:5.0.0|sr:16000|pair:aligned=no,whole=pesq|pesq:mode=wb,scale=lqo|pkg:pesq=0.0.4'
     >>> kudio.signature({'eer': {}, 'min_dcf': {'p_target': 0.01}})  # doctest: +SKIP
-    'kudio:4.0.0|eer:method=linear|min_dcf:p_target=0.01,c_miss=1.0,c_fa=1.0'
+    'kudio:5.0.0|eer:method=linear|min_dcf:p_target=0.01,c_miss=1.0,c_fa=1.0'
 
 It goes under the table, or in a footnote, and :func:`parse_signature` reads
 it back into a dict, so two of them can be compared field by field.
@@ -825,8 +825,8 @@ def signature(metrics: Union[str, Iterable[str], Mapping[str, Optional[Mapping[s
         it out from *metrics*, as :func:`kudio.score` runs them together.
         Pass it when the line names some of the metrics that ran on the same
         pairs: :func:`kudio.score_dataset` signs a column that lost items on
-        a line of its own, and PESQ there still had its pairs checked for
-        length, because the other metrics of the run cut them.
+        a line of its own, and PESQ there has its pairs checked for length
+        all the same, because the other metrics of the run cut them.
     :param resampled: whether files not at *sr* were brought to it with
         :func:`kudio.resample` as they were read, which then names its
         method and the packages that ran it.
@@ -919,9 +919,9 @@ def _format(fields: Mapping[str, Union[str, Mapping[str, str]]]) -> str:
 def parse_signature(text: str) -> Dict[str, Union[str, Dict[str, str]]]:
     """A signature read back: ``{field: value}`` in the order written.
 
-    >>> text = 'kudio:4.0.0|sr:16000|pesq:mode=wb,scale=lqo|stoi'
+    >>> text = 'kudio:5.0.0|sr:16000|pesq:mode=wb,scale=lqo|stoi'
     >>> kudio.parse_signature(text)                          # doctest: +SKIP
-    {'kudio': '4.0.0', 'sr': '16000', 'pesq': {'mode': 'wb', 'scale': 'lqo'}, 'stoi': {}}
+    {'kudio': '5.0.0', 'sr': '16000', 'pesq': {'mode': 'wb', 'scale': 'lqo'}, 'stoi': {}}
 
     A field with settings is a dict of them, a field with one value is that
     value, and a metric with no settings is an empty dict. Every value stays

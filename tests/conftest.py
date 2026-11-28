@@ -16,10 +16,10 @@ def make_sine(freq: float = 440.0, seconds: float = 1.0, sr: int = SR) -> np.nda
 def write_wav(path, wave: np.ndarray, sr: int = SR) -> None:
     """Write a fixture through the library's own writer.
 
-    This used to be ``(wave * iinfo(int16).max).astype(int16)`` -- the exact
-    wrap-around 3.7.0 fixed in `Synthesizer`. The shared noise fixture peaks at
-    1.207, so twelve of its samples came back with the sign flipped, and every
-    test that mixed against it was mixing against clicks it did not ask for.
+    Not ``(wave * iinfo(int16).max).astype(int16)``: the shared noise fixture
+    peaks at 1.207, so that cast would flip the sign of twelve of its samples,
+    and every test that mixed against it would be mixing against clicks it did
+    not ask for.
     """
     from kudio import save_wave
     save_wave(path, wave, sr)

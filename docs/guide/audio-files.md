@@ -1,34 +1,10 @@
 # Audio files
 
-The functions on this page read and write through
+Every waveform kudio loads is a float32 NumPy array in which ±1.0 is full
+scale: 1-D for mono, `(frames, channels)` for more channels. Files go through
 [soundfile](https://python-soundfile.readthedocs.io/), with ffmpeg for
-[what it does not read](#formats-soundfile-does-not-read), and every waveform
-they load is a float32 NumPy array in which ±1.0 is full scale. Mono audio is a 1-D
-array. Anything with more channels is shaped `(frames, channels)`, a frame
-being one sample from every channel: soundfile's layout, and the one
-[`loudness`][kudio.core.loudness.loudness] expects.
-
-| To | Use |
-|---|---|
-| learn a file's rate, length and peak without loading it into memory | [`audio_info`][kudio.core.io.audio_info] |
-| load one file | [`file_load`][kudio.core.io.file_load] |
-| write an array | [`save_wave`][kudio.core.io.save_wave] |
-| change the rate of audio already in memory | [`resample`][kudio.core.io.resample] |
-| gather `.wav` files from folders, lists and `.txt` files | [`check_input`][kudio.core.io.check_input] |
-| load or copy many files at once | [`load_waves`][kudio.core.io.load_waves], [`copy_waves`][kudio.core.io.copy_waves] |
-| resample, re-encode, trim or normalise a whole tree | [`convert_folder`][kudio.core.io.convert_folder] |
-| get a file or folder name that is not taken | [`check_file`][kudio.core.io.check_file], [`check_path`][kudio.core.io.check_path] |
-
-A problem with the samples themselves, such as a file with NaN in it, comes as
-a Python warning, which shows without any setup. Housekeeping is logged
-instead: a name about to be overwritten, an entry that is not a `.wav` file, a
-destination that is not a folder. kudio prints nothing it logs until your
-program configures logging, so switch it on before batch work;
-`logging.basicConfig(level=logging.WARNING)` is enough
-([Getting started](../getting-started.md)).
-
-The examples assume `import kudio` and a folder holding the files this script
-makes. Run it in an empty folder.
+[what it does not read](#formats-soundfile-does-not-read). The examples read
+the files this block makes; run it in an empty folder.
 
 ??? example "Making the files the examples read"
 
@@ -39,38 +15,22 @@ makes. Run it in an empty folder.
 
     import kudio
 
-    rng = np.random.default_rng(17)
-
 
     def tone(freq, seconds, sr=16000, amp=0.3):
         t = np.arange(int(seconds * sr)) / sr
-        tremolo = 0.6 + 0.4 * np.sin(2 * np.pi * 3 * t)
-        y = amp * np.sin(2 * np.pi * freq * t) * tremolo
-        return (y + 0.005 * rng.standard_normal(len(t))).astype(np.float32)
+        return (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
 
 
     kudio.save_wave("clip.wav", tone(220, 3.5, amp=0.45), 16000)
-    t = np.arange(16000) / 16000
-    left, right = 0.5 * np.sin(2 * np.pi * 220 * t), 0.5 * np.sin(2 * np.pi * 880 * t)
-    kudio.save_wave("stereo.wav", np.stack([left, right], axis=1), 16000)
-    pad = np.zeros(22050, np.float32)                 # half a second at 44.1 kHz
+    kudio.save_wave("stereo.wav", np.stack([tone(220, 1), tone(880, 1)], axis=1), 16000)
     for name, amp in [("spk1/a", 0.05), ("spk1/b", 0.2), ("spk2/a", 0.6)]:
-        y = np.concatenate([pad, tone(330, 2.0, 44100, amp), pad])
+        y = tone(330, 2.0, 44100, amp)
         kudio.save_wave(f"raw/{name}.wav", np.stack([y, 0.8 * y], axis=1), 44100)
-    for name in ["incoming/one.wav", "incoming/two.wav"]:
-        kudio.save_wave(name, tone(440, 1.0), 16000)
-    for name in ["dr1/fcjf0/sx133.wav", "dr1/fcjf0/si1027.wav", "dr2/fdml0/sx133.wav"]:
-        kudio.save_wave(f"corpus/{name}", tone(200, 1.5), 16000)
-    for name in ["flac/a/one.flac", "flac/b/two.flac"]:
-        kudio.save_wave(name, tone(300, 1.0), 16000)
+    for name in ["one", "two"]:
+        kudio.save_wave(f"incoming/{name}.wav", tone(440, 1.0), 16000)
+    Path("incoming/broken.wav").write_bytes(b"this is not a wave file")
     for name in ["rec.wav", "take.wav", "take.v2.wav"]:
         kudio.save_wave(f"takes/{name}", tone(250, 0.5), 16000)
-    kudio.save_wave("notes.flac", tone(300, 0.2), 16000)
-    Path("incoming/broken.wav").write_bytes(b"this is not a wave file")
-    Path("runs/exp").mkdir(parents=True)
-    Path("runs/exp2").mkdir()
-    Path("lists").mkdir()
-    Path("lists/extra.txt").write_text("corpus/dr1/fcjf0/si1027.wav\n\ncorpus/dr2\n")
     ```
 
 ## Looking before loading
@@ -82,166 +42,73 @@ print(info.frames, info.duration, info.subtype, info.format)
 ```
 
 ```text
-clip.wav: 3.500s, 16000 Hz, 1ch, PCM_16, peak 0.4641
+clip.wav: 3.500s, 16000 Hz, 1ch, PCM_16, peak 0.4500
 56000 3.5 PCM_16 WAV
 ```
 
-Everything in [`AudioInfo`][kudio.core.io.AudioInfo] but the peak comes from
-the header. The peak needs the samples, read 2^20 frames at a time so a long file
-is never held whole; `peak=False` skips that read for a quick pass over a
-large corpus, and `peak` is then `None`, printed as "peak not measured".
-A WAV that ends before its header says is
-[named in a warning](#a-file-that-was-cut-short).
-[`audio_info`][kudio.core.io.audio_info] takes an array too, read channels
-last, with `sr=` passed in because a waveform does not carry its rate.
-`kudio info clip.wav` prints the same from the shell
-([Command line](../cli.md)); what the samples say about the recording is on
-[Inspecting a recording](inspection.md).
+[`audio_info`][kudio.core.io.audio_info] reads everything but the peak from the
+header. The peak is read 2^20 frames at a time; `peak=False` skips it. An
+array works too, with `sr=`. `kudio info` prints the same from a shell.
 
 ## Loading a file
 
 ```python
-y, sr = kudio.file_load("clip.wav")               # the file's own rate
-print(y.shape, y.dtype, sr)                       # (56000,) float32 16000
-y8, sr8 = kudio.file_load("clip.wav", sr=8000)    # resampled on the way in
-print(y8.shape, y8.dtype, sr8)                    # (28000,) float32 8000
+y, sr = kudio.file_load("clip.wav")                       # the file's own rate
+y8, sr8 = kudio.file_load("clip.wav", sr=8000)            # resampled with soxr_hq
+st, _ = kudio.file_load("stereo.wav", mono=False)         # channels kept
+print(y.shape, sr, y8.shape, sr8, st.shape)
 ```
 
-With the default `sr=None`, [`file_load`][kudio.core.io.file_load] keeps the
-file's own rate. Asked for another, it resamples with soxr at its high quality,
-`soxr_hq`; a file that is at that rate already comes back as it is. Either way
-the file is read with soundfile, which opens whatever the installed libsndfile
-opens. `soundfile.available_formats()` lists it, and with soundfile 0.14 that
-includes WAV, FLAC, OGG, MP3, AIFF and NIST SPHERE. m4a, aac and webm are not
-on the list and [need two more things](#formats-soundfile-does-not-read).
-
-`mono=True`, the default, averages the channels. With `mono=False` they are
-kept, channels last, with a rate or without one:
-
-```python
-y, sr = kudio.file_load("stereo.wav", mono=False)
-y8, sr8 = kudio.file_load("stereo.wav", sr=8000, mono=False)
-print(y.shape, y8.shape)                          # (16000, 2) (8000, 2)
+```text
+(56000,) 16000 (28000,) 8000 (16000, 2)
 ```
 
-!!! warning "Coming from librosa"
-    `librosa.load(..., mono=False)` returns `(channels, frames)`. `file_load`
-    turns that round, so the left channel is `y[:, 0]`. `y[0]` is the first
-    frame of every channel, and code that indexes it the librosa way runs
-    without an error and reads two samples.
+[`file_load`][kudio.core.io.file_load] reads what libsndfile opens: WAV, FLAC,
+OGG, MP3, AIFF and NIST SPHERE among them. `mono=True`, the default, averages
+the channels. A file it cannot read raises an
+[`AudioIOError`][kudio.exceptions.AudioIOError] naming the path and the reason;
+a rate of 0, NaN, `True` or 16000.5 is a `ValueError`.
 
-Every function that measures, changes or writes audio takes `(frames,)` or
-`(frames, channels)`. An array of two rows or more with more columns than rows
-is channels first, and is refused with a `ValueError` that says to transpose
-it, since filtered or trimmed along the wrong axis it comes back looking like
-audio. A single row, `(1, n)`, is one channel of `n` samples, and so is a
-column, `(n, 1)`.
-
-`file_load` turns a file it cannot read into an
-[`AudioIOError`][kudio.exceptions.AudioIOError] naming the path, so one
-`except kudio.AudioIOError` catches every failed load. The message says what
-is wrong with the path: there is no such file, it is a folder, the file is
-empty, or the reason soundfile or the operating system gives. Like every kudio
-error type it derives from [`KudioError`][kudio.exceptions.KudioError]. A bad
-argument is a mistake in the call rather than in the file, and is a plain
-`ValueError`: a rate that is zero, NaN, text or `True`, a rate of 16000.5 for
-a file, `peak=` and `lufs=` together for `convert_folder`.
+!!! warning "Channels last"
+    `librosa.load(..., mono=False)` returns `(channels, frames)`. In kudio the
+    left channel is `y[:, 0]`. An array of two rows or more with more columns
+    than rows is refused with a `ValueError` that says to transpose it.
 
 ### Formats soundfile does not read
 
 m4a, mp4, aac, webm, 3gp, amr and wma are decoded with
 [audioread](https://github.com/beetbox/audioread) and
-[ffmpeg](https://ffmpeg.org/) wherever kudio reads a file: in `file_load`,
-`audio_info`, [`play_audio`][kudio.core.stream.play_audio], the
-[`Synthesizer`][kudio.core.synth.Synthesizer] and the command line. Neither
-comes with a plain install. ffmpeg has to be on the PATH, and audioread is the
-`compressed` extra:
+[ffmpeg](https://ffmpeg.org/) wherever kudio reads a file. Install the extra and
+put ffmpeg on the PATH; without either, the `AudioIOError` says which is
+missing:
 
 ```bash
 pip install "kudio[compressed]"
 ```
 
-Without one of the two, the `AudioIOError` says which one is missing.
-
-The samples come back as 16 bits hold them, and an encoder pads the last of its
-blocks. 2 s of sound came back as 2.043 s from a bare AAC stream, as 2.020 s
-from AMR and as 1.997 s from WMA; from an m4a, whose container says how much of
-it is padding, as 2.000 s. [Line two such files up](metrics.md#finding-the-delay) before
-comparing them sample by sample. `audio_info` counts the frames it decoded for
-the peak; with `peak=False` they come from the header, to a tenth of a second.
-`subtype` and `format` are `None`.
-
-ffmpeg decodes as far as a file goes and calls that the file, so two kinds of
-file are read with a warning:
-
-- One that gives less than its header promises, like half of an m4a made for
-  streaming. MP4 and Matroska say how long they are and can be held to it. A
-  bare AAC or AMR stream does not: cut short, it is a shorter recording.
-- One whose name ends in a format soundfile reads and which soundfile does not
-  recognise: a FLAC that lost its beginning, or an m4a that somebody called
-  `.mp3`.
-
-A file soundfile does recognise stays with soundfile. A FLAC cut to half raises
-an `AudioIOError` with soundfile's reason; ffmpeg made 8192 of its 17647 frames
-of it.
+An encoder pads its last block, so 2 s of sound comes back as 2.043 s from a
+bare AAC stream and 2.000 s from an m4a: [line such files
+up](metrics.md#finding-the-delay) before comparing them sample by sample.
 
 ### A file that was cut short
 
-A copy that broke off leaves a WAV whose header still gives the whole length.
-soundfile reads what is there, and a take of 6 s comes back as one of 3 s:
-
-```text
-take.wav: the header says 6.00 s and 3.00 s are there, 96022 bytes fewer. The file may have been cut short.
-```
-
-`file_load`, `audio_info` and the rest of what reads a file warn like that, and
-give back what is there. The header and the size of the file are enough to
-tell, so `audio_info(path, peak=False)` says it as well, without reading a
-sample. A length that a program left there because it streamed its output and
-could not go back, 0 or 0x7FFFF000 and up, says nothing and is not held against
-the file; neither is a difference of one block.
-
-Only a RIFF WAV is held to its header. A FLAC that was cut raises, an m4a is
-warned about [as above](#formats-soundfile-does-not-read), and AIFF, MP3, Ogg,
-RF64 and W64 come back as far as they go, without a word.
+A WAV that ends before its header says is read as far as it goes, with a
+warning such as `take.wav: the header says 6.00 s and 3.00 s are there, 96022
+bytes fewer. The file may have been cut short.` A length of 0 or 0x7FFFF000 and
+up, which streaming writers leave, is not held against the file. A FLAC that was
+cut raises.
 
 ## Writing a file
-
-```python
-y, sr = kudio.file_load("clip.wav")
-kudio.save_wave("out/clip.wav", y, sr)                        # 16-bit PCM
-kudio.save_wave("out/clip24.wav", y, sr, subtype="PCM_24")
-kudio.save_wave("out/clipf.wav", y, sr, subtype="FLOAT")      # 32-bit float
-kudio.save_wave("out/clip.flac", y, sr)                       # FLAC, by extension
-kudio.save_wave("out/clip8k.wav", y, sr, d_sample=8000)       # resampled first
-```
-
-[`save_wave`][kudio.core.io.save_wave] creates missing folders and replaces an
-existing file without asking; [`check_file`][kudio.core.io.check_file]
-([below](#picking-a-name-that-is-free)) finds a free name. An array that is
-neither `(frames,)` nor `(frames, channels)` with 1 to 1024 channels is a
-`ValueError`. The file is written beside its name and takes the place of the
-old one when it is whole, so a write that fails leaves the old one as it was:
-nine channels of FLAC, a full disk, Ctrl-C. On Windows a file that is open in
-another program cannot be replaced; the finished one is copied over it instead,
-which is the one case in which a disk error can damage it. soundfile picks the
-container from the extension, and the subtype has to be one that container
-takes: FLAC takes `PCM_16` and `PCM_24` but not `FLOAT`.
-
-| `subtype` | Stores | Past ±1.0 |
-|---|---|---|
-| `PCM_16` (default) | integers, 65,536 steps | clipped to full scale |
-| `PCM_24` | integers, 16,777,216 steps | clipped to full scale |
-| `FLOAT` | 32-bit floats | kept as written |
 
 ```python
 import numpy as np
 
 hot = np.array([1.2, -1.3, 0.5], dtype=np.float32)
-kudio.save_wave("hot16.wav", hot, 16000)
-kudio.save_wave("hotf.wav", hot, 16000, subtype="FLOAT")
-print(kudio.file_load("hot16.wav")[0])
-print(kudio.file_load("hotf.wav")[0])
+kudio.save_wave("out/hot16.wav", hot, 16000)                  # 16-bit PCM
+kudio.save_wave("out/hotf.wav", hot, 16000, subtype="FLOAT")  # 32-bit float
+kudio.save_wave("out/hot.flac", hot, 16000)                   # FLAC, by extension
+print(kudio.file_load("out/hot16.wav")[0])
+print(kudio.file_load("out/hotf.wav")[0])
 ```
 
 ```text
@@ -249,163 +116,70 @@ print(kudio.file_load("hotf.wav")[0])
 [ 1.2 -1.3  0.5]
 ```
 
-The clipping is silent, so look at the peak of anything gained, mixed or
-enhanced before writing it, or write `FLOAT` and decide later. The
-[`Synthesizer`][kudio.core.synth.Synthesizer] counts the files it had to clip
-for this reason ([Building a noisy dataset](synthesis.md)).
+| `subtype` | Stores | Past ±1.0 |
+|---|---|---|
+| `PCM_16` (default) | integers, 65,536 steps | clipped to full scale |
+| `PCM_24` | integers, 16,777,216 steps | clipped to full scale |
+| `FLOAT` | 32-bit floats | kept as written |
 
-I clip every integer subtype in `save_wave`, and round 16-bit output myself,
-instead of leaving either to libsndfile. With its clipping off, libsndfile
-wraps 1.2 round to -0.8, and a tone a little too hot turns into a train of
-clicks (the dashed line below); soundfile 0.13.1 and 0.14 switch clipping on,
-but I would rather not depend on the release. With clipping on, the conversion
-floors: through `soundfile.write`, 20,000 uniform random samples came back
-0.494 of a 16-bit step low on average, with errors up to a full step; through
-`save_wave` the mean error is 0.000 and none is past half a step. Every other
-PCM width is rounded the same way. Through `soundfile.write`, `PCM_24` comes
-back a third of a step low on average and `PCM_U8` half a step, an offset of
-0.004 of full scale.
+[`save_wave`][kudio.core.io.save_wave] creates missing folders, replaces an
+existing file only once the new one is whole, and resamples first with
+`d_sample=`. The subtype has to suit the container: FLAC takes `PCM_16` and
+`PCM_24`, not `FLOAT`. kudio clips and rounds every integer subtype itself;
+libsndfile's own conversion floors, half a 16-bit step low on average, and with
+its clipping off wraps 1.2 round to -0.8:
 
 ![Left: a 220 Hz tone peaking at 1.25, read back from a FLOAT file from save_wave (intact), a PCM_16 file from save_wave (flat at plus and minus 1) and a PCM_16 file written with libsndfile's clipping off (the tops wrapped round to the other sign). Right: rounding error of 20,000 random samples written to 16 bits, spread from -1 to 0 steps through soundfile.write and from -0.5 to +0.5 through save_wave.](../images/audio-files-full-scale-light.webp#only-light)
 ![Left: a 220 Hz tone peaking at 1.25, read back from a FLOAT file from save_wave (intact), a PCM_16 file from save_wave (flat at plus and minus 1) and a PCM_16 file written with libsndfile's clipping off (the tops wrapped round to the other sign). Right: rounding error of 20,000 random samples written to 16 bits, spread from -1 to 0 steps through soundfile.write and from -0.5 to +0.5 through save_wave.](../images/audio-files-full-scale-dark.webp#only-dark)
 
-An integer array is scaled by its own type's full scale, the way soundfile
-reads such a file back: int16 by 1/32768, int32 by 1/2**31, and uint8 around
-its midpoint of 128, which is silence in an 8-bit file. An int16 array written
-as `PCM_16` survives the round trip bit for bit.
-
-Every other function reads an integer array the same way, so an int16 array
-from [`Recorder`][kudio.core.stream.Recorder] or `scipy.io.wavfile` measures
-what the file it came from measures, and the loudness, a metric or a
-spectrogram of it are those of the float clip. Read as plain numbers, an int16
-clip measured 90.3 dB louder, 20 log10 32768. What returns float32 still does;
-the editing functions and `normalize_lufs` hand back the input's type,
-rounded and clipped at full scale.
-
-64-bit integers are refused with a `ValueError`. No audio file holds them;
-numpy gives them for a list of ints and for `astype(int)`, and on their scale
-16-bit samples sit 288 dB down, where a clip measures as silence. Pass the
-samples as the type they were read as, or as float.
+An integer array is scaled by its own type's full scale everywhere in kudio:
+int16 by 1/32768, int32 by 1/2^31, uint8 around 128. int64 is refused, since on
+its scale 16-bit samples sit 288 dB down.
 
 ### NaN and inf
 
-A file holding NaN or inf samples still loads at its own rate, because
-repairing a corpus starts with reading it, and a warning names the file and
-counts them. At any other rate it is an `AudioIOError` with the count: a
-resampler spreads each of those samples over its neighbours, so repair the
-clip first and [`resample`][kudio.core.io.resample] it then. Most
-measurements taken from such a clip come back `nan`. `audio_info`
-gives such a file, or such an array, a peak of `nan` with a warning, and
-`math.isfinite(info.peak)` catches it. The loudness functions warn too, and
-[`audio_report`][kudio.core.report.audio_report] reports the bad samples as
-its only problem ([Inspecting a recording](inspection.md)).
-
-`save_wave` refuses such samples with an `AudioIOError` naming the file, and
-writes nothing: `FLOAT` would keep the NaN for every later reader, and an
-integer subtype would turn it into a zero that reads back as silence. The
-usual source is a gain computed from a silent frame somewhere upstream.
+A file holding NaN or inf loads at its own rate, with a warning that counts the
+samples; at another rate it is an `AudioIOError`, since a resampler would spread
+them. `save_wave` refuses such samples and writes nothing.
 
 ## Changing the rate in memory
 
 ```python
-y, sr = kudio.file_load("clip.wav")
 y8 = kudio.resample(y, orig_sr=sr, target_sr=8000)
-same = kudio.resample(y, orig_sr=sr, target_sr=sr)
-print(len(y), len(y8), same is y)                 # 56000 28000 True
-```
-
-[`resample`][kudio.core.io.resample] is the in-memory counterpart of
-`file_load(path, sr=...)` and uses the same `soxr_hq` resampler; on a 1 s tone
-the two gave identical samples. At equal rates it returns the array you passed
-in, not a copy, so it is safe to call unconditionally, but copy before
-changing the result in place if the original still matters. The rates need not
-be whole here, 22254.5 Hz for one, since an array can be at any rate; a file's
-has to be.
-
-A `(frames, channels)` array is resampled along its frames, so a 1 s stereo
-clip at 16 kHz comes back `(8000, 2)` at 8 kHz, and `save_wave(..., d_sample=)`
-does the same. An integer array comes back in its own type, rounded to the
-nearest value rather than cut towards zero and held to the type's range.
-
-## Gathering files
-
-`lists/extra.txt` holds a file, a blank line and a folder:
-
-```text title="lists/extra.txt"
-corpus/dr1/fcjf0/si1027.wav
-
-corpus/dr2
-```
-
-```python
-files, rejected = kudio.check_input(["raw/", "lists/extra.txt",
-                                     "missing.wav", "notes.flac"])
-for f in files:
-    print(f.as_posix())
-print(rejected)
+print(len(y), len(y8), kudio.resample(y, orig_sr=sr, target_sr=sr) is y)
 ```
 
 ```text
-raw/spk1/a.wav
-raw/spk1/b.wav
-raw/spk2/a.wav
-corpus/dr1/fcjf0/si1027.wav
-corpus/dr2/fdml0/sx133.wav
-['missing.wav', 'notes.flac']
+56000 28000 True
 ```
 
-[`check_input`][kudio.core.io.check_input] is how every folder tool in kudio
-reads its input: files, folders (searched at any depth), `.txt` lists and
-lists of all of these, nested as deep as you like. It returns the `.wav` files
-it found and, separately, everything it could not use.
+[`resample`][kudio.core.io.resample] uses `soxr_hq`, as `file_load(path, sr=)`
+does, and returns the array itself at equal rates. A `(frames, channels)` array
+is resampled along its frames; an integer array comes back in its own type.
 
-Relative lines in a `.txt` list are resolved against the working directory,
-not the folder the list is in. Write them relative to the folder you run from,
-usually the one holding the corpus; absolute paths only suit a list that stays
-on one machine. The list is read as UTF-8, with or without a byte-order mark,
-whatever the system's code page, so a list of Chinese file names written on
-one machine reads the same on another.
-
-The `.wav` test ignores case, the way a Windows folder search does, so a
-recorder's `ZOOM0001.WAV` is found on Linux and macOS too, whether it is named
-directly, listed or sitting in a folder.
-
-[`load_waves`][kudio.core.io.load_waves] loads everything `check_input` finds,
-at the native rate and in mono. With `std_len=True` it cuts every waveform to
-the shortest and refuses files at different rates:
+## Gathering files
 
 ```python
-pairs = kudio.load_waves("raw/")
-print(len(pairs), pairs[0][0].shape, pairs[0][1])  # 3 (132300,) 44100
-waves, sr, length = kudio.load_waves("corpus/", std_len=True)
-print(len(waves), sr, length)                      # 3 16000 24000
-```
-
-`use_pool=True` loads in `core_` worker processes (8 by default), but only
-when there are more than 300 files. On Windows and macOS the call then has to
-sit under `if __name__ == "__main__":`, as with any multiprocessing pool.
-An entry that `check_input` rejects is skipped with a logged warning;
-`convert_folder` counts it as a failure.
-
-```python
+files, rejected = kudio.check_input(["raw/", "takes/rec.wav", "missing.wav"])
+print([f.as_posix() for f in files], rejected)
+waves, sr, length = kudio.load_waves("raw/", std_len=True)
 copied = kudio.copy_waves("picked/", "raw/")       # destination first
-print([p.name for p in copied])                    # ['a.wav', 'b.wav', 'a2.wav']
+print(len(waves), sr, length, [p.name for p in copied])
 ```
 
-[`copy_waves`][kudio.core.io.copy_waves] takes the destination first, the
-other way round from `shutil.copy`, then anything `check_input` accepts, and
-returns where each file went. Swapped round, `copy_waves("raw/spk1/a.wav",
-"picked/")` logs that the destination is not a folder and copies nothing, as
-it does for a destination with a dot in its name, such as `v1.2/`. Files land
-flat by name, and a name already taken gets a free one from
-[`check_file`][kudio.core.io.check_file], so the second talker's `a.wav`
-arrives as `a2.wav`. To copy a tree with its layout, use `shutil.copytree`;
-`convert_folder` with its defaults mixes to mono and writes 16-bit, so it is
-not a copy.
+```text
+['raw/spk1/a.wav', 'raw/spk1/b.wav', 'raw/spk2/a.wav', 'takes/rec.wav'] ['missing.wav']
+3 44100 88200 ['a.wav', 'b.wav', 'a2.wav']
+```
+
+[`check_input`][kudio.core.io.check_input] is how every folder tool reads its
+input: files, folders at any depth, `.txt` lists (UTF-8, lines relative to the
+working directory) and lists of these, and returns the `.wav` files and what it
+could not use. [`load_waves`][kudio.core.io.load_waves] loads mono at the native
+rate, `std_len=True` cut to the shortest; [`copy_waves`][kudio.core.io.copy_waves]
+copies flat by name, so the second `a.wav` arrives as `a2.wav`.
 
 ## Converting a whole folder
-
-`raw/` holds three 44.1 kHz stereo files at three different levels.
 
 ```python
 result = kudio.convert_folder("raw/", "16k/", sr=16000, lufs=-23.0)
@@ -422,120 +196,28 @@ for path in result.outputs:
 16k/spk2/a.wav 16000 -23.0 LUFS
 ```
 
-[`convert_folder`][kudio.core.io.convert_folder] does the same four steps to
-every file, in this order:
-
-1. load it with `file_load`, at `sr=` if given and downmixed unless
-   `mono=False`;
-2. trim leading and trailing silence if `trim_db=` is set, passed as `top_db`
-   to [`trim_silence`][kudio.effects.silence.trim_silence], which cuts every
-   channel of a `mono=False` file at the same place;
-3. normalise to `peak=` or `lufs=`;
-4. write it as `subtype=`, `PCM_16` unless you say otherwise.
-
-The output mirrors the input tree below `dst`, so `spk1/a.wav` and
-`spk2/a.wav` stay two files. A file that ends up with no samples is recorded
-as a failure rather than written out empty. An output whose name is taken
-gets a free one from [`check_file`][kudio.core.io.check_file], so a second run
-into `16k/` writes `16k/spk1/a2.wav` and the rest beside the first set. The
-counter has no separator, so `take1.wav` comes back as `take12.wav`. To redo a
-conversion, empty `dst` first or pass `overwrite=True`. A `dst` inside `src`
-is left out of the input, so a second run does not convert the first run's
-output again one folder deeper.
-
-### Peak or loudness
-
-`peak=0.99` scales each file so its loudest sample sits at 0.99, the same as
-[`normalize`][kudio.effects.augment.normalize]. `lufs=-23.0` scales to an
-integrated loudness measured the ITU-R BS.1770 way, through
-[`normalize_lufs`][kudio.core.loudness.normalize_lufs]; -23 LUFS is the
-EBU R 128 broadcast target. For files that will be listened to or compared I
-use `lufs=`, because a single click sets the peak of a whole recording, and
-two files with the same peak need not sound equally loud. Passing both raises
-`ValueError`, since the second normalisation would undo the first.
-
-Loudness is measured over 400 ms blocks, so a file shorter than 0.4 s, before
-or after trimming, lands in `failed` with a `FeatureError` under `lufs=`;
-`peak=` has no minimum. Digital silence is written as it is by either, and so,
-under `lufs=` and with a warning, is a file that never rises above the -70 LUFS
-gate of BS.1770, which has no loudness to scale from. And
-loudness normalisation is a gain and nothing else, so a quiet file with one
-loud transient can be pushed past full scale: `normalize_lufs` warns, and the
-default `PCM_16` output clips it, so write `FLOAT` or aim lower.
-[Inspecting a recording](inspection.md) has the meters, and
-[Editing and effects](editing.md) the trimming and normalising on their own.
-
-### Lists, `.txt` files and `root=`
-
-`src` can be anything [`check_input`][kudio.core.io.check_input] accepts. A
-list or a `.txt` file is mirrored below the deepest folder its files share, so
-two talkers' recordings of the same TIMIT sentence, both named `sx133.wav`,
-stay apart:
-
-```python
-from pathlib import Path
-
-files = sorted(Path("corpus").rglob("sx*.wav"))
-result = kudio.convert_folder(files, "corpus16k/", sr=16000)
-print([path.as_posix() for path in result.outputs])
-```
-
-```text
-['corpus16k/dr1/fcjf0/sx133.wav', 'corpus16k/dr2/fdml0/sx133.wav']
-```
-
-Files that all sit in one folder, such as one talker's, share that folder and
-land flat in `dst`. To keep the layout from a higher folder, pass it as
-`root=`: given the files in `corpus/dr1/fcjf0/`,
-`convert_folder(files, "corpus16k/", root="corpus")` writes them to
-`corpus16k/dr1/fcjf0/`. Every file has to be inside `root`, or `ValueError`
-names the one that is not.
-
-### When a file fails
+[`convert_folder`][kudio.core.io.convert_folder] loads each file (at `sr=`,
+mixed to mono unless `mono=False`), trims silence if `trim_db=` is set,
+normalises to `peak=` or `lufs=` (not both), and writes `subtype=`, `PCM_16` by
+default, mirroring the tree below `dst`. A list is mirrored below the deepest
+folder its files share, or below `root=`. A taken name gets a free one, so empty
+`dst` or pass `overwrite=True` to redo a run. Under `lufs=` a file shorter than
+0.4 s fails, and a quiet file with one loud transient can pass full scale.
 
 ```python
 result = kudio.convert_folder("incoming/", "clean/")
-print(result, bool(result))
-print([path.name for path, reason in result.failed])
+print(result, bool(result), [path.name for path, reason in result.failed])
 ```
 
 ```text
-2/3 written, 1 failed False
-['broken.wav']
+2/3 written, 1 failed False ['broken.wav']
 ```
 
-A file that cannot be read, trimmed, normalised or written does not stop the
-run. It goes into the [`ConvertResult`][kudio.core.io.ConvertResult]'s
-`failed` list as `(path, reason)`, the reason being the exception's type and
-message, and the result is falsy whenever that list is not empty.
-`on_error="raise"` stops at the first failure instead.
-
-!!! warning "What the folder tools never see"
-    The folder tools look for `.wav` and nothing else. A folder of FLAC files
-    raises `AudioIOError` ("no audio files found"), and a `.flac` in a list is
-    skipped. Bring such a tree in with a loop of your own, which keeps the
-    channels and writes 16-bit (pass `subtype="PCM_24"` for 24-bit sources):
-
-    ```python
-    from pathlib import Path
-
-    for src in sorted(Path("flac").rglob("*.flac")):
-        y, sr = kudio.file_load(src, mono=False)
-        dst = Path("wav") / src.relative_to("flac").with_suffix(".wav")
-        kudio.save_wave(dst, y, sr)
-    ```
-
-    An entry that `check_input` cannot resolve, a missing path or a typo in a
-    list, goes into `failed` as "not an existing .wav file" and counts in
-    `total`, so a list with one typo in it does not come back "1/1 written".
-
-The command line does the same with `kudio convert raw/ 16k/ --rate 16000
---recursive --lufs -23`, and exits 1 when any file failed
-([Command line](../cli.md)).
+A file that fails goes into `failed` as `(path, reason)` and the run goes on;
+the result is falsy then, and `on_error="raise"` stops at the first failure.
+The folder tools see `.wav` only. `kudio convert` exits 1 when a file failed.
 
 ## Picking a name that is free
-
-`takes/` already holds `rec.wav`, `take.wav` and `take.v2.wav`.
 
 ```python
 from pathlib import Path
@@ -554,47 +236,14 @@ take.v2 -> take.v22.wav
 take.v2_2.wav
 ```
 
-[`check_file`][kudio.core.io.check_file] always hands back a `.wav` name. A
-suffix that is an audio container (`.flac`, `.mp3`, `.ogg` and so on) is
-replaced, so it cannot find you a free `.flac` name. Anything else after a
-dot, such as `.v2` or `.2026-10-11`, is part of the name, and `.wav` goes on
-the end. If that name is taken, a counter goes after the stem, starting above
-the highest number already in the folder, and each candidate is checked
-before it is handed back. With dotted or numbered names, `sep="_"` keeps the
-counter readable.
-
-`check_file` creates the parent folders but not the file, so nothing is
-reserved until you write it: ask for the name right before `save_wave`.
-`rename=False` hands back the taken name with a logged warning. A folder
-becomes `<folder>/unknown.wav`, and so does a path ending in a separator that
-does not exist yet: `newdir/` is a folder, `newdir` a file name that becomes
-`newdir.wav`.
-
-For folders, such as one per experiment run, there is
-[`check_path`][kudio.core.io.check_path]: with `runs/exp` and `runs/exp2`
-already there, `kudio.check_path("runs/exp")` returns the string `runs/exp3`
-(`runs\exp3` on Windows). It creates nothing, and `exist_ok=True` hands the
-path back as it is.
+[`check_file`][kudio.core.io.check_file] hands back a `.wav` name: an audio
+suffix such as `.flac` is replaced, anything else after a dot is part of the
+name, and the counter goes above the highest number in the folder. It creates
+the parent folders, not the file, so ask right before `save_wave`.
+[`check_path`][kudio.core.io.check_path] does the same for folders.
 
 ## Clips kept by a GUI
 
 [`AudioDataManager`][kudio.core.manager.AudioDataManager] is the registry a GUI
-keeps behind its clip list: each name maps to the file it came from, the
-waveform as a list with one array per channel (one mono array for a file added
-with `add_local_file`), the rate and the channel count. In a script, arrays
-and `save_wave` are simpler.
-
-`add_new_file(name, wave=[y], sr=sr, ch=1)` adds a clip, its waveform as a list
-of one array with the channels interleaved. A name that is taken keeps its
-clip, or with `override=True` gives it up to the new one. A bare array instead
-of the list is a `ValueError`, and the clip already there stays.
-
-`save_all(dst_path="session/")` writes every clip into that folder, a clip
-named `clip.quiet` to `session/clip.quiet.wav`. Without `dst_path` it writes
-each clip back over the file it came from, and since `add_local_file` keeps a
-mono downmix whatever `ch` says, a stereo source is replaced by its
-downmix. Before writing, `save_all` checks that no two clips
-land on one file, `take` and `take.wav` for instance; if two would, it returns
-`False`, writes nothing and logs both names. A clip with no file of its own
-and no `dst_path` is only found when its turn comes: the clips before it are
-written and `save_all` returns `False`.
+keeps behind its clip list. `save_all(dst_path=...)` writes every clip, and
+returns `False` without writing when two clips would land on one file.

@@ -59,9 +59,9 @@ def test_del_element(wav_file):
 def test_clips_with_dotted_names_keep_their_own_files(tmp_path):
     """'take' and 'take.v2' are two recordings, and they need two files.
 
-    ``with_suffix`` read the dot as the start of an extension and sent both to
-    'take.wav': one clip's audio was gone, ``save_all`` still said True, and
-    nothing in the log mentioned it.
+    ``with_suffix`` would read the dot as the start of an extension and send
+    both to 'take.wav': one clip's audio would be gone, ``save_all`` would say
+    True, and nothing in the log would mention it.
     """
     mgr = AudioDataManager()
     mgr.set_params(sr=16000, ch=1)

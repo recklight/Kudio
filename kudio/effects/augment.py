@@ -150,8 +150,8 @@ def normalize(y: np.ndarray, peak: float = 0.99) -> np.ndarray:
     *peak* is a fraction of the type's full scale, as it is for float, and the
     result keeps the input's type.
 
-    :raises FeatureError: for a clip with NaN or inf in it. One of them was the
-        peak, and the rest of the clip NaN or 0.
+    :raises FeatureError: for a clip with NaN or inf in it. One of them would be
+        the peak, and the rest of the clip NaN or 0.
     """
     if real(peak) is None or peak <= 0:
         raise ValueError(f"peak must be > 0, a finite number, got {peak!r}")
@@ -277,7 +277,7 @@ def reverb(y: np.ndarray, sr: int, decay: float = 0.3,
         amp *= decay
         t += delay
     # integer audio in float first: abs(-32768) stays -32768 in int16, so a
-    # sample pinned there was missed as the peak (20000 came back, not 32768)
+    # sample pinned there would be missed as the peak (20000, not 32768)
     x, back = _read(y, 'reverb')
     finite(np.asarray(x), 'reverb', FeatureError)
     if not x.size:

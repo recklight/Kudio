@@ -8,8 +8,8 @@ from kudio import KC, KudioConfig
 def test_default_config():
     cfg = KudioConfig.load_config()
     assert cfg.waveform.default_rate == 16000
-    assert cfg.f_mfe.n_mels == 40      # audio-only defaults in v3
-    assert 'train' not in cfg          # training keys moved out of kudio
+    assert cfg.f_mfe.n_mels == 40      # audio-only defaults
+    assert 'train' not in cfg          # no training keys
     assert KC is KudioConfig
 
 

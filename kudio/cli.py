@@ -515,7 +515,7 @@ def _run(args) -> int:
                 return 1
 
     elif args.command == "normalize":
-        # channels kept: the output used to be the mono mix of a stereo file
+        # channels kept: a stereo file normalised stays stereo
         y, sr = kudio.file_load(args.src, sr=None, mono=False)
         if not np.any(y):
             return _fail(f"{args.src} is digital silence; there is no level "
@@ -626,7 +626,7 @@ def _run(args) -> int:
             out_dir = Path(args.write_to)
             stem = Path(args.src).stem
             # the estimator in the name too when it varies: one name per
-            # method used to let each estimator overwrite the last
+            # method would let each estimator overwrite the last
             several = len({r.noise for r in results}) > 1
             for r in results:
                 if r.error:

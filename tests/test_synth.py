@@ -2,7 +2,6 @@
 import pathlib
 import re
 import sys
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -125,16 +124,6 @@ def test_syn_resamples_noise_to_match_clean(tmp_path):
     assert np.isfinite(y).all()
 
 
-def test_desired_sample_still_works_but_warns(tmp_path):
-    clean, noise = _corpus(tmp_path, clean_sr=8000, noise_sr=8000)
-    out = tmp_path / "mixed"
-    syx = Synthesizer(clean, noise, out_path=str(out), snr_ratio=[0])
-
-    with pytest.deprecated_call():
-        syx.syn(mode='reg', desired_sample=16000)
-    assert _rates(out) == {16000}
-
-
 # ===================================================== clean x noise x room
 
 @pytest.fixture
@@ -219,8 +208,8 @@ def test_the_room_goes_in_the_name_and_the_manifest(dry_corpus, tmp_path):
 
 
 def test_the_return_shape_does_not_depend_on_a_keyword(dry_corpus, tmp_path):
-    """A four-tuple with no room and a five-tuple with one is the bug this
-    codebase has met most often; the room travels in `manifest()` instead."""
+    """A four-tuple with no room and a five-tuple with one would break every
+    caller that unpacks it; the room travels in `manifest()` instead."""
     clean, noise, _ = dry_corpus
     syx = Synthesizer(clean, noise, out_path=str(tmp_path / "shape"),
                       snr_ratio=[0], rt60=[0.5])
@@ -619,9 +608,9 @@ def test_reg_mode_meets_every_noise_snr_combination(tmp_path):
     assert len(combos) == 8
 
 
-def test_reg_mode_is_unchanged_when_the_counts_share_no_factor(tmp_path):
-    """Coprime counts already met every combination; the assignment stays the
-    plain cycle it has always been, so those datasets come out the same."""
+def test_reg_mode_is_the_plain_cycle_when_the_counts_share_no_factor(tmp_path):
+    """Coprime counts meet every combination by themselves, so the assignment
+    is the plain cycle."""
     clean, noise = _numbered_corpus(tmp_path, n_clean=12, n_noise=2)
     snrs = [0, 5, 10]
     result = Synthesizer(clean, noise, out_path=str(tmp_path / "o"),
@@ -788,8 +777,8 @@ def test_one_request_made_twice_keeps_both_rows(clean_noise_dirs, tmp_path):
 # ========================================================= seeds and the pool
 
 def test_the_pool_does_not_change_a_single_file(tmp_path):
-    """The noise crop used to come from each worker's global RNG, so a seeded
-    run through the pool differed from itself and from a serial run."""
+    """A noise crop from each worker's global RNG would make a seeded run
+    through the pool differ from itself and from a serial run."""
     import soundfile as sf
     clean, noise = _numbered_corpus(tmp_path, n_clean=21, n_noise=1)
     made = {}
@@ -852,10 +841,10 @@ def test_a_run_without_a_seed_can_be_rebuilt(clean_noise_dirs, tmp_path):
 
 def test_an_aborted_run_keeps_the_seed_of_the_corpus_on_disk(clean_noise_dirs,
                                                              tmp_path):
-    """An unseeded run is only rebuildable through `.seed`, and the base used
-    to be drawn before the overwrite check -- so a call that aborted, wrote
-    nothing and deleted nothing still replaced `.seed` with the base of a run
-    that never happened, and the files in the folder had no seed left."""
+    """An unseeded run is only rebuildable through `.seed`. A base drawn before
+    the overwrite check would let a call that aborted, wrote nothing and deleted
+    nothing replace `.seed` with the base of a run that never happened, and the
+    files in the folder would have no seed left."""
     import soundfile as sf
     clean, noise = clean_noise_dirs
     out = tmp_path / "mixed"
@@ -930,8 +919,8 @@ def _correlation(path, clean_file):
 
 
 def test_is_silence_leaves_the_mixtures_their_speech(tmp_path):
-    """The flag was handed to every file, so `is_silence=True` wrote a whole
-    dataset of noise with not one word in it. Only the share is noise now."""
+    """Handed to every file, `is_silence=True` would write a whole dataset of
+    noise with not one word in it. Only the share is noise."""
     import kudio
     sr = 16000
     clean, noise = tmp_path / "sc", tmp_path / "sn"
@@ -989,7 +978,7 @@ def test_extra_mode_keeps_the_speech_and_the_working_directory(
 # ============================================== what overwrite may not delete
 
 def test_overwrite_will_not_delete_the_inputs(clean_noise_dirs, tmp_path):
-    """`out_path` one level too high used to take the corpus with it."""
+    """`out_path` one level too high must not take the corpus with it."""
     from kudio.exceptions import SynthesisError
     clean, noise = clean_noise_dirs
     syx = Synthesizer(clean, noise, out_path=str(tmp_path), snr_ratio=[0])
@@ -1096,19 +1085,15 @@ def test_a_bad_target_rate_is_refused_before_the_folder_is_emptied(tmp_path):
 
 @pytest.mark.parametrize("value", [True, '8000', 8000.5, float('nan'), float('inf'), 0, -1],
                          ids=repr)
-@pytest.mark.parametrize("argument", ["target_sr", "desired_sample"])
-def test_a_rate_no_file_can_be_at_is_refused(tmp_path, argument, value):
-    """8000.5 was written to files that said 8000, and True went on to blame
-    the noise: at 1 Hz it was digital silence."""
+def test_a_rate_no_file_can_be_at_is_refused(tmp_path, value):
+    """Unchecked, 8000.5 would be written to files that say 8000, and True would
+    go on to blame the noise: at 1 Hz it is digital silence."""
     syx = _one_clean(tmp_path, np.random.default_rng(0).standard_normal(16000))
     (tmp_path / "o").mkdir()
     (tmp_path / "o" / "keep.txt").write_text("from an earlier run")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        with pytest.raises(ValueError) as caught:
-            syx.syn(seed=0, **{argument: value})
-    assert str(caught.value) == (f"{argument} must be a positive whole rate or None, "
-                                 f"got {value!r}")
+    with pytest.raises(ValueError) as caught:
+        syx.syn(seed=0, target_sr=value)
+    assert str(caught.value) == f"target_sr must be a positive whole rate or None, got {value!r}"
     assert [p.name for p in (tmp_path / "o").iterdir()] == ["keep.txt"]
 
 
@@ -1137,7 +1122,6 @@ IMPOSSIBLE = {
     'drr_db too low': ({'rt60': 0.3, 'drr_db': -99}, {}, "drr_db=-99 is below"),
     'target_sr inf': ({}, {'target_sr': INF}, "target_sr must be a positive whole rate"),
     'target_sr nan': ({}, {'target_sr': NAN}, "target_sr must be a positive whole rate"),
-    'desired_sample': ({}, {'desired_sample': 8000.5}, "desired_sample must be a positive"),
     'a band over Nyquist': ({'channel': 'telephone'}, {'target_sr': 500}, "bandpass needs"),
     'a burst without end': ({'channel': {'loss': 0.01, 'burst': INF}}, {}, "cannot be under 1"),
     'seed': ({}, {'seed': -1}, "seed must be >= 0"),
@@ -1156,8 +1140,9 @@ def _corpus_to_keep(tmp_path):
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 @pytest.mark.parametrize("name", IMPOSSIBLE)
 def test_no_setting_empties_the_folder_and_then_fails(tmp_path, name):
-    """rt60=nan, drr_db=-99 and a telephone band at 500 Hz each deleted the
-    corpus in the folder and wrote nothing."""
+    """Found only after the folder is emptied, rt60=nan, drr_db=-99 and a
+    telephone band at 500 Hz would each delete the corpus in it and write
+    nothing."""
     _, before = _corpus_to_keep(tmp_path)
     built, called, said = IMPOSSIBLE[name]
     with pytest.raises((ValueError, kudio.FeatureError), match=re.escape(said)):

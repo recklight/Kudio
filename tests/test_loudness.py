@@ -421,8 +421,8 @@ def test_a_corrupt_clip_is_not_measured_as_silence():
 
 
 def test_the_curve_and_its_range_do_not_read_a_corrupt_clip_as_silence():
-    """They are refused, as the other measurements of a clip are; a curve of it was
-    nan from the NaN on, and its range nan."""
+    """They are refused, as the other measurements of a clip are; otherwise a curve
+    of it would be nan from the NaN on, and its range nan."""
     sr = 16000
     y = _speech_like(sr).copy()
     y[100] = np.nan

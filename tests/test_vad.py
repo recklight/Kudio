@@ -232,8 +232,8 @@ def test_a_band_on_a_16_khz_clip_finds_the_same_bursts(speech, band):
 
 @pytest.mark.parametrize("band", [(4000, 100), (-1, 100), (9000, 10000), (1005, 1020)])
 def test_a_band_that_is_not_one_is_refused(speech, band):
-    """(1005, 1020) holds no bin of a 30 ms frame, 33.3 Hz apart, and came back
-    as no speech with a numpy warning about an empty mean."""
+    """(1005, 1020) holds no bin of a 30 ms frame, 33.3 Hz apart, and would come
+    back as no speech with a numpy warning about an empty mean."""
     with pytest.raises(FeatureError, match="band"):
         kudio.vad(speech, SR, band=band)
 

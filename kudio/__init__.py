@@ -28,25 +28,25 @@ from kudio.exceptions import (
     UnsupportedFormatError,
 )
 
-from kudio import core, effects, enhance, util  # noqa: E402
+from kudio import core, effects, enhance, util  # noqa: E402, F401
 from kudio.core import *  # noqa: F401,F403  (curated __all__)
 from kudio.effects import *  # noqa: F401,F403
 from kudio.enhance import *  # noqa: F401,F403  (curated __all__)
-from kudio.util import *  # noqa: F401,F403  (curated __all__)
-
-# The console colour helpers and the misspelt `upercase` reached the top level
-# through `from kudio.util import *`, where `error`, `info` and `warn` read as
-# part of kudio's error handling, and a star import lays them over a script's
-# own names. They keep working from here behind a warning, and stay in
-# kudio.util.
-from kudio._deprecation import alias as _alias  # noqa: E402
-
-for _name in ('blu', 'color_test', 'cya', 'dkblu', 'dkcya', 'dkgre', 'dkpur',
-              'dkred', 'dkyel', 'error', 'fGre', 'fRed', 'gre', 'h1', 'info',
-              'pur', 'red', 'warn', 'yel'):
-    globals()[_name] = _alias(getattr(util, _name), new_prefix='kudio.util')
-upercase = _alias(util.uppercase, 'upercase')
-del _name
+# kudio.util without its console colours: at the top level `error`, `info` and
+# `warn` would read as part of kudio's error handling, and a star import would
+# lay them over a script's own names
+from kudio.util import (  # noqa: E402
+    CheckDevice,
+    Timer,
+    check_device,
+    find_duplicate,
+    is_available,
+    list_devices,
+    lowercase,
+    map_waves,
+    timer,
+    uppercase,
+)
 
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())
 
@@ -59,4 +59,5 @@ __all__ = [
 __all__ += core.__all__
 __all__ += effects.__all__
 __all__ += enhance.__all__
-__all__ += util.__all__
+__all__ += ['CheckDevice', 'Timer', 'check_device', 'find_duplicate', 'is_available',
+            'list_devices', 'lowercase', 'map_waves', 'timer', 'uppercase']

@@ -522,8 +522,8 @@ def audio_report(y: np.ndarray, sr: int, *, clip_run: int = _CLIP_RUN) -> AudioR
     clipped = _clipped_run_count(y, clip_run)
 
     size = max(16, int(round(_FRAME * sr)))
-    # the offset out first: left in, a 0.03 offset read as a noise floor of
-    # -30 dBFS on a take whose real floor was -57
+    # the offset out first: left in, a 0.03 offset would read as a noise floor
+    # of -30 dBFS on a take whose real floor is -57
     usable = np.isfinite(y)
     centred = y - (float(np.mean(y[usable])) if usable.any() else 0.0)
     frame_rms = np.sqrt(np.mean(_frame(centred, size, max(1, int(round(_HOP * sr))))

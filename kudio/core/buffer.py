@@ -30,7 +30,7 @@ def _checked_frame_count(value, caller: str) -> int:
         try:
             whole = operator.index(value)              # int, numpy integers
         except TypeError:
-            # a float only when it is whole: int() used to truncate 2.5 to 2,
+            # a float only when it is whole: int() would truncate 2.5 to 2,
             # and float('inf') -- arithmetic on a zero chunk size -- is not
             if isinstance(value, (float, np.floating)) and np.isfinite(value) \
                     and float(value).is_integer():
@@ -202,7 +202,7 @@ class FetchBuffer(threading.Thread):
         self._timeout = timeout
         self.start()
         # the capture ends itself at the timeout, so this join returns; the
-        # thread used to be left waiting on the buffer and took the next
+        # thread is not left waiting on the buffer to take the next
         # capture's frames
         data = self.join()
         if isinstance(self._error, TimeoutError):

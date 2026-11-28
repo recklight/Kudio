@@ -228,7 +228,7 @@ def test_and_worse_than_the_hole_when_it_does_not(f0):
 
 
 def test_so_si_sdr_cannot_judge_a_concealment_strategy():
-    """Stated once, on its own, because it was nearly asserted the other way.
+    """Stated on its own, because the opposite is easy to assume.
 
     Whether holding scores better or worse than a hole is decided by whether
     the repeated packet lands in phase -- an accident of the talker's pitch
@@ -485,8 +485,8 @@ def test_losing_most_of_it_in_short_runs_is_refused_rather_than_fudged():
 
 
 def test_a_run_longer_than_an_integer_holds_is_all_that_is_lost():
-    """numpy 1.24 drew the lowest integer there is for one, and the packets lost were
-    never reached."""
+    """Cast to an integer by numpy 1.24, such a run is the lowest integer there
+    is, and the packets it loses are never reached."""
     from kudio.effects.channel import _run_lengths
 
     class Overflowed:
@@ -594,9 +594,9 @@ def test_the_same_link_and_seed_is_the_same_file():
 # -- dither, presets and refused links -----------------------------------------
 
 def test_dither_takes_the_signal_out_of_the_error():
-    """One-step dither only loosened the tie: a sine a quarter of a step high
-    still came back at 0.42 of its level on average. Two steps wide, the
-    error's mean no longer follows the signal."""
+    """Dither one step wide only loosens the tie: a sine a quarter of a step
+    high comes back at 0.42 of its level on average. Two steps wide, the
+    error's mean does not follow the signal."""
     step = 2.0 / 2 ** 8
     t = np.arange(160000) / 16000
     quiet = (0.25 * step * np.sin(2 * np.pi * 50 * t)).astype(np.float32)
@@ -625,7 +625,7 @@ def test_no_link_still_refuses_stereo():
 # -- dither at any bit depth ---------------------------------------------------
 @pytest.mark.parametrize("bits", [2, 4, 8])
 def test_dither_brings_a_quarter_step_sine_back_at_any_depth(bits):
-    """Two grid steps wide at every depth; 2 / 2**bits was half that at 2 bits."""
+    """Two grid steps wide at every depth; 2 / 2**bits is half that at 2 bits."""
     step = 1.0 / (2 ** (bits - 1) - 1)
     t = np.arange(4 * 16000) / 16000
     quiet = 0.25 * step * np.sin(2 * np.pi * 997 * t)
@@ -656,8 +656,8 @@ NOT_A_PACKET = [float('nan'), float('inf'), True, '20', None, 0, -20]
         'channel_spec(loss)', 'dropouts(burst)', 'channel_spec(burst)', 'dropouts(packet_ms)',
         'channel_spec(packet_ms)'])
 def test_a_setting_that_is_not_one_number_in_its_range_is_refused(name, values, call):
-    """8.9 bits became 8 and were labelled so, a burst of nan lost packets one
-    at a time, and a loss of True lost every one of them."""
+    """Unchecked, 8.9 bits would become 8 and be labelled so, a burst of nan
+    would lose packets one at a time, and a loss of True every one of them."""
     for value in values:
         with pytest.raises(FeatureError, match=rf"{name} (must|is)") as refused:
             call(value)

@@ -370,7 +370,7 @@ def _voiced_without_noise(sr: int, seconds: float = 1.0) -> np.ndarray:
 def test_llr_scores_a_frame_predicted_to_round_off_instead_of_losing_the_pair():
     """Frame 35 of this signal has a clean prediction error of -7.1e-10
     against a frame energy of 0.0277: round-off below zero, whose log is NaN,
-    and that one frame took the whole pair and the three composite ratings
+    and that one frame would take the whole pair and the three composite ratings
     with it."""
     clean = _voiced_without_noise(16000)
     noisy = _mix(clean, _noise(len(clean), 1), 20.0)

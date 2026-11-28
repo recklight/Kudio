@@ -42,8 +42,8 @@ dependencies = [
 # live capture and playback. On Linux sounddevice needs the system's PortAudio
 # (libportaudio2 on Debian and Ubuntu); nothing is compiled.
 audio = ["sounddevice>=0.4.5"]
-# empty: STOI, ESTOI and SDR need nothing. Kept, so that `pip install
-# "kudio[eval]"` still installs.
+# empty: STOI, ESTOI and SDR need nothing beyond the core, and `pip install
+# "kudio[eval]"` installs kudio alone.
 eval = []
 # PESQ (ITU-T P.862 / P.862.2). PyPI carries `pesq` as source only, so this
 # compiles it: it needs a C compiler -- the MSVC Build Tools on Windows. That

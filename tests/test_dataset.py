@@ -283,12 +283,13 @@ def test_vad_output_becomes_labels(tmp_path, speech):
         assert read.end == pytest.approx(written.end, abs=1e-6)
 
 
-def test_a_manifest_written_before_the_link_existed_still_loads(tmp_path):
-    """Every field after `clean` is optional and appended, so an older run's
-    manifest keeps working and a newer one degrades to what it understands.
+def test_a_manifest_without_the_optional_fields_loads(tmp_path):
+    """Every field after `clean` is optional, so a manifest with only some of
+    them loads, and one with fields this kudio does not know loads what it
+    understands.
     """
     import json
-    path = tmp_path / "old.json"
+    path = tmp_path / "partial.json"
     path.write_text(json.dumps([
         {"noisy": "a.wav", "clean": "b.wav", "noise": "n", "snr_db": 0},
     ]), encoding="utf-8")

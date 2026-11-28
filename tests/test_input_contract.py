@@ -314,17 +314,8 @@ EXEMPT = {
 }
 
 
-def _alias_of(name):
-    """What a deprecated name stands for, from the first line of its docstring."""
-    found = re.match(r"Deprecated alias for :func:`(?:kudio\.util\.)?(\w+)`",
-                     (getattr(kudio, name).__doc__ or "").strip())
-    return found and found[1]
-
-
 def _kind(name):
     found = getattr(kudio, name)
-    if _alias_of(name):
-        return 'alias'
     if inspect.isclass(found) and issubclass(found, BaseException):
         return 'error'
     if inspect.isclass(found) and name in RECORDS:
@@ -348,15 +339,6 @@ def test_every_public_name_is_written_down_once():
     assert sorted(set(CONTRACT) & set(EXEMPT)) == []
     assert sorted((set(CONTRACT) | set(EXEMPT)) - functions) == []
     assert sorted(RECORDS - set(public)) == []
-
-
-def test_an_old_name_stands_for_a_name_that_is_written_down():
-    old = [n for n in kudio.__all__ if callable(getattr(kudio, n)) and _alias_of(n)]
-    assert len(old) > 30
-    for name in old:
-        stands_for = _alias_of(name)
-        assert (stands_for in CONTRACT or stands_for in EXEMPT
-                or hasattr(kudio.util, stands_for)), name
 
 
 @pytest.mark.parametrize("name", sorted(n for n, why in EXEMPT.items() if '.py' in why))
@@ -500,7 +482,8 @@ def test_one_bad_sample(name, wave, tmp_path):
 @pytest.mark.parametrize("name, wave", WAVES)
 @pytest.mark.parametrize("n", [0, 1, 2, 10, 511, 2000])
 def test_any_length_is_an_answer_or_a_refusal(name, wave, n, tmp_path):
-    """Not an error of numpy's: a clip of 0.04 to 0.43 s broke vad on a broadcast."""
+    """Not an error of numpy's: a clip of 0.04 to 0.43 s is where vad would fail
+    on a broadcast."""
     entry, wave = _with_tmp(name, tmp_path), wave.rstrip('?')
     _outcome(lambda: entry(**{wave: CONTRACT[name].base[wave][:n]}))
 
@@ -570,11 +553,11 @@ def test_a_number_inside_its_range_is_taken(name, arg, tmp_path):
 # -- flags -----------------------------------------------------------------------------------------
 
 #: True and False, numpy's, and the whole numbers that are 0 and 1: 'no', 2 and NaN are True
-#: to Python, and every one of them was taken for it
+#: to Python, and a check that asks Python would take every one of them for it
 TRUE_OR_FALSE = [True, False, np.True_, np.False_, 1, 0]
 NO_FLAG = ['no', 'False', 2, -1, NAN, 1.0, None, [True]]
 
-#: what takes True and False only, as it did before the rule above: a signature keeps
+#: what takes True and False only, stricter than the rule above: a signature keeps
 #: what it was given, and these tests say so
 STRICT = {
     'dnsmos.polyfit': 'test_dnsmos.py', 'dnsmos.personalized': 'test_dnsmos.py',
@@ -596,7 +579,7 @@ def _public_flags():
         if id(thing) in seen:
             continue
         seen.add(id(thing))
-        if not callable(thing) or _kind(name) in ('alias', 'error') or \
+        if not callable(thing) or _kind(name) == 'error' or \
                 (inspect.isclass(thing) and name in RECORDS and name != 'STFT'):
             continue
         targets = [(name, thing.__init__ if inspect.isclass(thing) else thing)]

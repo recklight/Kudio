@@ -546,9 +546,8 @@ def _warn_non_finite(y: np.ndarray, wav_dir: PathLike) -> None:
     Not an error: repairing a corpus means reading it first. But this is the
     last point at which anyone can be told what is actually wrong with the
     clip, because every measurement taken from it afterwards comes back nan
-    or -inf, and that reads like a microphone nobody switched on. kudio up to
-    3.7.0 wrote FLOAT files without checking, so such files are sitting in
-    corpora right now.
+    or -inf, and that reads like a microphone nobody switched on. A writer
+    that does not check leaves FLOAT files like this, and corpora hold them.
     """
     bad = _count_non_finite(y)
     if bad:
@@ -1143,8 +1142,8 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
             # Rounded here to the subtype's own step and handed over as the
             # integer type that holds it, shifted to the top bits. libsndfile
             # keeps the top bits of an integer, so nothing is floored on the
-            # way out -- PCM_24 and PCM_U8 used to average a third and a half
-            # of a step low.
+            # way out -- flooring would leave PCM_24 and PCM_U8 a third and a half
+            # of a step low on average.
             container = 16 if bits <= 16 else 32
             full = 2.0 ** (bits - 1)
             steps = np.clip(np.round(wave.astype(np.float64) * full), -full, full - 1)
@@ -1153,7 +1152,7 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
 
     Path(path).parent.mkdir(exist_ok=True, parents=True)
     # soundfile takes the container from the extension spelled as libsndfile
-    # names it, so .aiff writes and .aif, AIFF's other usual extension, did not
+    # names it, so .aiff writes and .aif, AIFF's other usual extension, does not
     suffix = Path(path).suffix.lower()
     container = _CONTAINERS.get(suffix, suffix[1:].upper())
     try:
@@ -1282,7 +1281,7 @@ def convert_folder(src: Any, dst: PathLike, *,
 
     outputs: List[Path] = []
     # an entry check_input could not use is a failure like any other, not
-    # something to drop: a typo in a list used to leave "1/1 written"
+    # something to drop: a typo in a list would leave "1/1 written"
     failed: List[Tuple[Path, str]] = [
         (Path(str(item)), "not an existing .wav file") for item in skipped]
 

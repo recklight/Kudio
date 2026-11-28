@@ -122,7 +122,7 @@ def script(tmp_path_factory):
     """``{case: what it said}`` of the cases run by _MAIN, in a process of its own with
     100 s to do them in: what still waits then is missing, and so is what came after.
     The progress bars and the warnings go to another pipe: tqdm before 4.66 does not
-    read TQDM_DISABLE, and its bars broke each answer off its name."""
+    read TQDM_DISABLE, and its bars would break each answer off its name."""
     folder = tmp_path_factory.mktemp("script")
     (folder / "site").mkdir()
     (folder / "site" / "sitecustomize.py").write_text(_DIES)
@@ -271,7 +271,7 @@ def test_a_worker_that_leaves_is_one_that_died():
 
 
 def test_one_killed_before_it_is_asked_is_found_when_it_is():
-    """It never had item 1, and was said to have died over it."""
+    """A worker that never had item 1 is not said to have died over it."""
     with pytest.raises(kudio.KudioError,
                        match=r"a worker process died \(exit code -?\d+\) before item 1 of 5\."):
         with Workers(2, "here") as workers:

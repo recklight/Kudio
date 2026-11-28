@@ -262,7 +262,7 @@ def test_a_size_that_is_not_a_whole_number_is_refused(name, size, of, value):
                                  lambda x: float(x.max()), lambda x: np.float64(x.max())],
                          ids=["a float32", "an array", "a Python float", "a float64"])
 def test_the_largest_is_0_db_whatever_kind_of_number_it_is_given_as(ref):
-    """numpy 1.24 took the logarithm of a float32 number in float64, and that of the
+    """numpy 1.24 takes the logarithm of a float32 number in float64, and that of the
     float32 values in float32: 3e-6 dB between them."""
     values = np.random.default_rng(0).random((40, 100)).astype(np.float32) ** 2
     out = _mel.decibels(values, ref=ref(values), range_db=80.0)
@@ -347,9 +347,9 @@ def test_no_files_and_files_of_two_lengths_are_said(tmp_path, wav_file, sine):
 @pytest.mark.parametrize("n_mels", [0, 40])
 @pytest.mark.parametrize("pieces", [1, 2, 7, 40, 1000])
 def test_the_blocks_a_stream_comes_in_change_nothing(hop, n_mels, pieces):
-    """With a hop longer than the frame the samples between two columns were
-    skipped only as far as they had arrived: 7 columns at once were 13 in 40
-    blocks."""
+    """With a hop longer than the frame the samples between two columns are
+    skipped in full, whatever blocks they arrive in; skipped only as far as
+    they have arrived, 7 columns at once would be 13 in 40 blocks."""
     y = 0.1 * np.random.default_rng(0).standard_normal(20000)
     stream = kudio.SpectrogramStream(SR, n_fft=512, hop_length=hop, n_mels=n_mels, seconds=9)
     got = np.concatenate([stream.push(b) for b in np.array_split(y, pieces)])

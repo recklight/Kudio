@@ -58,11 +58,9 @@ def _quiet(**kwargs):
 
 
 def _score(path_ref, path_deg, sr=SR, metrics=None):
-    """kudio.score of one pair, from numpy's global generator seeded with 0
-    as score_dataset seeds it."""
+    """kudio.score of one pair."""
     ref, _ = kudio.file_load(path_ref, sr=None)
     deg, _ = kudio.file_load(path_deg, sr=None)
-    np.random.seed(0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return kudio.score(ref, deg, sr, metrics)
@@ -274,6 +272,28 @@ def test_reference_free_metrics_score_the_file_alone(testset):
     row = next(r for r in result.rows if r["id"] == "spk03/u1")
     assert row["srmr"] == kudio.srmr(y, SR)
     assert row["wada_snr"] == kudio.wada_snr(y, SR)
+
+
+def test_the_global_generator_is_the_callers(tmp_path, monkeypatch):
+    """No metric here draws a random number, and score_dataset neither seeds
+    numpy's global generator nor puts its state back: a metric that did draw
+    would draw the caller's numbers, one item after the other."""
+    from kudio.core import wada
+    _, _, enhanced = _make_set(tmp_path, speakers=2, utterances=1)
+    drawn = []
+
+    def drawing(y, sr):
+        drawn.append(np.random.random())
+        return 0.0
+
+    monkeypatch.setattr(wada, "wada_snr", drawing)
+    state = np.random.get_state()
+    try:
+        np.random.seed(5)
+        _quiet(deg=enhanced, metrics=["wada_snr"])
+    finally:
+        np.random.set_state(state)
+    assert drawn == list(np.random.RandomState(5).random_sample(2))
 
 
 def test_mixed_reference_free_ones_survive_a_reference_that_cannot_be_read(testset):

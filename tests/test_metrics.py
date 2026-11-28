@@ -75,8 +75,8 @@ def test_a_truncated_pair_says_so():
 
 
 def test_a_pair_that_barely_overlaps_is_refused():
-    """The one that caught me out: 1000 samples against 16000 came back as a
-    bit-perfect copy, because the 15000 that disagree were never compared."""
+    """Cut to the length they share, 1000 samples against 16000 would score as a
+    bit-perfect copy, because the 15000 that disagree are never compared."""
     ref, deg = _pair(1000)
     with pytest.raises(ValueError) as excinfo:
         snr(ref, deg)

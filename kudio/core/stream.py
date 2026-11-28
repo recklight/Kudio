@@ -252,8 +252,10 @@ class Recorder:
         returns the waveform, int16, with one column per channel (squeezed for
         mono). Samples the computer was too late for are said in the log.
 
-        :raises DeviceError: when the device has not delivered the take ten
-            seconds after it should have.
+        :raises DeviceError: when the device does not open or start at
+            ``rate``, with its index and the rate, as :func:`kudio.record`
+            says it; and when the device has not delivered the take ten seconds
+            after it should have.
         """
         n_reads = int(self.rate / self.frames_per_buffer * self.record_times)
         wanted = n_reads * self.frames_per_buffer * self.channels
@@ -278,10 +280,22 @@ class Recorder:
             if device is None:
                 with CheckDevice() as check:
                     device = check.default_input()
-            self.stream = self._sd.RawInputStream(
-                samplerate=self.rate, channels=self.channels, dtype='int16',
-                device=device, blocksize=self.frames_per_buffer, callback=take)
-            self.stream.start()
+            try:
+                self.stream = self._sd.RawInputStream(
+                    samplerate=self.rate, channels=self.channels, dtype='int16',
+                    device=device, blocksize=self.frames_per_buffer, callback=take)
+                self.stream.start()
+            except Exception as e:
+                # a stream that opened and did not start is closed, not left to the caller
+                opened, self.stream = self.stream, None
+                if opened is not None:
+                    try:
+                        opened.close()
+                    except Exception:                                 # noqa: BLE001
+                        pass
+                raise DeviceError(f"Recorder: device {device} did not record at {self.rate} Hz: "
+                                  f"{e}; `kudio devices` lists the devices, and device= picks "
+                                  f"one") from e
             finished = done.wait(n_reads * self.frames_per_buffer / self.rate + 10)
             self.terminate()
             if not finished:
@@ -374,7 +388,7 @@ class RemoteStreamReader(threading.Thread):
         except UnicodeDecodeError:
             text = None
         # printable text is a reply; anything else is audio. A silent reply,
-        # all zero bytes, decodes as UTF-8 too, and used to be taken for text
+        # all zero bytes, decodes as UTF-8 too, and is not text
         if text is not None and text.strip() and \
                 all(c.isprintable() or c.isspace() for c in text):
             log.info("Stream: %s", text)

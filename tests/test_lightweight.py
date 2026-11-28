@@ -230,6 +230,7 @@ REST = {
     'check_metrics_install': 'float(sum(kudio.check_metrics_install()))',
     'find_duplicate': 'float(len(kudio.find_duplicate([1, 1, 2])))',
     'lowercase': 'float(len(kudio.util.lowercase(["A"])))',
+    'uppercase': 'float(len(kudio.uppercase(["a"])))',
     'timer': 'float(kudio.timer(len)([1, 2]))',
     'save_manifest': 'kudio.save_manifest(dst + "/m.json", pairs) and None',
     'load_manifest': 'float(len(kudio.load_manifest(kudio.save_manifest(dst + "/n.json", pairs))))',
@@ -269,13 +270,6 @@ REST = {
 NOT_RUN = {
     'a package of its own': ('pesq', 'dnsmos', 'dnsmos_p808', 'find_dnsmos_model'),
     'a sound device': ('is_available', 'list_devices', 'check_device', 'play_audio', 'record'),
-    'another name, with a warning, for one that is run': (
-        'w2s', 'f2s', 's2w', 'wav2spec', 'spec2wav', 'wavform2spec', 'spec2wavform', 'wav2mel',
-        'w2mfcc', 'wav2mfcc', 'concat_logspec', 'concat_logspec_', 'concat_mfcc',
-        'concat_mfcc_', 'contextual_LogSpectrogram', 'uppercase', 'upercase'),
-    'colours on a console': ('blu', 'cya', 'gre', 'pur', 'red', 'yel', 'dkblu', 'dkcya',
-                             'dkgre', 'dkpur', 'dkred', 'dkyel', 'fGre', 'fRed', 'h1',
-                             'info', 'warn', 'error', 'color_test'),
 }
 
 #: the signals the tables above are given, built from numpy alone

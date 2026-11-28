@@ -19,7 +19,7 @@ import kudio
 from kudio.core import _bss
 
 mir_eval = pytest.importorskip("mir_eval")
-import mir_eval.separation  # noqa: E402
+import mir_eval.separation  # noqa: E402, F811
 
 
 @pytest.fixture(autouse=True)

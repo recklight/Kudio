@@ -305,8 +305,8 @@ def test_a_channel_is_treated_as_if_alone():
 @pytest.mark.parametrize("dtype", ['f2', 'f4', 'f8', '>f4', '>f8', 'i1', 'i2', '>i2', 'i4', 'u1',
                                    'u2'])
 def test_the_type_is_kept(dtype):
-    """float16 and big-endian floats were refused, as a numba error. Integers are the
-    floats of their full scale, rounded."""
+    """float16 and big-endian floats are taken too. Integers are the floats of their
+    full scale, rounded."""
     dtype = np.dtype(dtype)
     wave = 0.5 * np.sin(2 * np.pi * 300 * np.arange(6000) / SR)
     if dtype.kind == 'f':
@@ -344,8 +344,8 @@ def test_the_blocks_it_is_worked_on_in_do_not_show(monkeypatch, size):
 @pytest.mark.parametrize("rate", [np.nan, np.inf, -np.inf, 0, 0.0, -1, True, False, '1.5', None,
                                   [1.5], np.array([1.5]), 1 + 0j, 10 ** 400])
 def test_a_rate_is_a_finite_number_above_0(rate):
-    """NaN was numpy's "arange: cannot compute length", inf gave no samples, True was 1
-    and '1.5' a TypeError."""
+    """Unchecked, NaN would be numpy's "arange: cannot compute length", inf would give
+    no samples, True would be 1 and '1.5' a TypeError."""
     with pytest.raises(FeatureError) as caught:
         kudio.time_stretch(np.zeros(4000, np.float32), rate)
     assert str(caught.value) == (f"time_stretch(): rate has to be a finite number above 0, got "
@@ -355,7 +355,7 @@ def test_a_rate_is_a_finite_number_above_0(rate):
 @pytest.mark.parametrize("steps", [np.nan, np.inf, -np.inf, True, False, '2', None, [2],
                                    np.array([2]), 2 + 0j, 121, -120.5])
 def test_semitones_are_a_number_up_to_ten_octaves(steps):
-    """'2' was 2, True 1, and -inf a ZeroDivisionError."""
+    """Unchecked, '2' would be 2, True 1, and -inf a ZeroDivisionError."""
     with pytest.raises(FeatureError) as caught:
         kudio.pitch_shift(np.zeros(4000, np.float32), SR, steps)
     assert str(caught.value) == (f"pitch_shift(): n_steps has to be a number of semitones from "

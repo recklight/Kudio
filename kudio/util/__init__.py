@@ -34,7 +34,7 @@ from kudio.util.colors import (
     warn,
     yel,
 )
-from kudio.util.conv import lowercase, upercase, uppercase  # dep-free helpers
+from kudio.util.conv import lowercase, uppercase  # dep-free helpers
 from kudio.util.parallel import map_waves
 from kudio.util.tools import Timer, find_duplicate, timer
 
@@ -48,5 +48,5 @@ __all__ = [
     # tools
     'Timer', 'find_duplicate', 'timer', 'map_waves',
     # conv (list helpers; data2xlsx stays in kudio.util.conv, needs kudio[data])
-    'lowercase', 'uppercase', 'upercase',
+    'lowercase', 'uppercase',
 ]

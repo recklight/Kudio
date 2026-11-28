@@ -41,13 +41,13 @@ class Pair:
     noisy: str
     clean: str
     noise: str = ""
-    #: an int when the SNR is a whole number of dB, as it always was; a float
+    #: an int when the SNR is a whole number of dB; a float
     #: when it is not, rather than that float cut down to an int
     snr_db: Optional[float] = None
     #: reverberation time of the room the clean signal was put through, in
     #: seconds, or ``None`` when it was not. Optional and last, so a manifest
-    #: written before rooms existed still loads and a manifest written with
-    #: them still loads in an older kudio -- see :func:`load_manifest`.
+    #: of dry mixtures, with no rt60 in it, loads as well -- see
+    #: :func:`load_manifest`.
     rt60: Optional[float] = None
     #: the link the mixture travelled down, as :func:`kudio.channel_tag`
     #: writes it (``'telephone'``, ``'mu_law+loss5%x4'``, ...), or ``None``.
@@ -135,8 +135,8 @@ def save_manifest(path: PathLike, pairs: Sequence[Pair]) -> Path:
 def load_manifest(path: PathLike) -> List[Pair]:
     """Read a manifest written by :func:`save_manifest`.
 
-    Extra keys are dropped with a ``UserWarning`` rather than raising — a
-    manifest written by a later version should still load — but a missing
+    Extra keys are dropped with a ``UserWarning`` rather than raising, so a
+    manifest with keys this version does not know loads all the same; a missing
     ``noisy`` or ``clean`` is an error, since there is no example without them.
 
     :raises ValueError: naming the file, when it is not JSON, and the row.

@@ -159,8 +159,8 @@ def test_the_axis_of_a_waveform_is_even_about_zero(ax):
 
 
 def test_a_waveform_covers_what_it_is_drawn_over(ax):
-    """As a filled band of nine samples a column a voice was a tint: most of a column
-    was outside of it."""
+    """Drawn as a filled band of nine samples a column, a voice would be a tint,
+    with most of each column outside it."""
     t = np.arange(45000) / SR
     ax.figure.set_size_inches(8, 2)
     _draw.waveform(ax, 0.5 * np.sin(2 * np.pi * 1500 * t), SR, color='k')
@@ -181,7 +181,7 @@ def test_a_waveform_covers_what_it_is_drawn_over(ax):
     (3600, [0, 600, 3599.6], ['0:00', '10:00', '60:00']),
     (3700, [0, 600, 3661], ['0:00:00', '0:10:00', '1:01:01'])])
 def test_a_tick_says_its_time(ax, span, ticks, want):
-    """1.05 s is not 1.1, and ten seconds before the start not 0:50, as they were."""
+    """1.05 s is not 1.1, and ten seconds before the start is not 0:50."""
     _draw._time_axis(ax, span)
     ax.set_xticks(ticks)
     ax.set_xlim(0, span)
@@ -244,8 +244,8 @@ def clip(tmp_path):
 
 
 def test_the_curves_stand_at_the_times_of_what_they_measure(clip, figures):
-    """Of a clip of 1.3 s the axis went to 1 s, and the curves of all of it were drawn
-    into that."""
+    """The axis of a clip of 1.3 s reaches 1.3 s, not 1 s, and each curve stands
+    at the times it measures."""
     visual.plot_3_features(clip)
     axes = figures[0].axes[0]
     assert axes.get_xlim() == (0, 1.3)

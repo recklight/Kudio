@@ -85,8 +85,8 @@ def test_matches_checks_the_rate():
 
 @pytest.mark.parametrize("n_fft, n", [(512, 32000), (511, 32000), (511, 16384), (400, 999)])
 def test_n_frames_counts_what_forward_returns(n_fft, n):
-    """n // hop + 1 is right for an even n_fft only: STFT(n_fft=511) promised
-    126 frames for 32000 samples and gave 125."""
+    """n // hop + 1 is right for an even n_fft only: by it STFT(n_fft=511) would
+    promise 126 frames for 32000 samples and give 125."""
     stft = STFT(sr=SR, n_fft=n_fft, hop_length=256)
     y = np.random.default_rng(0).standard_normal(n).astype(np.float32)
     assert stft.n_frames(n) == len(stft.forward(y))
@@ -99,7 +99,7 @@ def test_from_dict_wants_every_key():
 
 
 def test_inverse_rebuilds_the_tail_too():
-    """The last len(y) % hop samples used to be one value repeated."""
+    """The last len(y) % hop samples are the signal, not one value repeated."""
     stft = STFT(sr=SR, n_fft=512, hop_length=256)
     y = make_sine(seconds=1.0)                    # 16000 % 256 = 128 samples of tail
     back = stft.inverse(y, stft.forward(y))
@@ -185,7 +185,7 @@ def test_a_length_to_rebuild_is_a_number_of_samples(sine, length):
 
 
 def test_no_samples_are_no_samples(sine):
-    """0 was taken for a length that was not given, and the clip came back."""
+    """0 is a length, not a length that is not given: no samples come back."""
     stft = STFT(sr=SR, n_fft=512, hop_length=128, window='hann')
     spec = stft.analyse(sine)
     assert stft.synthesise(spec, length=0).shape == (0,)

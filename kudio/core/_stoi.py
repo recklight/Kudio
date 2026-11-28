@@ -160,6 +160,18 @@ def stoi(x, y, fs_sig, extended=False):
     """STOI, or ESTOI with *extended*, of *y* against the clean *x*, both 1-D of one
     length at *fs_sig*. Fewer than 30 frames left after the silent ones are dropped
     gives 1e-5 with a RuntimeWarning, as pystoi does."""
+    value = stoi_or_none(x, y, fs_sig, extended)
+    if value is None:
+        warnings.warn("stoi(): fewer than 30 frames are left once the silent ones are "
+                      "dropped; 1e-5", RuntimeWarning)
+        return TOO_SHORT
+    return value
+
+
+def stoi_or_none(x, y, fs_sig, extended=False):
+    """What :func:`stoi` computes, and None where fewer than 30 frames are left once
+    the silent ones are dropped. A score can be 1e-5 or less, and under 0, so the
+    placeholder cannot say that the pair was too short: None does."""
     if x.shape != y.shape:
         raise ValueError(f"stoi(): x and y have to be one length, got {x.shape} and {y.shape}")
     if fs_sig != FS:
@@ -169,9 +181,7 @@ def stoi(x, y, fs_sig, extended=False):
     x_spec = _stft(x, N_FRAME, NFFT, overlap=2).transpose()
     y_spec = _stft(y, N_FRAME, NFFT, overlap=2).transpose()
     if x_spec.shape[-1] < N:
-        warnings.warn("stoi(): fewer than 30 frames are left once the silent ones are "
-                      "dropped; 1e-5", RuntimeWarning)
-        return TOO_SHORT
+        return None
     obm, _ = _third_octaves(FS, NFFT, NUMBAND, MINFREQ)
     x_tob = np.sqrt(np.matmul(obm, np.square(np.abs(x_spec))))
     y_tob = np.sqrt(np.matmul(obm, np.square(np.abs(y_spec))))

@@ -1,8 +1,7 @@
 # Getting started
 
-This page covers installing kudio, takes one recording from a file on disk to
-a cleaner file beside it, and ends with the two things that decide what you
-see when something goes wrong: the exceptions and the logging.
+Installing kudio, one recording taken from a noisy file to a denoised one, and
+what kudio raises, warns and logs when something is wrong.
 
 ## Installing
 
@@ -10,85 +9,38 @@ see when something goes wrong: the exceptions and the logging.
 pip install kudio
 ```
 
-The core install brings numpy, scipy, soundfile, soxr, PyYAML and tqdm.
-That is enough for files, features, effects, loudness, the
-reference-free report, denoising, dataset synthesis and the metrics that need
-no outside package. `import kudio` imports none of the optional packages
-below, so a missing extra shows up when you call the function that needs it
-(for the plotting helpers, when you import `kudio.util.visual`), and not
-before.
-
-WAV, FLAC, OGG, MP3, AIFF and the other formats libsndfile knows are read with
-that. m4a, aac, webm and the like take the `compressed` extra and ffmpeg on
-the PATH, which pip does not install
-([Audio files](guide/audio-files.md#formats-soundfile-does-not-read)).
-
-kudio needs Python 3.9 or newer. CI tests it on 3.9, 3.11 and 3.13, on Linux
-and on Windows.
+The core install is numpy, scipy, soundfile, soxr, PyYAML and tqdm: files,
+features, effects, loudness, denoising, dataset synthesis and every metric
+except PESQ and DNSMOS. kudio needs Python 3.9 or newer; CI tests 3.9, 3.11
+and 3.13 on Linux and Windows. `import kudio` imports no optional package, so
+a missing extra shows up when you call the function that needs it.
 
 ### Extras
 
-Anything that brings in a large, compiled or niche package is an extra.
-Install the ones you need by name; the quotes stop shells such as zsh from
-reading the brackets as a file pattern:
+Quote the brackets, or zsh reads them as a file pattern:
 
 ```bash
-pip install "kudio[eval,viz]"
+pip install "kudio[audio,viz]"
 ```
 
-| Extra | Installs | What it enables |
+| Extra | Installs | For |
 |---|---|---|
-| `audio` | sounddevice | recording and playback: [`record`][kudio.core.stream.record], [`StreamRecorder`][kudio.core.stream.StreamRecorder], [`play_audio`][kudio.core.stream.play_audio], the stream readers, [`list_devices`][kudio.util.check.list_devices] |
-| `eval` | nothing | kept so that `pip install "kudio[eval]"` still installs: STOI, ESTOI and SDR need no package |
-| `pesq` | pesq | PESQ, ITU-T P.862 and P.862.2, in [`pesq`][kudio.core.evaluator.pesq], `score` and `AudioEvaluate`, and the PESQ inside [`composite`][kudio.core.quality.composite] |
-| `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos] and [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808], predicted P.835 and P.808 opinion scores with no clean reference |
+| `audio` | sounddevice | [`record`][kudio.core.stream.record], [`StreamRecorder`][kudio.core.stream.StreamRecorder], [`play_audio`][kudio.core.stream.play_audio], [`list_devices`][kudio.util.check.list_devices]; on Linux it needs the system's PortAudio, `libportaudio2` on Debian and Ubuntu |
+| `pesq` | pesq | PESQ (ITU-T P.862 and P.862.2), also inside [`composite`][kudio.core.quality.composite]; PyPI has it as source only, so it needs a C compiler, the MSVC Build Tools on Windows |
+| `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos] and [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808]; the weights are Microsoft's, so clone the DNS-Challenge repository and pass its DNSMOS folder as `model_dir=`, or set `KUDIO_DNSMOS_DIR` |
 | `viz` | matplotlib | the plotting helpers in [`kudio.util.visual`][kudio.util.visual] |
-| `data` | pandas, openpyxl | [`AudioEvaluate.get_df`][kudio.core.evaluator.AudioEvaluate.get_df] and [`per_file`][kudio.core.evaluator.AudioEvaluate.per_file], [`data2xlsx`][kudio.util.conv.data2xlsx] |
-| `compressed` | audioread | m4a, aac, webm and whatever else ffmpeg decodes, wherever kudio reads a file ([Audio files](guide/audio-files.md#formats-soundfile-does-not-read)); ffmpeg itself has to be on the PATH |
-| `all` | `audio`, `eval`, `dnsmos`, `viz`, `data`, `compressed` | every runtime extra except `pesq` |
+| `data` | pandas, openpyxl | [`AudioEvaluate.get_df`][kudio.core.evaluator.AudioEvaluate.get_df], [`per_file`][kudio.core.evaluator.AudioEvaluate.per_file], [`data2xlsx`][kudio.util.conv.data2xlsx] |
+| `compressed` | audioread | m4a, aac, webm and whatever else ffmpeg decodes ([Audio files](guide/audio-files.md#formats-soundfile-does-not-read)); ffmpeg has to be on the PATH |
+| `eval` | nothing | an empty extra: STOI, ESTOI and SDR need nothing beyond the core |
+| `all` | `audio`, `eval`, `dnsmos`, `viz`, `data`, `compressed` | every runtime extra except `pesq`, which needs a compiler |
 
-`[dev]`, `[check]` and `[docs]` are for working on kudio rather than with it,
-and `[all]` leaves them out as well. Four of the others have a catch:
-
-`pesq`
-:   The `pesq` package is on PyPI as source only, so installing it compiles C
-    code and needs a compiler: on Windows, the MSVC Build Tools. I keep it out
-    of `[eval]` and `[all]` so that those two still install on a machine
-    without one.
-
-`dnsmos`
-:   This installs the runtime, not the model. The weights belong to
-    Microsoft's DNS-Challenge and are distributed there, so clone that
-    repository and pass its DNSMOS folder as `model_dir=`, or set the
-    `KUDIO_DNSMOS_DIR` environment variable to it. When kudio finds no
-    model it raises a [`FeatureError`][kudio.exceptions.FeatureError] saying
-    where to get it.
-
-`audio`
-:   sounddevice, a PortAudio binding, for recording, playback and the device
-    list, with one index for each device
-    ([Recording and live views](guide/live-audio.md)). Its wheels for Windows
-    and macOS carry PortAudio; on Linux it needs the system's PortAudio
-    library, `libportaudio2` on Debian and Ubuntu, and nothing is compiled.
-
-`eval`
-:   Empty. STOI, ESTOI and SDR are computed by kudio itself.
-
-[`check_metrics_install`][kudio.core.evaluator.check_metrics_install] says
-which metric back-ends a machine has; [Measuring quality](guide/metrics.md)
-has what it returns.
+`[dev]`, `[check]` and `[docs]` are for working on kudio itself.
 
 ## A first session
 
-The session takes one noisy recording through the usual steps: look at the
-file, load it, check it, denoise it, score the result against the clean
-signal and save it. It needs nothing beyond the core install, and two files
-you can make yourself: a clean signal of two voiced stretches with pauses
-around them, and the same signal with white noise mixed in at 2 dB SNR.
-
-These are not the files from the tour on the home page, although the names
-are the same. Run the block in an empty folder, or none of the numbers below
-will match.
+One noisy recording, checked, denoised, scored and saved. Run this block in
+an empty folder first: it writes `clean.wav`, two voiced stretches with pauses
+around them, and `noisy.wav`, the same under white noise at 2 dB SNR.
 
 ??? example "Making `clean.wav` and `noisy.wav`"
 
@@ -117,37 +69,13 @@ will match.
     kudio.save_wave("noisy.wav", noisy, sr)
     ```
 
-    [`add_noise_snr`][kudio.effects.augment.add_noise_snr] scales the noise
-    to the SNR you ask for, with the speech power averaged over the whole
-    clip, pauses included.
-
-### Look, then load
+### Load and check
 
 ```python
 import kudio
 
-print(kudio.audio_info("noisy.wav"))
 y, sr = kudio.file_load("noisy.wav")
-print(y.dtype, y.shape, sr)
-```
-
-```text
-noisy.wav: 4.500s, 16000 Hz, 1ch, PCM_16, peak 0.5430
-float32 (72000,) 16000
-```
-
-[`audio_info`][kudio.core.io.audio_info] answers rate, channels, length and
-encoding from the header. The peak needs the samples, which it reads in
-blocks; `peak=False` skips them and stays instant on a file of any size.
-
-[`file_load`][kudio.core.io.file_load] returns float32 at the file's own rate,
-or at `sr=` if you pass one. A multi-channel file is mixed to mono unless you
-pass `mono=False`, and then comes back channels last, `(frames, channels)`,
-with or without `sr=`.
-
-### Check it
-
-```python
+print(kudio.audio_info("noisy.wav"))
 report = kudio.audio_report(y, sr)
 print(report)
 for problem in report.problems():
@@ -155,72 +83,33 @@ for problem in report.problems():
 ```
 
 ```text
+noisy.wav: 4.500s, 16000 Hz, 1ch, PCM_16, peak 0.5430
 4.50s @ 16000 Hz · peak -5.3 dBFS · -18.4 LUFS · SNR~9 dB · bandwidth 8000 Hz
 estimated SNR around 9 dB — noise close to the content gives that, and so does a steady sound such as hum or a running machine, whose loud and quiet frames hardly differ; the estimate cannot tell the two apart
 ```
 
-[`audio_report`][kudio.core.report.audio_report] needs no clean reference. It
-measures level, loudness, clipping, DC offset, silence, the noise floor and
-how much of the band the content really uses, and
-[`problems`][kudio.core.report.AudioReport.problems] puts whatever is worth
-acting on into sentences. An empty list means nothing it can measure is
-wrong. The loudness is gated integrated loudness to ITU-R BS.1770, the number
-[`loudness`][kudio.core.loudness.loudness] returns on its own: how loud the
-clip sounds, which the peak cannot tell you.
-[Inspecting a recording](guide/inspection.md) has the rest of the loudness
-tools.
-
-The file was mixed at 2 dB and the report says 9. Both are right about
-different things. The mix SNR averages the speech over the whole file, pauses
-included; the report cuts the file into 30 ms frames and compares the loud
-ones (95th percentile of their levels) with the quiet ones (10th percentile).
-Use it to spot a noisy file, not to quote a number. The figure in the next
-step marks both percentiles.
+[`file_load`][kudio.core.io.file_load] returns float32 at the file's own rate,
+or at `sr=`, mixed to mono unless `mono=False` asks for `(frames, channels)`.
+[`audio_report`][kudio.core.report.audio_report] needs no clean reference. Its
+SNR compares loud 30 ms frames with quiet ones, so a file mixed at 2 dB reads
+about 9: it spots a noisy file, it does not measure the mix.
 
 ### Denoise
 
 ```python
 denoised = kudio.spectral_enhance(y, sr)
-print(len(denoised) == len(y))
-```
-
-```text
-True
 ```
 
 [`spectral_enhance`][kudio.enhance.spectral.spectral_enhance] defaults to a
-log-MMSE gain over an MCRA noise estimate, and returns exactly as many samples
-as it was given, so the output lines up with the input sample for sample.
+log-MMSE gain over an MCRA noise estimate and returns as many samples as it
+was given.
 
 ![Frame levels of noisy.wav and denoised.wav over 4.5 seconds, with the 95th and 10th percentiles of the noisy levels marked 8.8 dB apart](images/start-levels-light.webp#only-light)
 ![Frame levels of noisy.wav and denoised.wav over 4.5 seconds, with the 95th and 10th percentiles of the noisy levels marked 8.8 dB apart](images/start-levels-dark.webp#only-dark)
 
-`noisy.wav` is what the report measured: each syllable peaks at about
--14.5 dBFS and the pauses sit at the noise floor, -23.6 dBFS. `denoised.wav`
-is the output of the call above. Its noise floor is 19 dB lower, at
--42.8 dBFS, which is where the two later pauses sit. The syllable peaks drop by only
-about 1 dB, because at a peak the level is the speech's own. The noise under
-the speech goes down as well, but by less: over the two voiced stretches, the
-difference from `clean.wav` falls from -23.5 to -31.4 dBFS. The method can
-only take away what it can tell apart from the speech.
-
-The first half second keeps about 10 dB more noise than the later pauses.
-MCRA learns the noise as it goes and is still learning there. This clip opens
-on half a second of noise alone, which suits the `initial` estimator: it takes
-the opening frames as room tone and keeps that estimate.
-
-```python
-denoised_initial = kudio.spectral_enhance(y, sr, noise="initial")
-```
-
-That leaves all three pauses at about -38 dBFS, the first one 6 dB quieter
-than with MCRA and the later two 4 to 5 dB louder, and the SI-SDR in the next
-step goes from 11.04 to 12.38 dB. The seven gain rules, the four noise
-estimators and how to compare them are on [Denoising](guide/enhancement.md).
-That page also measures where denoising stops paying. This clip still gains
-8 dB of SI-SDR when it is mixed at 30 dB instead of 2, but the voices there
-gain less the cleaner the input is, and at 20 dB all seven gain rules leave
-them worse than they found them.
+The noise floor drops from -23.6 to -42.8 dBFS, the syllable peaks by about
+1 dB. [Denoising](guide/enhancement.md) has the other gain rules and noise
+estimators.
 
 ### Score against the clean signal
 
@@ -238,29 +127,13 @@ si_sdr    1.99 ->  11.04 dB
 segsnr   -3.56 ->   1.01 dB
 ```
 
-Each of the two calls also prints a `UserWarning` on standard error:
-
-```text
-UserWarning: segmental_snr(): 105 of ref's 280 frames are digital silence; each scores -10 dB, or 0 dB where deg is silent there too
-```
-
-The pauses of the `clean.wav` made above are exact zeros, which no microphone
-records, and segmental SNR has no signal to set the noise against in them, so
-those frames sit at its -10 dB floor. A reference with a noise floor of its
-own gets no such warning.
-
-[`score`][kudio.core.evaluator.score] takes metrics by name. `pesq` and the
-composite's `csig`, `cbak` and `covl` need `[pesq]`, `stoi`, `estoi` and `sdr`
-need `[eval]`, and the rest run on what kudio installs. With no list it runs
-`snr`, `si_sdr`, `segsnr`, `sdi` and whichever of `pesq`, `stoi`, `estoi` and
-`sdr` can run on this machine; the others run when they are named.
-
-These numbers need the clean signal, which a mix you made yourself has and a
-real recording never does; that is what `audio_report` is for. They also
-compare sample *i* with sample *i*, so a pair that may be shifted needs
-[`align`][kudio.core.align.align] first. Shifted by 16 samples (1 ms), the
-denoised clip scores -9.43 dB SI-SDR instead of 11.04.
-[Measuring quality](guide/metrics.md) has the rest.
+Each call also warns that 105 of the reference's 280 frames are digital
+silence, which segmental SNR scores at its -10 dB floor.
+[`score`][kudio.core.evaluator.score] with no list runs `snr`, `si_sdr`,
+`segsnr`, `sdi`, `stoi`, `estoi` and `sdr`, and `pesq` where `[pesq]` is
+installed and the rate is 8 or 16 kHz. It compares sample *i* with sample *i*,
+so [`align`][kudio.core.align.align] a pair that may be shifted:
+[Measuring quality](guide/metrics.md).
 
 ### Save
 
@@ -273,170 +146,51 @@ print(kudio.audio_info("denoised.wav"))
 denoised.wav: 4.500s, 16000 Hz, 1ch, PCM_16, peak 0.3796
 ```
 
-[`save_wave`][kudio.core.io.save_wave] writes 16-bit PCM unless you pass
-another `subtype=`, creates missing folders, clips anything past ±1.0 in the
-integer formats and refuses NaN or inf with an `AudioIOError`.
-[Audio files](guide/audio-files.md) has the formats and the reasons.
-
-The denoised file measures -21.6 LUFS against the noisy file's -18.4: the
-noise it removed was part of the level. Bring the two to the same loudness
-with [`match_loudness`][kudio.core.loudness.match_loudness] before you listen
-to them side by side; [Inspecting a recording](guide/inspection.md) explains
-why.
-
-### The same from a shell
-
-```bash
-kudio info noisy.wav
-kudio report noisy.wav                    # exit status 1: it found a problem
-kudio enhance noisy.wav denoised.wav
-```
-
-`report` exits with 1 when `problems()` is not empty, so it works as a test
-in a shell script. Every command is on [Command line](cli.md).
+[`save_wave`][kudio.core.io.save_wave] writes 16-bit PCM unless `subtype=` says
+otherwise, clips past ±1.0 in the integer formats and refuses NaN or inf. From
+a shell the session is `kudio report noisy.wav` and `kudio enhance noisy.wav
+denoised.wav` ([Command line](cli.md)).
 
 ## Errors
 
-kudio's own exception classes all derive from
-[`KudioError`][kudio.exceptions.KudioError]:
+kudio's own exceptions derive from [`KudioError`][kudio.exceptions.KudioError]:
 
 | Class | Raised when |
 |---|---|
-| [`AudioIOError`][kudio.exceptions.AudioIOError] | a file cannot be read or written: `file_load`, `audio_info`, `save_wave` and what is built on them |
-| [`FeatureError`][kudio.exceptions.FeatureError] | a transform or measurement refuses its input: wrong shape, too short, an unknown method or parameter; it is a `ValueError` as well |
-| [`DeviceError`][kudio.exceptions.DeviceError] | `StreamRecorder` finds no usable input device, or sounddevice is installed but the system has no PortAudio library |
-| [`SynthesisError`][kudio.exceptions.SynthesisError] | [`Synthesizer`][kudio.core.synth.Synthesizer] will not empty a folder holding its inputs, the working directory, your home directory or a filesystem root, or meets a silent noise or clean file it cannot set an SNR with |
-| [`DependencyError`][kudio.exceptions.DependencyError] | an optional package is missing; it is an `ImportError` as well |
+| [`AudioIOError`][kudio.exceptions.AudioIOError] | a file cannot be read or written; [`UnsupportedFormatError`][kudio.exceptions.UnsupportedFormatError] is a subclass kudio does not raise itself |
+| [`FeatureError`][kudio.exceptions.FeatureError] | a transform or measurement refuses its input: wrong shape, too short, an unknown method or parameter; also a `ValueError` |
+| [`DeviceError`][kudio.exceptions.DeviceError] | no input device records, or sounddevice finds no PortAudio library |
+| [`SynthesisError`][kudio.exceptions.SynthesisError] | [`Synthesizer`][kudio.core.synth.Synthesizer] will not empty a folder that holds its inputs, the working directory, your home directory or a filesystem root, or meets a silent file it cannot set an SNR with |
+| [`DependencyError`][kudio.exceptions.DependencyError] | an optional package is missing; also an `ImportError`, and its message names the extra |
 
-Nothing in kudio raises
-[`UnsupportedFormatError`][kudio.exceptions.UnsupportedFormatError], a
-subclass of `AudioIOError`. A file that cannot be read or decoded comes back as
-`AudioIOError` itself, so catch that, for example to skip the unreadable files
-in a batch:
+Outside `KudioError`:
 
-```python
-for path in ["noisy.wav", "missing.wav"]:
-    try:
-        y, sr = kudio.file_load(path)
-    except kudio.AudioIOError:
-        print("skipped", path)
-```
+- Argument checks raise `ValueError` or `TypeError`: an unknown metric, a
+  stereo pair for a metric, a rate of 0. A missing input is `FileNotFoundError`.
+- Every metric refuses NaN, inf and int64 samples with a `ValueError` that
+  starts with its name, and scores nan with one `UserWarning` where there is
+  nothing to score, such as an empty pair or a silent reference.
+- A buffer that waits past its `timeout=` raises `TimeoutError`.
+- [`play_audio`][kudio.core.stream.play_audio] returns a message instead of
+  raising when it cannot play something, and `None` when it played.
 
-```text
-skipped missing.wav
-```
+## Warnings and logging
 
-The message names the file and says what is wrong with it: here that there is
-no such file, for a damaged one what soundfile says, for an m4a without ffmpeg
-that ffmpeg is missing. What was raised underneath is chained as `__cause__`,
-so a traceback shows both.
+A `UserWarning` means something is wrong with the audio or the result: NaN in
+a file, a clip pushed past full scale, two signals cut to a common length. It
+shows with logging off. The log holds bookkeeping, on loggers below `kudio`,
+and prints nothing until your program configures `logging`; after
+`logging.basicConfig(level=logging.WARNING)`, asking
+[`check_file`][kudio.core.io.check_file] for a name that is taken logs
+`WARNING:kudio.core.io:Existing file will be overwritten: noisy.wav`.
 
-A `DependencyError` names the extra to install, and keeps the package and the
-extra as attributes. On a machine without `[pesq]`:
+The `kudio` command logs at `INFO`, `DEBUG` with `-v`. `TQDM_DISABLE=1` turns
+off the progress bars of the batch helpers (tqdm 4.66 or newer).
 
-```python
-try:
-    kudio.score(ref, denoised, sr, ["pesq"])
-except kudio.DependencyError as e:
-    print(e)
-    print(e.extra)
-```
+Silent on purpose: the integer formats clip past ±1.0, so write
+`subtype="FLOAT"` when a mix may run hot; [`pesq`][kudio.core.evaluator.pesq]
+gives wideband MOS-LQO at 16 kHz unless `mode=` and `scale=` say otherwise;
+everything random takes `seed=`, `None` by default, a fresh draw on each run.
 
-```text
-'pesq' is required for this feature. Install it with: pip install "kudio[pesq]"
-pesq
-```
-
-`score` raises here because PESQ was asked for by name. Called without a
-list, it leaves out what is not installed, and `eval_metrics` returns `None`
-in its place.
-
-Three kinds of failure fall outside `KudioError`, or only partly inside it:
-
-- Many argument checks, and a few checks on the data, raise the built-in
-  `ValueError` or `TypeError`: an unknown metric name in `score`, two signals
-  too different in length to score, a stereo pair handed to a metric, a
-  sample rate of 0, NaN or `True` in [`resample`][kudio.core.io.resample],
-  `file_load` or `save_wave`, a three-dimensional array for `save_wave`, a
-  string where `Synthesizer` expects a list of SNRs, a clean folder with no
-  `.wav` file in it. A `Synthesizer` input that does not exist raises
-  `FileNotFoundError`. `except kudio.KudioError` catches none of these.
-  `except ValueError` goes the other way: `FeatureError` is one too, so it
-  catches what `vad` or an effect refuses together with what a metric does.
-- A buffer that waited longer than its `timeout=` raises the built-in
-  `TimeoutError` ([Recording and live views](guide/live-audio.md)).
-- `play_audio` does not raise when it cannot play something, a missing file
-  included. It returns a short message saying what went wrong, and `None`
-  when it played, so check what it returns. A missing sounddevice is the
-  exception: that is a `DependencyError`, as it is for the rest of live
-  audio.
-
-## Logging
-
-kudio logs through the standard `logging` module, to loggers named after its
-modules (`kudio.core.loudness`, `kudio.core.synth` and so on), all below
-`kudio`. That logger carries a `NullHandler` and nothing else, so until your
-program configures logging, nothing kudio logs is printed, not even at
-`WARNING` level.
-
-What goes into the log is bookkeeping: nothing is wrong with the audio, but
-you may want a record of it. Asking [`check_file`][kudio.core.io.check_file]
-for a name that is taken, without letting it rename, is one:
-
-```python
-import logging
-
-logging.basicConfig(level=logging.WARNING)
-path = kudio.check_file("noisy.wav", rename=False)
-```
-
-```text
-WARNING:kudio.core.io:Existing file will be overwritten: noisy.wav
-```
-
-Without the `basicConfig` line the same call prints nothing. The same goes
-for `Synthesizer.syn()` emptying an output folder that already holds files, a
-list entry that `load_waves` or `copy_waves` passed over, a metric back-end
-that `eval_metrics` left out, and a pair that `align` found polarity-inverted.
-I would turn logging on at `WARNING` in anything that builds a dataset. With
-`basicConfig` in place, this adds kudio's `INFO` messages without everyone
-else's:
-
-```python
-logging.getLogger("kudio").setLevel(logging.INFO)
-```
-
-The `kudio` command configures logging itself, `INFO` by default and `DEBUG`
-with `-v`; [Command line](cli.md) says where the flag goes.
-
-Two kinds of output do not go through logging at all:
-
-- Progress bars. The batch helpers (`Synthesizer.syn`, `AudioEvaluate.eval`,
-  `mfcc_from_files`, `logspec_from_files`, `load_waves`, `copy_waves`,
-  `map_waves`) draw tqdm bars on stderr. The environment variable
-  `TQDM_DISABLE=1` turns them off. tqdm reads it from 4.66 on, and kudio
-  accepts 4.60, so upgrade tqdm if the variable does nothing.
-- Python warnings. A `UserWarning` is for something wrong with the audio or
-  the result, which you should see with logging off: a file or array with
-  NaN or inf samples in it, `normalize_lufs` pushing a clip past full scale,
-  `score` cutting two signals to a common length, a clip too short for STOI,
-  `Synthesizer` writing a mixture past full scale or finding its output
-  folder full with `overwrite=False`,
-  [`split_pairs`][kudio.core.dataset.split_pairs] dropping repeated rows. A
-  `DeprecationWarning` marks an old name, and
-  [Migrating from v2](migrating.md) lists them.
-
-## Where to go from here
-
-| If you have | Read |
-|---|---|
-| a folder of recordings to convert, check or normalise | [Audio files](guide/audio-files.md), [Inspecting a recording](guide/inspection.md) |
-| a model that needs features | [STFT and features](guide/features.md) |
-| speech to find, or a pitch to track | [Speech activity and pitch](guide/speech.md) |
-| a clip to cut, filter or augment | [Editing and effects](guide/editing.md) |
-| clean speech and noise, and want a training set | [Building a noisy dataset](guide/synthesis.md), [Rooms and channels](guide/degradation.md) |
-| noisy recordings to clean up, or a denoiser to judge | [Denoising](guide/enhancement.md), [Measuring quality](guide/metrics.md) |
-| a test set to score for a paper, with intervals and references | [A whole test set](guide/metrics.md#a-whole-test-set), [`kudio score`](cli.md#score) |
-| transcripts, speaker-verification trials, diarization output or pitch tracks to score | [Recognizers, verifiers and pitch trackers](guide/task-metrics.md) |
-| a microphone | [Recording and live views](guide/live-audio.md) |
-| a function, and want every parameter | [API reference](reference/index.md) |
+The [User guide](guide/index.md) picks a page by the job, and the
+[API reference](reference/index.md) has every parameter.

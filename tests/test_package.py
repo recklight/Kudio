@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Package surface: version, public names, deprecation aliases, packaging."""
+"""Package surface: version, public names, one name per function, packaging."""
 import re
 import warnings
 from pathlib import Path
@@ -16,15 +16,14 @@ TOP_LEVEL_NAMES = [
     'FetchBuffer', 'LocalStreamReader', 'Recorder', 'RemoteStreamReader',
     'Synthesizer', 'Timer', 'check_input', 'file_load', 'save_wave',
     'play_audio', 'record', 'trad_enhance', 'wavelet_low_pass_filter',
-    'warn', 'gre', 'pur', 'fGre',
-    # v3 canonical feature names
+    # features
     'waveform_to_spectrogram', 'spectrogram_to_waveform', 'file_to_spectrogram',
     'save_spectrogram_as_wave', 'mfcc', 'mfcc_from_files', 'logspec_from_files',
     'melspectrogram',
-    # v3 effects
+    # effects
     'trim_silence', 'split_on_silence', 'time_stretch', 'pitch_shift',
     'add_noise_snr', 'spec_augment',
-    # v3 metrics + exceptions
+    # metrics and exceptions
     'si_sdr', 'snr', 'segmental_snr', 'KudioError', 'AudioIOError',
     # quality measures, with a reference and without
     'lsd', 'llr', 'itakura_saito', 'cepstral_distance', 'wss',
@@ -59,8 +58,8 @@ TOP_LEVEL_NAMES = [
 ]
 
 
-def test_version_is_v4():
-    assert kudio.__version__.startswith("4.")
+def test_the_version_is_5_0_0():
+    assert kudio.__version__ == "5.0.0"
 
 
 def test_top_level_names_present():
@@ -95,19 +94,31 @@ def test_import_is_lightweight():
     subprocess.check_call([sys.executable, "-c", code])
 
 
-def test_deprecated_aliases_warn():
-    y = np.zeros(4096, dtype=np.float32)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        kudio.w2s(y)                      # deprecated alias of waveform_to_spectrogram
-    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+#: names that are not kudio's: no function has a second, shorter name
+NOT_NAMES = ('w2s', 'wavform2spec', 'spec2wavform', 'f2s', 'wav2spec', 's2w', 'spec2wav',
+             'w2mfcc', 'wav2mfcc', 'concat_mfcc', 'concat_mfcc_', 'concat_logspec',
+             'concat_logspec_', 'contextual_LogSpectrogram', 'wav2mel', 'upercase')
+#: kudio.util's console colours, which the top level does not carry
+COLOURS = ('blu', 'color_test', 'cya', 'dkblu', 'dkcya', 'dkgre', 'dkpur', 'dkred', 'dkyel',
+           'error', 'fGre', 'fRed', 'gre', 'h1', 'info', 'pur', 'red', 'warn', 'yel')
 
 
-def test_alias_result_matches_canonical():
-    y = np.random.RandomState(0).randn(4096).astype(np.float32)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        np.testing.assert_array_equal(kudio.w2s(y), kudio.waveform_to_spectrogram(y))
+def test_each_function_has_one_name():
+    for module in (kudio, kudio.core, kudio.core.feature, kudio.util, kudio.util.conv):
+        assert [n for n in NOT_NAMES if hasattr(module, n)] == [], module.__name__
+        assert [n for n in NOT_NAMES if n in getattr(module, '__all__', ())] == []
+    assert not [p for p in kudio.__path__ if (Path(p) / "_deprecation.py").exists()]
+
+
+def test_the_console_colours_are_kudio_util_s_alone():
+    assert [n for n in COLOURS if hasattr(kudio, n) or n in kudio.__all__] == []
+    assert [n for n in COLOURS if n not in kudio.util.__all__] == []
+
+
+def test_syn_takes_the_rate_as_target_sr():
+    import inspect
+    params = inspect.signature(kudio.Synthesizer.syn).parameters
+    assert 'target_sr' in params and 'desired_sample' not in params
 
 
 def test_optional_dep_error_is_typed():
@@ -260,7 +271,7 @@ def _requirement(name):
     for spec in re.findall(r'"([^"]+)"', _core_dependencies()):
         if spec.lower().startswith(name.lower()):
             return spec
-    raise AssertionError(f"{name} is not a core dependency any more")
+    raise AssertionError(f"{name} is not a core dependency")
 
 
 def _extras():
@@ -297,8 +308,7 @@ def _installed_extras(run):
 
 def test_no_core_dependency_has_a_ceiling():
     """A cap set too low is a flat resolver failure for anyone who needs the newer
-    release, and a quiet downgrade for everyone else. The one kudio had, on numpy,
-    was numba's."""
+    release, and a quiet downgrade for everyone else."""
     for spec in re.findall(r'"([^"]+)"', _core_dependencies()):
         assert re.fullmatch(r'[A-Za-z]+>=[\d.]+', spec), spec
     assert _requirement('numpy') == 'numpy>=1.24'
@@ -526,22 +536,17 @@ def test_the_release_checks_the_artifacts_before_uploading_them():
 
 # -- helpers leaving the top level ----------------------------------------------
 @pytest.mark.parametrize("name", ["error", "info", "warn", "red", "h1", "color_test"])
-def test_console_colour_helpers_warn_from_the_top_level(name, capsys):
-    with pytest.warns(DeprecationWarning, match=re.escape(f"kudio.util.{name}()")):
-        getattr(kudio, name)("x")
+def test_the_console_colours_print_without_a_warning(name, capsys):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        getattr(kudio.util, name)("x")          # where they stay, silent
+        getattr(kudio.util, name)("x")
 
 
-def test_upercase_points_at_uppercase():
-    with pytest.warns(DeprecationWarning, match=r"kudio\.uppercase"):
-        assert kudio.upercase(["a", 1]) == ["A"]
-    with pytest.warns(DeprecationWarning, match=r"kudio\.util\.uppercase"):
-        assert kudio.util.upercase(["a"]) == ["A"]
+def test_uppercase_keeps_the_strings_alone():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        assert kudio.uppercase(["a"]) == ["A"]
+        assert kudio.uppercase(["a", 1]) == ["A"]
+        assert kudio.util.uppercase(["a"]) == ["A"]
 
 
 # -- which except clause catches a refusal --------------------------------------

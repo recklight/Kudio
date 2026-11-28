@@ -403,7 +403,7 @@ _NOISE_RANGES = {'ass': dict(low=0, high=1), 'ad': dict(low=0, high=1),
 
 def _check_noise_kwargs(method: str, kwargs: dict, cls=None) -> None:
     """Refuse a noise_kwargs key the estimator does not take, by its public
-    name: a bare TypeError used to name the private class behind it. And a
+    name: a bare TypeError would name the private class behind it. And a
     value that is none."""
     import inspect
     takes = (['quantile'] if cls is None else
@@ -792,7 +792,7 @@ def _fade_thin_tail(out: np.ndarray, stft, n_frames: int) -> np.ndarray:
 
 def _check_ranges(method: str, settings: dict) -> None:
     """Hold each parameter to the range :data:`METHODS` gives it. A gain floor
-    of +10 dB used to clip every gain to 1 and hand the input back as its own
+    of +10 dB would clip every gain to 1 and hand the input back as its own
     "enhanced" version, with nothing said."""
     for param in METHODS[method].params:
         value = real(settings[param.name])
@@ -966,7 +966,7 @@ def compare_enhancers(y: np.ndarray, sr: int,
     stray = set(common) - taken
     if stray:
         # dropping a key per method is deliberate -- alpha means nothing to
-        # specsub -- but one no method takes is a typo, and alpah=0.5 used to
+        # specsub -- but one no method takes is a typo, and alpah=0.5 would
         # run every method on its defaults
         raise FeatureError(f"no method here takes {', '.join(sorted(stray))}")
 
@@ -1148,8 +1148,8 @@ def enhance_folder(src: Any, dst: PathLike,
         settings = METHODS[entry].defaults()
         settings.update(params)
         _check_ranges(entry, settings)
-        # the estimator's name and keys too: noise='mcar' came back as
-        # "0/2 written, 2 failed", the same refusal once per file; and so did a
+        # the estimator's name and keys too: noise='mcar' would come back as
+        # "0/2 written, 2 failed", the same refusal once per file; and so would a
         # hop the frames cannot be put together from
         _check_noise(noise, noise_kwargs or {})
         from kudio.core.stft import STFT
@@ -1168,8 +1168,8 @@ def enhance_folder(src: Any, dst: PathLike,
     if not files:
         raise AudioIOError(f"no audio files found in {src!r}")
 
-    # the same layout rule as convert_folder: a list used to land flat, so
-    # day1/take1 and day2/take1 became take1 and take12
+    # the same layout rule as convert_folder: a list landing flat would turn
+    # day1/take1 and day2/take1 into take1 and take12
     root = _source_root(src, files)
     out_root = Path(dst)
     out_root.mkdir(parents=True, exist_ok=True)

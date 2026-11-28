@@ -546,7 +546,7 @@ def channel_spec(spec: Optional[Union[str, dict]]) -> dict:
         raise FeatureError(
             f"unknown codec {out['codec']!r}; choose mu_law, a_law or none")
     if not (isinstance(out['band'], (bool, np.bool_)) or out['band'] in (None, 0, 1)):
-        # any text is true, and 'no' was the telephone band
+        # any text is true, and 'no' would be the telephone band
         raise FeatureError(f"channel_spec(): band is True for the telephone band or False, got "
                            f"{out['band']!r}")
     if out['conceal'] not in CONCEALMENT:

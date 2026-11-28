@@ -17,7 +17,6 @@ and through kudio.score:
 from __future__ import annotations
 
 import functools
-import importlib.util
 import math
 import warnings
 
@@ -263,8 +262,8 @@ def test_a_rate_given_another_way_scores_as_the_int(name, sr):
 
 
 def test_score_passes_the_rate_on_as_it_was_given():
-    """score() used to take int(sr) first, so 16000.5 scored llr there while
-    llr itself refused it."""
+    """Taking int(sr) first, score() would score llr at 16000.5 while llr
+    itself refuses it."""
     with pytest.raises(ValueError, match=r"^llr\(\): defined at 8 and 16 kHz only, not 16000.5 Hz"):
         kudio.score(REF, DEG, 16000.5, ['llr'])
     with pytest.raises(ValueError, match=r"^score\(\): sr "):

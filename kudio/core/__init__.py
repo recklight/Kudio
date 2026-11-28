@@ -16,7 +16,7 @@ from kudio.core.evaluator import (
     snr,
 )
 from kudio.core.feature import (
-    # canonical (v3)
+    # full names
     ContextFrames,
     Standardizer,
     denoise_spec2wav,
@@ -35,22 +35,6 @@ from kudio.core.feature import (
     waveform_to_spectrogram,
     wave_separate,
     wave_slicing,
-    # deprecated aliases
-    concat_logspec,
-    concat_logspec_,
-    concat_mfcc,
-    concat_mfcc_,
-    contextual_LogSpectrogram,
-    f2s,
-    s2w,
-    spec2wav,
-    spec2wavform,
-    w2mfcc,
-    w2s,
-    wav2mel,
-    wav2mfcc,
-    wav2spec,
-    wavform2spec,
 )
 from kudio.core.dataset import (
     Label,
@@ -219,10 +203,6 @@ __all__ = [
     'file_to_spectrogram', 'logspec_from_files', 'mel_band_hz', 'melspectrogram',
     'mfcc', 'mfcc_from_files', 'save_spectrogram_as_wave', 'spectrogram_to_waveform',
     'waveform_to_spectrogram', 'wave_separate', 'wave_slicing',
-    # feature (deprecated aliases)
-    'concat_logspec', 'concat_logspec_', 'concat_mfcc', 'concat_mfcc_',
-    'contextual_LogSpectrogram', 'f2s', 's2w', 'spec2wav', 'spec2wavform',
-    'w2mfcc', 'w2s', 'wav2mel', 'wav2mfcc', 'wav2spec', 'wavform2spec',
     # io
     'LoadAudio', 'check_file', 'check_input', 'check_path', 'copy_waves',
     'file_load', 'resample', 'load_wave', 'load_waves', 'save_wave',

@@ -295,8 +295,8 @@ def test_stereo_is_refused_rather_than_read_at_half_pitch():
 
 
 def test_the_default_frame_grows_with_the_rate():
-    """2048 samples cannot hold two periods of 65 Hz at 96 kHz; the default
-    call used to be refused there."""
+    """2048 samples cannot hold two periods of 65 Hz at 96 kHz, so a fixed
+    default frame would refuse the default call there."""
     import kudio
     sr = 96000
     t = np.arange(sr) / sr
@@ -320,7 +320,7 @@ def test_f0_refuses_a_corrupt_clip(bad):
                                      (np.ones(4000, complex), "complex128"),
                                      (np.array(['a'] * 600), "<U1")])
 def test_f0_refuses_what_is_no_audio(y, what):
-    """True went in as 1, and of complex samples the real part."""
+    """Unchecked, True would go in as 1, and of complex samples the real part."""
     with pytest.raises(FeatureError, match=f"the samples are {what}, not real numbers"):
         kudio.f0(y, 16000)
 
@@ -344,7 +344,7 @@ def _told(y, sr=SR, **kwargs):
 
 @pytest.mark.parametrize("n", [1, 2, 10, 80])
 def test_a_few_samples_have_no_pitch(n):
-    """Ten samples of anything came back as fmin, voiced: 65 Hz, whose period is
+    """Ten samples of anything would come back as fmin, voiced: 65 Hz, whose period is
     246. 80 samples hold two periods of 400 Hz, and of nothing in the range."""
     track, said = _told(buzz(120.0)[:n])
     assert len(track) == 1 and not track.voiced.any() and np.isnan(track.f0).all()
@@ -402,8 +402,8 @@ def test_an_uncentred_frame_needs_a_frame_of_samples():
     (1170, 65, 400, 32.1, 31.5), (16000, 65, 400, 431.1, 31.5), (160, 100, 120, 4.1, 3.2),
     (160, 100, 125.9, 4.1, 4), (160, 399, 400, 4.1, 0.1), (320, 120, 160, 9.1, 5)])
 def test_a_hop_in_which_a_pitch_could_cross_the_range_is_refused(hop, fmin, fmax, moves, span):
-    """It was in librosa's words, "Target size (315) must be at least input size
-    (321)", and not as a kudio error."""
+    """The refusal is kudio's, not librosa's "Target size (315) must be at least
+    input size (321)"."""
     with pytest.raises(FeatureError) as caught:
         kudio.f0(buzz(150.0), SR, hop_length=hop, fmin=fmin, fmax=fmax)
     assert str(caught.value) == (f"f0(): what a pitch can move by in a hop of {hop} samples "
@@ -485,7 +485,7 @@ def test_up_to_that_a_hop_is_as_long_or_short_as_it_likes(hop, fmin, fmax):
 
 
 def test_a_rate_that_is_not_whole_is_not_cut_short():
-    """16000.9 was read as 16000."""
+    """16000.9 is not read as 16000."""
     sr = 22254.5
     t = np.arange(int(sr)) / sr
     track = kudio.f0(0.3 * np.sin(2 * np.pi * 150 * t), sr)
@@ -500,7 +500,7 @@ def test_a_rate_that_is_not_whole_is_not_cut_short():
 @pytest.mark.parametrize("name", ["hop_length", "frame_length"])
 @pytest.mark.parametrize("value", [-1, 0, 2.5, np.nan, np.inf, True, '2048'])
 def test_a_length_is_a_whole_number_of_samples(name, value):
-    """0 was 10 ms for a hop, and None is."""
+    """0 is not 10 ms for a hop; None is."""
     with pytest.raises(FeatureError) as caught:
         kudio.f0(buzz(150.0), SR, **{name: value})
     default = ", or None for 10 ms" if name == "hop_length" else ""

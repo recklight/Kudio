@@ -138,9 +138,9 @@ def test_a_non_finite_clip_is_not_called_digital_silence(bad):
     number: a peak of nan is not a peak of nothing.
 
     Every measurement here is computed from those samples, so all of them come
-    out nan, and the dBFS of nan used to be -inf -- which is exactly what
-    digital silence reads as. A corrupt file was reported as a muted
-    microphone, the one answer that stops anybody looking at the file.
+    out nan. Taken as -inf, the dBFS of nan is exactly what digital silence
+    reads as, and a corrupt file would be reported as a muted microphone, the
+    one answer that stops anybody looking at the file.
     """
     y = 0.3 * np.sin(2 * np.pi * 220 * np.arange(SR) / SR)
     y[1000:1010] = bad
@@ -233,7 +233,7 @@ def test_a_recording_made_at_a_high_rate_is_not_said_to_be_upsampled():
     """Content that stops at 50 kHz in a 192 kHz file, with the converter's
     noise above it, is a native recording: an upsampled file has nothing at
     all above its old Nyquist frequency. Taking the first for the second
-    told a whole folder of measurements that its extra rate was empty."""
+    would tell a whole folder of measurements that its extra rate is empty."""
     report = audio_report(_native_high_rate(), 192000)
     assert report.bandwidth_hz < 0.9 * 96000          # the content does stop
     assert report.band_limited is False
@@ -428,8 +428,8 @@ def test_clipping_can_be_counted_in_shorter_runs_and_sample_by_sample():
 
 def test_a_plateau_is_counted_when_the_sample_before_it_is_not_on_it():
     """A waveform reaching the rail leaves a sample at 0.9993 or so in front of
-    the plateau. Judged as one run with it, five samples at full scale were
-    not flat enough to count."""
+    the plateau. Judged as one run with it, five samples at full scale would
+    not be flat enough to count."""
     y = _speech()
     y[500:506] = [0.9993, 1.0, 1.0, 1.0, 1.0, 1.0]
     y[900:904] = [-1.0, -1.0, -1.0, -0.9995]
@@ -444,7 +444,7 @@ def test_a_plateau_is_counted_when_the_sample_before_it_is_not_on_it():
 def test_a_sine_normalised_to_full_scale_is_not_clipped(hz, sr, form):
     """Low enough, a smooth peak keeps three or more samples within 1e-4 of its
     top, and in 16 bits they are one code. Taken for a plateau, a 50 Hz sine
-    at 48 kHz had 1000 samples clipped. A smooth peak at level m keeps
+    at 48 kHz would have 1000 samples clipped. A smooth peak at level m keeps
     sqrt(1e-4 / (m - 0.999)) of its run above 0.999 within 1e-4 of the top,
     0.32 at full scale; a plateau has to hold twice that share."""
     t = np.arange(sr) / sr
@@ -516,10 +516,10 @@ def _stops_at(report):
                                       (48000, 192000, True)],
                          ids=["48 to 192 kHz", "16 to 48 kHz", "with a line at 0.7 Nyquist"])
 def test_the_finding_does_not_put_the_content_past_the_rate_it_names(a, b, tone):
-    """It quoted bandwidth_hz, read 50 dB under the peak of a 1024-point
-    spectrum: white noise taken from 48 to 192 kHz by resample_poly stopped
-    at 27750 Hz, past the 24 kHz of the rate it was said to come from, and a
-    line at 67.2 kHz put it at 67500. The edge test's own end is used."""
+    """The finding quotes the edge test's own end, not bandwidth_hz, read 50 dB
+    under the peak of a 1024-point spectrum: for white noise taken from 48 to
+    192 kHz by resample_poly that reads 27750 Hz, past the 24 kHz of the rate
+    the finding names, and a line at 67.2 kHz takes it to 67500."""
     from scipy import signal
     white = 0.1 * np.random.default_rng(0).standard_normal(2 * a)
     y = signal.resample_poly(white, b // a, 1)
@@ -527,7 +527,7 @@ def test_the_finding_does_not_put_the_content_past_the_rate_it_names(a, b, tone)
         y = y + 0.01 * np.sin(2 * np.pi * 0.7 * b / 2 * np.arange(len(y)) / b)
     report = audio_report(_q16(y), b)
     assert report.source_rates == (a,)
-    assert report.bandwidth_hz > 1.06 * a / 2, "the old reading, for the record"
+    assert report.bandwidth_hz > 1.06 * a / 2, "bandwidth_hz reads past it"
     assert a / 2 <= _stops_at(report) <= 1.06 * a / 2
     assert abs(report.band_edge_hz - _stops_at(report)) < 0.5
 

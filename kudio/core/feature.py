@@ -1,23 +1,5 @@
 # -*- coding: utf-8 -*-
 """Feature extraction and spectrogram <-> waveform conversions.
-
-v3 canonical names
-------------------
-=================================  =============================================
-canonical                          deprecated aliases
-=================================  =============================================
-``waveform_to_spectrogram``        ``w2s``, ``wavform2spec``
-``spectrogram_to_waveform``        ``spec2wavform``
-``file_to_spectrogram``            ``f2s``, ``wav2spec``
-``save_spectrogram_as_wave``       ``s2w``, ``spec2wav``
-``mfcc``                           ``w2mfcc``, ``wav2mfcc``
-``mfcc_from_files``                ``concat_mfcc``, ``concat_mfcc_``
-``logspec_from_files``             ``concat_logspec``, ``concat_logspec_``,
-                                   ``contextual_LogSpectrogram``
-``melspectrogram``                 ``wav2mel``
-=================================  =============================================
-
-The aliases still work but emit a ``DeprecationWarning``.
 """
 from __future__ import annotations
 
@@ -29,7 +11,6 @@ from typing import Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from kudio._deprecation import alias
 from kudio._numbers import count, flag, real, whole
 from kudio._progress import tqdm
 from kudio._samples import as_float, channels_last, finite, one_channel, real_samples
@@ -39,7 +20,6 @@ from kudio.core.io import PathLike, _read_mono, _reason, file_load, save_wave
 from kudio.exceptions import AudioIOError, FeatureError
 
 __all__ = [
-    # canonical
     'wave_separate', 'wave_slicing', 'features2matrix',
     'waveform_to_spectrogram', 'spectrogram_to_waveform',
     'file_to_spectrogram', 'save_spectrogram_as_wave',
@@ -47,10 +27,6 @@ __all__ = [
     'mel_band_hz',
     'denoise_wav2spec', 'denoise_spec2wav',
     'stack_context', 'ContextFrames', 'frame_windows', 'Standardizer',
-    # deprecated aliases (kept for compatibility)
-    'w2s', 'wavform2spec', 'spec2wavform', 'f2s', 'wav2spec', 's2w', 'spec2wav',
-    'w2mfcc', 'wav2mfcc', 'concat_mfcc', 'concat_mfcc_', 'concat_logspec',
-    'concat_logspec_', 'contextual_LogSpectrogram', 'wav2mel',
 ]
 
 log = logging.getLogger(__name__)
@@ -58,8 +34,8 @@ log = logging.getLogger(__name__)
 #: added to the complex spectrum so a silent bin has a logarithm. A Python
 #: float, not ``np.finfo(float).eps``: under NumPy 2 a numpy float64 scalar
 #: promotes a complex64 spectrum to complex128, doubling every spectrogram
-#: computed from float32 audio. The value -- and the -31.3 a digitally silent
-#: bin comes out at -- is unchanged, since trained models have seen it.
+#: computed from float32 audio. The value is float64's eps, so a digitally
+#: silent bin comes out at -31.3, the floor models trained on these features know.
 _EPS = float(np.finfo(float).eps)
 
 
@@ -459,7 +435,7 @@ def melspectrogram(source: Union[PathLike, np.ndarray], n_mels: int = 64,
     if isinstance(source, (bytes, bytearray)):
         raise FeatureError(f"{where}() takes a path as text, or a waveform, and got bytes")
     if isinstance(source, (str, os.PathLike)):
-        # sr used to be overwritten by the file's own rate without a word
+        # sr is the rate asked for, not the file's own
         y, sr = file_load(source, sr=sr, mono=True)
         y = finite(y, where, FeatureError)
     else:
@@ -850,21 +826,3 @@ def features2matrix(features: Sequence[np.ndarray]) -> Tuple[np.ndarray, np.ndar
                                f"has {matrices[0].shape[1]}")
     labels = np.concatenate([i * np.ones(len(m)) for i, m in enumerate(matrices)])
     return np.vstack(matrices), labels
-
-
-# -- deprecated aliases (v2 names) ----------------------------------------------
-w2s = alias(waveform_to_spectrogram, 'w2s')
-wavform2spec = alias(waveform_to_spectrogram, 'wavform2spec')
-spec2wavform = alias(spectrogram_to_waveform, 'spec2wavform')
-f2s = alias(file_to_spectrogram, 'f2s')
-wav2spec = alias(file_to_spectrogram, 'wav2spec')
-s2w = alias(save_spectrogram_as_wave, 's2w')
-spec2wav = alias(save_spectrogram_as_wave, 'spec2wav')
-w2mfcc = alias(mfcc, 'w2mfcc')
-wav2mfcc = alias(mfcc, 'wav2mfcc')
-concat_mfcc = alias(mfcc_from_files, 'concat_mfcc')
-concat_mfcc_ = alias(mfcc_from_files, 'concat_mfcc_')
-concat_logspec = alias(logspec_from_files, 'concat_logspec')
-concat_logspec_ = alias(logspec_from_files, 'concat_logspec_')
-contextual_LogSpectrogram = alias(logspec_from_files, 'contextual_LogSpectrogram')
-wav2mel = alias(melspectrogram, 'wav2mel')

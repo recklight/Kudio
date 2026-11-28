@@ -44,7 +44,7 @@ class AudioDataManager:
         """The rate and the channels, 1 or 2, of what is added from now on.
 
         :raises ValueError: for another number of channels. Taken for 1, six of
-            them were saved one after the other, six times as long.
+            them would be saved one after the other, six times as long.
         """
         sr = sample_rate(sr, 'set_params')
         if whole(ch) not in (1, 2):
@@ -175,12 +175,12 @@ class AudioDataManager:
     def _file_name(self, name: str) -> str:
         """A clip name as a file name: the whole name, plus ``.wav``.
 
-        ``with_suffix`` used to do this, and it reads the dot in 'take.v2' as
-        the start of an extension, so the clip was written to 'take.wav' --
-        the file belonging to the clip called 'take'. Load both from a folder
-        and whichever was saved second kept the file. The channel names were
-        worse: 'take.v2_ch0' and 'take.v2_ch1' both came out as 'take.wav',
-        one overwriting the other under a name identifying neither.
+        ``with_suffix`` would do this, but it reads the dot in 'take.v2' as
+        the start of an extension, so the clip would be written to 'take.wav',
+        the file belonging to the clip called 'take', and of the two loaded
+        from one folder the one saved second would keep the file. The channel
+        names 'take.v2_ch0' and 'take.v2_ch1' would both come out as
+        'take.wav', one overwriting the other under a name identifying neither.
         """
         name = str(name)
         if name.lower().endswith(self.suffix):
@@ -234,7 +234,7 @@ class AudioDataManager:
             log.warning("Manager: nothing to save")
             return False
         # Checked for the whole store before a single file is written: two
-        # clips landing on one name used to mean one of them simply vanished,
+        # clips landing on one name would mean one of them simply vanished,
         # with `True` coming back and nothing in the log to say so. `normcase`
         # because Windows would collide on names that compare different.
         claimed = {}

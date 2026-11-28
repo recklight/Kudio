@@ -107,8 +107,8 @@ def folder(tmp_path):
 @pytest.mark.parametrize("called", [{}, {'mode': 'inc', 'target_sr': 8000, 'is_silence': True}],
                          ids=["reg", "inc at 8 kHz"])
 def test_a_loss_that_no_packets_are_left_for_empties_nothing(folder, channel, called):
-    """A second of noise with half of its packets gone had stood for all of
-    it."""
+    """A second of noise with half of its packets gone does not stand for all
+    of it."""
     _put(folder.clean, _tone(32000))
     syx = folder.build(channel=channel, snr_ratio=(0, 5))
     with folder.refused(kudio.FeatureError, match="surviving packets to keep the runs apart"):

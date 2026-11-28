@@ -658,10 +658,6 @@ _COMPOSITE = ('csig', 'cbak', 'covl')
 _CSII = {'csii_high': 'high', 'csii_mid': 'mid', 'csii_low': 'low'}
 
 
-#: what STOI returns instead of a score when a clip is too short for it
-_STOI_TOO_SHORT = 1e-5 + 1e-12
-
-
 def _compute(name: str, ref: np.ndarray, deg: np.ndarray, sr: int,
              pesq_mode: str = 'auto', pesq_scale: str = 'lqo',
              whole: Optional[Tuple[np.ndarray, np.ndarray]] = None) -> float:
@@ -712,16 +708,16 @@ def _compute(name: str, ref: np.ndarray, deg: np.ndarray, sr: int,
             if not np.any(y):
                 return scored_nan(name, f"{label} is digital silence throughout, so "
                                         f"there is no envelope to correlate")
-        from kudio.core._stoi import stoi
+        from kudio.core._stoi import stoi_or_none
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            value = float(stoi(ref, deg, sr, extended=(name == 'estoi')))
-        if value <= _STOI_TOO_SHORT:
-            # STOI's answer when under 30 frames survive its silence removal
-            # (about 0.4 s): a placeholder, not a score, and averaged into a
-            # mean it reads as the worst intelligibility there is
+            value = stoi_or_none(ref, deg, sr, extended=(name == 'estoi'))
+        if value is None:
+            # under 30 frames survive STOI's silence removal (about 0.4 s); a score
+            # near 0 or under it is a result and stays one, so the count decides,
+            # not the number
             return scored_nan(name, too_short)
-        return value
+        return float(value)
     if name == 'sdr':
         if len(ref) == 0:
             return scored_nan(name, "the pair is empty")
@@ -752,8 +748,8 @@ def score(ref: np.ndarray, deg: np.ndarray, sr: int,
     {'pesq': 2.41, 'stoi': 0.874, 'sdi': 0.105}
 
     :param metrics: names from :data:`METRICS`. ``None`` means snr, si_sdr,
-        segsnr and sdi, and each of pesq, stoi, estoi and sdr whose package is
-        installed, PESQ only at 8 or 16 kHz. The others are run when they are
+        segsnr, sdi, stoi, estoi and sdr, and pesq where its package is
+        installed and the rate is 8 or 16 kHz. The others are run when they are
         named: lsd (:func:`lsd` with URGENT 2025's settings), llr, is
         (Itakura-Saito), cep, wss and fwsegsnr (the functions of
         :mod:`kudio.core.quality`, 8 and 16 kHz only), and csig, cbak and
@@ -1049,8 +1045,8 @@ class AudioEvaluate:
                     ref, out = _cut(*whole, names=(str(cln), str(deg)),
                                     whole_for='PESQ' if 'PESQ' in columns else None)
             except Exception as e:                          # noqa: BLE001
-                # one bad file used to abort a run after every file before it
-                # had been scored
+                # one bad file does not abort a run after every file before it
+                # has been scored
                 warn(f"AudioEvaluate.{caller}(): {deg} was not scored: {e}")
                 rows.append({**row, **{column: float('nan') for column in columns}})
                 continue

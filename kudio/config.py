@@ -240,8 +240,8 @@ class KudioConfig(Dict):
         *cfg_dir* may be a file, or a directory containing exactly one
         ``cfg.yaml`` at any depth. Anything else falls back to
         :meth:`default_config`, with a ``UserWarning`` when a path was named
-        or a search found more than one file: a misspelt file name came back
-        as the defaults with nothing said.
+        or a search found more than one file: otherwise a misspelt file name
+        would come back as the defaults with nothing said.
 
         A key the file does not have reads as an empty section, which is what
         lets ``cfg.a.b = 1`` build a new one. Call :meth:`freeze` on the result

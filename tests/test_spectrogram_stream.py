@@ -199,7 +199,7 @@ def test_reset_forgets_the_audio_and_keeps_the_settings():
     assert spec.frames_seen == 0 and spec.filled == 0
     assert (spec.n_columns, spec.n_bins) == (columns, bins)
     assert np.all(spec.columns() == spec.floor_db)
-    # the part-filled frame went too: a fresh push starts frame-aligned
+    # the part-filled frame goes too: a fresh push starts frame-aligned
     assert len(spec.push(np.zeros(spec.n_fft - 1, dtype=np.float32))) == 0
 
 

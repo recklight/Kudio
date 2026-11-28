@@ -1,33 +1,26 @@
 # 錄音與即時檢視 {#recording-and-live-views}
 
-kudio 大部分的功能，處理的都是已經存成檔案的音訊。這一頁談的是還在進來的音訊：
-從麥克風或網路上的裝置取得，在錄音進行中把它畫出來或降噪，以及播放。
+還在進來的音訊：從麥克風或網路上的裝置取得，錄的同時畫出來或降噪，以及播放。
 
-## 哪些需要 audio 選用套件組 {#what-needs-the-audio-extra}
+## 需要 audio 套件組的部分 {#what-needs-the-audio-extra}
 
 ```bash
 pip install "kudio[audio]"     # sounddevice
 ```
 
-kudio 透過 PortAudio 的 Python 繫結 sounddevice 存取硬體，而且只在需要時才匯入，
-所以沒裝它，`import kudio` 也能用。它在 Windows 和 macOS 的 wheel 自帶 PortAudio；
-Linux 上用系統的，Debian 和 Ubuntu 是 `libportaudio2`，不需要編譯任何東西。
-表格最後一列的類別不需要任何套件，核心安裝就能執行。
+kudio 透過 PortAudio 的綁定 sounddevice 存取硬體，只在需要時才匯入。它在 Windows 和 macOS
+的 wheel 自帶 PortAudio；Linux 上用系統的，Debian 和 Ubuntu 是 `libportaudio2`。
 
-| 後端 | 用到它的功能 |
+| 後端 | 用到的地方 |
 |---|---|
 | sounddevice | [`record`][kudio.core.stream.record]、[`list_devices`][kudio.util.check.list_devices]、[`play_audio`][kudio.core.stream.play_audio]、[`StreamRecorder`][kudio.core.stream.StreamRecorder]、[`Recorder`][kudio.core.stream.Recorder]、[`LocalStreamReader`][kudio.core.stream.LocalStreamReader]、[`RemoteStreamReader`][kudio.core.stream.RemoteStreamReader]、[`CheckDevice`][kudio.util.check.CheckDevice] |
-| 都不需要 | [`SpectrogramStream`][kudio.core.spectrogram.SpectrogramStream]、[`StreamEnhancer`][kudio.enhance.streaming.StreamEnhancer]、[`AudioBuffer`][kudio.core.buffer.AudioBuffer]、[`FetchBuffer`][kudio.core.buffer.FetchBuffer] |
+| 不需要 | [`SpectrogramStream`][kudio.core.spectrogram.SpectrogramStream]、[`StreamEnhancer`][kudio.enhance.streaming.StreamEnhancer]、[`AudioBuffer`][kudio.core.buffer.AudioBuffer]、[`FetchBuffer`][kudio.core.buffer.FetchBuffer] |
 
-沒有這組套件時，這裡所有需要 sounddevice 的功能都會引發
-[`DependencyError`][kudio.exceptions.DependencyError]，訊息會寫出 `kudio[audio]`；
-它同時也是 `ImportError`。在沒有 PortAudio 函式庫的 Linux 電腦上裝了 sounddevice，
-不算缺少選用套件組，因為 pip 修不了，所以這時引發的是
-[`DeviceError`][kudio.exceptions.DeviceError]，訊息寫出的是要裝的系統套件。
+沒裝這個套件組時，這些會丟出寫著 `kudio[audio]` 的 [`DependencyError`][kudio.exceptions.DependencyError]；
+Linux 上裝了 sounddevice 卻沒有 PortAudio 函式庫時，丟出寫著系統套件名稱的
+[`DeviceError`][kudio.exceptions.DeviceError]。
 
 ## 用 `record` 錄固定長度 {#a-fixed-length-take-with-record}
-
-[`record`][kudio.core.stream.record] 在整段錄音期間都會阻塞，錄完才回傳：
 
 ```python
 import kudio
@@ -36,24 +29,13 @@ y = kudio.record(seconds=3, sr=16000)          # blocks for 3 s
 kudio.save_wave("take.wav", y, 16000)
 ```
 
-結果是 float32，共 `int(seconds * sr)` 個樣本，單聲道的形狀是 `(n,)`，其他則是
-`(n, channels)`，和 [`file_load`][kudio.core.io.file_load] 及
-[`save_wave`][kudio.core.io.save_wave] 用的排列方式相同。知道自己要錄多久的腳本，
-這樣就夠了。坐在麥克風前的人就不夠，因為在呼叫回傳之前什麼都看不到。
+[`record`][kudio.core.stream.record] 傳回 float32、`int(seconds * sr)` 個樣本，單聲道是 `(n,)`，
+否則是 `(n, channels)`。裝置不接受這個取樣率時，丟出寫明裝置和取樣率的 `DeviceError`。
 
-## 錄到你喊停為止：`StreamRecorder` {#recording-until-you-stop-streamrecorder}
-
-[`StreamRecorder`][kudio.core.stream.StreamRecorder] 在 PortAudio 自己的執行緒上擷取，
-保留每一個樣本，你的程式碼隨時都可以問它目前的狀況。說話的人開口之前就看得到準位，
-句子講完，錄音也跟著結束。當成 context manager 用時，它在進入時開始，離開時關閉串流；
-在 GUI 裡則改由「錄音」和「停止」按鈕呼叫
-[`start()`][kudio.core.stream.StreamRecorder.start] 和
-[`stop()`][kudio.core.stream.StreamRecorder.stop]。
+## 錄到你喊停：`StreamRecorder` {#recording-until-you-stop-streamrecorder}
 
 ```python
 import time
-
-import kudio
 
 with kudio.StreamRecorder(sr=16000) as rec:
     print(f"{rec.sr} Hz, {rec.channels} channel(s)")   # what the device agreed to
@@ -64,93 +46,48 @@ y = rec.stop()                                         # float32, (n,) for mono
 kudio.save_wave("take.wav", y, rec.sr)
 ```
 
-`sr=` 只是一個要求。裝置不接受時，kudio 會依序試 16000、22050 和 44100 Hz，
-再試裝置自己的預設值，以 INFO 等級記錄選了哪一個，然後繼續；沒給 `sr` 時，
-也是同樣的搜尋。所以向一個能以 48、44.1 和 16 kHz 開啟的裝置要求 96 kHz，
-實際會以 16 kHz 錄音。`channels=` 超過裝置有的聲道數時，會退回單聲道並發出警告。
-[`rec.sr`][kudio.core.stream.StreamRecorder.sr] 和 `rec.channels` 才是錄音實際的格式，
-存檔時請用它們。輸入完全打不開時，會引發 [`DeviceError`][kudio.exceptions.DeviceError]。
+[`StreamRecorder`][kudio.core.stream.StreamRecorder] 在 PortAudio 的執行緒上擷取，保留每個樣本；
+GUI 裡由按鈕呼叫 [`start()`][kudio.core.stream.StreamRecorder.start] 和
+[`stop()`][kudio.core.stream.StreamRecorder.stop]。`sr=` 只是請求：裝置不接受時，依序試 16000、
+22050、44100 Hz，再試裝置的預設值，選定的結果記在 INFO。`rec.sr` 和 `rec.channels` 才是錄音
+實際的格式。打不開的輸入會丟出 `DeviceError`。
 
-錄音進行中，以下這些可以從任何執行緒安全地呼叫：
-
-| 呼叫 | 回傳 |
+| 任何執行緒都能安全呼叫 | 傳回 |
 |---|---|
-| [`level()`][kudio.core.stream.StreamRecorder.level] | 最近一個區塊的峰值，線性的 0 到 1 |
-| [`level_db()`][kudio.core.stream.StreamRecorder.level_db] | 同一個值換成 dBFS，數位靜音是 `-inf` |
-| [`elapsed()`][kudio.core.stream.StreamRecorder.elapsed] | 到目前為止擷取了幾秒 |
-| [`tail(seconds)`][kudio.core.stream.StreamRecorder.tail] | 最近 *seconds* 秒的音訊 |
-| [`drain()`][kudio.core.stream.StreamRecorder.drain] | 上一次 `drain()` 之後的所有音訊 |
-| [`take()`][kudio.core.stream.StreamRecorder.take] | 到目前為止的全部，不會停止錄音 |
+| [`level()`][kudio.core.stream.StreamRecorder.level] | 最新一塊的峰值，0 到 1 |
+| [`level_db()`][kudio.core.stream.StreamRecorder.level_db] | 同上，單位 dBFS，數位靜音是 `-inf` |
+| [`elapsed()`][kudio.core.stream.StreamRecorder.elapsed] | 已錄的秒數 |
+| [`tail(seconds)`][kudio.core.stream.StreamRecorder.tail] | 最近 *seconds* 秒，給畫面用 |
+| [`drain()`][kudio.core.stream.StreamRecorder.drain] | 上次 `drain()` 之後的所有樣本，每個樣本只給一次 |
+| [`take()`][kudio.core.stream.StreamRecorder.take] | 到目前為止的全部，不停止錄音 |
 
-準位是峰值，所以它告訴你錄音離削峰有多近，而不是聽起來多大聲；聽起來多大聲，
-請在錄完之後用 [`loudness`][kudio.core.loudness.loudness] 量
-（[檢查錄音](inspection.md)）。一個區塊是 `frame_size` 個樣本（預設 1024，
-在 16 kHz 是 64 ms），所以讀數大約每秒更新 15 次。
-
-第二次呼叫 `stop()` 會回傳同一段錄音，不是空陣列。`stop()` 也會關掉錄音器的
-串流，之後再 `start()` 會用同樣的設定重新開啟串流，接著錄同一段，
-就像「暫停」按鈕一樣。如果裝置重新開啟時的取樣率或聲道數不同，`start()` 會引發
-`DeviceError`，而不是把兩段接成一段；[`reset()`][kudio.core.stream.StreamRecorder.reset]
-會把目前的錄音丟掉，所以要錄新的一段，請先呼叫它。它在開啟中的串流上也能用，
-而且會繼續錄音。我把錄音長度的上限設為 `max_seconds`（預設 3600，`None` 表示
-不設上限），免得一台忘了關的錄音器把記憶體塞滿：16 kHz 單聲道 float32 錄一小時
-是 230 MB。到達上限時，錄音不再增長，[`capped`][kudio.core.stream.StreamRecorder.capped]
-會變成 true，但準位仍會持續更新，所以畫面上的音量表不會凍結。`monitor=True`
-會在錄音時把輸入從預設輸出播出來。
-
-### 顯示用 `tail()`，其他都用 `drain()` {#tail-for-a-display-drain-for-everything-else}
-
-`tail(seconds)` 是滑動視窗，所以相隔十分之一秒的兩次呼叫，回傳的樣本大部分相同，
-適合每次計時器觸發都重畫一次的波形。凡是有狀態的東西，每個樣本都只能拿一次，
-這正是 `drain()` 給的：下面的頻譜圖和降噪器，或是邊錄邊寫的檔案。用 `tail()`
-餵頻譜圖，重疊的部分會畫兩次，而且畫在錯的時間點；拿它餵降噪器，遞迴估計會在
-已經看過的音訊上再跑一遍。`drain()` 交出的是完整的區塊，所以觸發得比區塊到達還快的
-計時器，偶爾會拿到空陣列，下面的 `push()` 和 `process()` 都接受空陣列；`reset()`
-會讓 drain 的位置從頭開始。
+一塊是 `frame_size`（1024）個樣本。`stop()` 之後再 `start()` 會接著錄同一段，像暫停鍵一樣；
+裝置回來時取樣率變了會丟出 `DeviceError`；[`reset()`][kudio.core.stream.StreamRecorder.reset]
+丟掉這段錄音。錄到 `max_seconds`（3600，`None` 表示不設上限）就不再變長，
+[`capped`][kudio.core.stream.StreamRecorder.capped] 變成 true，音量仍會更新。`monitor=True`
+會把輸入同時送到預設輸出。會保留狀態的東西，頻譜圖、降噪器或寫檔，都要從 `drain()` 餵；
+`tail()` 傳回的是互相重疊的視窗。
 
 ## 選擇裝置 {#choosing-a-device}
 
-每個裝置只有一個編號，就是 sounddevice 的。
-[`list_devices()`][kudio.util.check.list_devices] 和
-[`CheckDevice().system_devices()`][kudio.util.check.CheckDevice.system_devices]
-都用它列出同一批裝置，並標出各自的 host API；`record`、`Recorder`、`StreamRecorder`
-和 `LocalStreamReader` 的 `device` 收的也都是它。在 shell 裡，`kudio devices`
-會印出這份清單（[命令列](../cli.md)）。
-
-不給 `device` 時，各處都用同一條規則挑輸入，也就是
-[`CheckDevice.default_input`][kudio.util.check.CheckDevice.default_input]：系統有預設
-輸入就用它，它啟動不了就是 `DeviceError`，不會改用別支麥克風。麥克風全在 WDM-KS 上的
-Windows 電腦沒有預設輸入，這時從清單最後往前，取第一個開得起來、也啟動得了的輸入，
-不管它屬於哪個 host API，所以 Windows 列出了但沒有連線的藍牙耳機會被跳過。試裝置的方式
-和錄音時一樣，帶著回呼函式，因為 WDM-KS 不開其他的串流。取樣率仍然照你給的：`record`
-和 `Recorder` 向裝置要的就是給它們的取樣率，只接受 44.1 kHz 的裝置不接受 16 kHz，
-`record` 這時是 `DeviceError`。所以只要用哪個輸入錄音有差別，就請傳 `device`。想知道 `StreamRecorder`
-最後選了什麼，請在建立它之前呼叫 `logging.basicConfig(level=logging.INFO)`，
-kudio 就會記錄裝置的編號、名稱，以及它選的取樣率。
-
-[`CheckDevice`][kudio.util.check.CheckDevice] 靠實際開啟裝置，來找出它接受什麼。
-[`check_available_rate(device)`][kudio.util.check.CheckDevice.check_available_rate]
-會從 192000 到 6000 Hz 的十二個標準取樣率中，回傳開得起來的那些；裝置完全無法
-以輸入開啟時，回傳 `False`。[`check_device()`][kudio.util.check.check_device]
-則跑一輪列出裝置、決定輸入的流程，回傳 `True` 或 `False`，原因寫在記錄裡。
+每個裝置只有一個編號，也就是 sounddevice 的編號：[`list_devices()`][kudio.util.check.list_devices]、
+[`CheckDevice().system_devices()`][kudio.util.check.CheckDevice.system_devices] 和
+`kudio devices` 都印出它和所屬的 host API，`record`、`Recorder`、`StreamRecorder` 和
+`LocalStreamReader` 都以 `device` 收它。沒給時，裝置由
+[`CheckDevice.default_input`][kudio.util.check.CheckDevice.default_input] 決定：系統的預設輸入，
+它啟動不了就丟出 `DeviceError`；沒有預設輸入時（例如麥克風全在 WDM-KS 上的 Windows），用最後
+一個打得開也啟動得了的輸入。在乎由哪個輸入錄音時，請傳 `device`。
+[`check_available_rate(device)`][kudio.util.check.CheckDevice.check_available_rate] 傳回十二個
+標準取樣率裡打得開的那些。
 
 ## 即時頻譜圖：`SpectrogramStream` {#a-live-spectrogram-spectrogramstream}
-
-[`STFT`][kudio.core.stft.STFT] 和
-[`waveform_to_spectrogram`][kudio.core.feature.waveform_to_spectrogram] 都要整段片段。
-最直覺的即時檢視做法，是每次重畫都對最後幾秒重做一次轉換，但這樣幾乎所有時間
-都花在重算已經在畫面上的東西：用下面的預設值，視窗寬 375 欄，每秒重畫 20 次時，
-每次只多出大約 6 欄。[`SpectrogramStream`][kudio.core.spectrogram.SpectrogramStream]
-每一欄只算一次，在它的樣本到齊時計算，並把最後幾秒存在環形緩衝區裡。
 
 ```python
 import numpy as np
 import kudio
 
 sr = 16000
-t = np.arange(2 * sr) / sr
-y = (0.5 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)   # 2 s at -6 dBFS
-
+y = (0.5 * np.sin(2 * np.pi * 1000 * np.arange(2 * sr) / sr)).astype(np.float32)
 view = kudio.SpectrogramStream(sr, seconds=3.0)
 print(view)
 for start in range(0, len(y), 700):        # whatever block size the device uses
@@ -165,53 +102,41 @@ SpectrogramStream(sr=16000, n_fft=512, hop_length=128, 257 bins, 3.00s window)
 0.032 0.008 -6.02
 ```
 
-[`push()`][kudio.core.spectrogram.SpectrogramStream.push] 接受任意長度的區塊，
-長度為零也可以；還湊不滿一個音框的樣本會先留著，然後回傳這個區塊完成的那些欄，
-形狀是 `(new_columns, bins)`，單位 dB，最舊的在前。用 1、97、128、512 或 4096 個
-樣本的區塊，得到的欄逐位元組完全相同（測試套件會檢查這一點），所以畫面不會
-因為裝置挑的區塊大小而改變。第一欄要等
-[`latency_seconds`][kudio.core.spectrogram.SpectrogramStream.latency_seconds]，
-湊滿一整個音框（`n_fft / sr`），之後每隔
-[`column_seconds`][kudio.core.spectrogram.SpectrogramStream.column_seconds]
-出一欄（`hop_length` 預設為 `n_fft // 4`）。
+[`SpectrogramStream`][kudio.core.spectrogram.SpectrogramStream] 在每一欄的樣本到齊時只算一次，
+並用環狀緩衝區保留最近 `seconds` 秒。[`push()`][kudio.core.spectrogram.SpectrogramStream.push]
+收任意長度的單聲道區塊，傳回它完成的欄，單位 dB，舊的在前；區塊大小不會改變任何一個值。
+[`columns()`][kudio.core.spectrogram.SpectrogramStream.columns] 是整個視窗，從第一次呼叫起就是
+完整寬度，還沒收到的部分是 [`floor_db`][kudio.core.spectrogram.SpectrogramStream.floor_db]；
+[`latest()`][kudio.core.spectrogram.SpectrogramStream.latest] 是最新的一欄。第一欄要等一個音框，
+`n_fft / sr`，之後每隔 `hop_length`（`n_fft // 4`）一欄。
 
-[`columns()`][kudio.core.spectrogram.SpectrogramStream.columns] 把整個視窗當成一張圖：
-`(n_columns, bins)`，最舊的一列在最前面，所以轉置之後時間是橫軸，最新的一欄
-落在右邊。它從第一次呼叫起就是完整寬度，在累積到足夠的音訊之前，左邊填的是
-[`floor_db`][kudio.core.spectrogram.SpectrogramStream.floor_db]：如果畫面從零開始
-長出來，每次重畫都會重新縮放時間軸，看起來會像畫面在抖，而不是錄音剛開始。
-[`latest()`][kudio.core.spectrogram.SpectrogramStream.latest] 只有最新的一欄，
-也就是一個頻譜，給即時讀數用；[`freqs`][kudio.core.spectrogram.SpectrogramStream.freqs]
-存放每一列的頻率（Hz），用來標示座標軸。
+![同一個串流的三張 SpectrogramStream.columns() 快照，分別在 1、2.5 和 5 秒：視窗一直是完整寬度，還沒聽到的部分在底部，舊的音節從左邊捲出去](../images/live-audio-filling-light.webp#only-light)
+![同一個串流的三張 SpectrogramStream.columns() 快照，分別在 1、2.5 和 5 秒：視窗一直是完整寬度，還沒聽到的部分在底部，舊的音節從左邊捲出去](../images/live-audio-filling-dark.webp#only-dark)
 
-![同一個串流的 SpectrogramStream.columns() 在 1、2.5 和 5 秒後的三張快照：視窗始終是完整寬度，還沒聽到的部分停在下限，舊的音節從左邊捲出去](../images/live-audio-filling-light.webp#only-light)
-![同一個串流的 SpectrogramStream.columns() 在 1、2.5 和 5 秒後的三張快照：視窗始終是完整寬度，還沒聽到的部分停在下限，舊的音節從左邊捲出去](../images/live-audio-filling-dark.webp#only-dark)
+- 線性軸上的位準是 dBFS：滿刻度的正弦波是 0 dB，比 `ref` 低 `top_db`（80）以上的都壓到
+  `floor_db`。畫的時候用固定的色彩範圍，`vmin=view.floor_db, vmax=0`。
+- `n_mels=64` 讓列落在梅爾刻度上，比較看得出語音，但不是 dBFS：滿刻度的 1 kHz 正弦波大約是
+  -18 dB，所以 `vmax` 設在 -15 左右。
+- 第 *k* 欄涵蓋樣本 `[k*hop, k*hop + n_fft)`，不像離線 `STFT` 那樣置中，所以比同編號的離線欄
+  晚半個音框；[`to_stft()`][kudio.core.spectrogram.SpectrogramStream.to_stft] 給出對應的幾何
+  設定。
+- 它沒有鎖：在同一個執行緒裡 push 和畫，跨執行緒的部分交給 `StreamRecorder.drain()`。2-D 的
+  區塊會被 `FeatureError` 拒絕。
 
-一個合成的串流，以 1024 個樣本的區塊推入，畫了三次。5 秒之後，第一個音節已經
-從左邊捲出去了。
-
-### 用 matplotlib 畫出來 {#drawing-it-with-matplotlib}
-
-`SpectrogramStream` 沒有鎖。請在同一個執行緒裡推入和繪圖（UI 計時器是最自然的
-選擇），跨執行緒的部分交給 `StreamRecorder`，它的 `drain()` 從哪裡呼叫都安全。
-有了 matplotlib（`kudio[viz]`）和一支麥克風，整個即時檢視就是這樣：
+有 matplotlib（`kudio[viz]`）和麥克風時，即時畫面就是下面這段；要看降噪後的畫面，改成 push
+[`StreamEnhancer`][kudio.enhance.streaming.StreamEnhancer] 的 `enhancer.process(rec.drain())`
+（[降噪](enhancement.md)）：
 
 ```python
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
-import kudio
-
 rec = kudio.StreamRecorder(sr=16000).start()
 view = kudio.SpectrogramStream(rec.sr, seconds=3.0)
-
 fig, ax = plt.subplots()
 image = ax.imshow(view.columns().T, origin="lower", aspect="auto",
                   vmin=view.floor_db, vmax=0.0,
                   extent=(-view.window_seconds, 0.0, 0.0, rec.sr / 2))
-ax.set_xlabel("Time before now (s)")
-ax.set_ylabel("Frequency (Hz)")
-fig.colorbar(image, label="dBFS")
 
 
 def update(_):
@@ -225,88 +150,9 @@ plt.show()                                 # returns when the window is closed
 y = rec.stop()
 ```
 
-### 準位是 dBFS，所以顏色範圍要固定 {#levels-are-dbfs-so-keep-the-colour-range-fixed}
-
-每一欄都依窗函數做了縮放，所以在線性軸上，滿刻度的正弦波不論 `n_fft` 和窗函數
-是什麼，都讀作 0 dB，上面那個半刻度的正弦波則讀作 -6.02 dB。落在兩個頻率格之間的
-純音，用 Hann 窗最多會低 1.4 dB；這是窗函數的扇形損失（scalloping loss），不是
-準位改變。比 `ref`（預設是滿刻度）低超過 `top_db`（80）的部分，都會被壓到
-`floor_db`，所以空房間畫出來是一片單色，而不是被放大的抖動（dither）。
-
-因為這些數字有意義，即時檢視用 `vmin=view.floor_db, vmax=0` 來畫，上面那張圖
-也是。顏色範圍如果跟著數值最大的像素走，沒有人說話時就會把環境音拉到和語音
-一樣亮，這時畫面就再也看不出任何東西有多大聲。
-
-### 梅爾軸是拿來看的 {#a-mel-axis-is-for-looking}
-
-`n_mels=64` 會把各列放到梅爾刻度上，範圍由 `fmin` 和 `fmax` 決定。有聲語音大部分的
-能量在 1 kHz 以下，在 16 kHz 的線性軸上只佔八分之一；用 64 個梅爾頻帶時，有三分之一
-的列落在那裡。不過梅爾值並不是 dBFS。濾波器是 Slaney 的，和 librosa 一樣經過面積正規化，
-所以一個頻帶的值取決於它的寬度，滿刻度的正弦波會讀得遠低於 0 dB：
-
-| 滿刻度正弦波 | 線性軸 | 64 個梅爾頻帶 |
-|---|---|---|
-| 300 Hz | -0.9 dB | -17.6 dB |
-| 1 kHz | 0.0 dB | -18.2 dB |
-| 4 kHz | 0.0 dB | -24.1 dB |
-
-80 dB 的下限是在濾波器之後才套用，所以梅爾檢視會因此少掉那 18 到 24 dB 的範圍：
-用 64 個頻帶時，-62 dBFS 的 1 kHz 純音就已經貼在下限了。梅爾檢視請把 `vmax`
-設在大約 -15，或調高 `top_db`。`freqs` 裡的列標籤是各濾波器的中心，
-不是 `fmin` 和 `fmax`：在 16 kHz 用 64 個頻帶時是 46 到 7626 Hz。讀準位請看線性軸，梅爾軸則拿來看說了什麼。
-
-### 欄沒有置中 {#columns-are-not-centred}
-
-離線的 `STFT` 會在開頭補值，讓第 *k* 欄以第 *k* × hop 個樣本為中心。串流沒辦法
-替還沒聽到的音訊補值，所以這裡第 *k* 欄涵蓋的是樣本 `[k*hop, k*hop + n_fft)`，
-也就是 librosa 所說的 `center=False`，測試套件也是拿這個慣例來檢查各欄。因此，
-即時的一欄會比索引相同的離線欄晚半個音框。
-[`to_stft()`][kudio.core.spectrogram.SpectrogramStream.to_stft] 會給出對應的 `STFT`
-幾何設定，可以和錄音存在一起；兩者比較時，半個音框的偏移仍然存在。
-
-### 只接受單聲道 {#mono-only}
-
-`push()` 只接受單聲道。二維的區塊，我讓它以
-[`FeatureError`][kudio.exceptions.FeatureError] 拒絕，而不是攤平，因為把交錯排列的聲道
-攤平，分析的是一個沒有人錄過的訊號。雙聲道的錄音請先用 `y.mean(axis=1)`
-混成單聲道，訊息裡也是這樣寫的。
-
-## 邊錄邊降噪 {#denoising-on-the-way-in}
-
-[`StreamEnhancer`][kudio.enhance.streaming.StreamEnhancer] 是 `drain()` 的另一個消費者。
-把它放在檢視前面，畫面顯示的就是它的輸出。在上面的即時檢視裡，在建立 view 的地方
-一併建立 enhancer，並修改 `update()`：
-
-```python
-enhancer = kudio.StreamEnhancer(rec.sr, "logmmse")   # 32 ms behind at 16 kHz
-
-
-def update(_):
-    view.push(enhancer.process(rec.drain()))
-    image.set_data(view.columns().T)
-    return [image]
-```
-
-哪些方法能串流處理、延遲從哪裡來，以及 `quantile` 為什麼不行，
-[降噪](enhancement.md)都有說明。和 `push()` 一樣，
-[`process()`][kudio.enhance.streaming.StreamEnhancer.process] 只接受單聲道，
-遇到雙聲道的區塊會以 `FeatureError` 拒絕。請錄單聲道，或在把區塊交給它們之前，
-先用 `block.mean(axis=1)` 混成單聲道。
-
-kudio 沒有逐區塊輸出、讓你聽處理結果的功能：錄音器的 `monitor=True` 播的是原始輸入，
-`play_audio` 則是給已經完成的陣列用的。要無間斷地播放處理過的區塊，需要你自己
-開一個輸出串流，例如 `sounddevice.OutputStream`。
-
 ## 播放音訊 {#playing-audio}
 
-[`play_audio`][kudio.core.stream.play_audio] 接受陣列加上取樣率、路徑，或開啟中的
-`wave.Wave_read`。大部分失敗的情況，它都會回傳一段訊息，而不是引發例外，
-所以請檢查回傳值。numpy 的預設 dtype 是 float64，而陣列必須是 int16 或 float32：
-
 ```python
-import numpy as np
-import kudio
-
 tone = np.sin(2 * np.pi * 440 * np.arange(16000) / 16000)    # float64
 print(kudio.play_audio(tone, 16000))
 ```
@@ -315,121 +161,40 @@ print(kudio.play_audio(tone, 16000))
 unsupported dtype: float64
 ```
 
-`tone.astype(np.float32)` 就能播；`file_load` 回傳的本來就是 float32。陣列在背景
-播放，呼叫立刻回傳，所以如果腳本下一行就結束，聲音會被切掉；`sounddevice.wait()`
-會阻塞到播完為止。`(frames, channels)` 的陣列會用同樣數量的聲道播放。沒有
-sounddevice 時，`play_audio` 會引發 `DependencyError`。
+[`play_audio`][kudio.core.stream.play_audio] 收陣列和取樣率、路徑，或開啟中的 `wave.Wave_read`；
+大部分的失敗不丟例外，而是傳回一段說明，所以要檢查傳回值；`None` 表示播放了。陣列必須是 int16
+或 float32。陣列在背景播放，腳本下一行就結束的話聲音會被切掉；`sounddevice.wait()` 會等到播完。
+路徑照 `file_load` 的方式讀。沒有 sounddevice 時丟出 `DependencyError`。
 
-路徑的讀法和 `file_load` 一樣，所以它打得開的都能播：FLAC 和 FLOAT WAV，
-[有 ffmpeg 的話](audio-files.md#formats-soundfile-does-not-read)還有 m4a 和 webm。讀不了
-的檔案則回傳訊息，原因寫進記錄。開啟中的 `wave.Wave_read` 會播完才回傳，照它存的
-整數播放：8 位元無號、16 和 32 位元照原樣，24 位元放在 32 位元的高位。
+## 底層元件 {#the-lower-level-pieces}
 
-## 較底層的元件 {#the-lower-level-pieces}
-
-`StreamRecorder` 建立在 `LocalStreamReader` 之上，後者用 `CheckDevice` 決定裝置。
-下面這些元件，是給它的選擇不合用的時候：要 int16 而不是 float32、要把區塊交給
-你自己的程式碼，或音訊是從網路進來的。
-
-### Recorder {#recorder}
-
-[`Recorder`][kudio.core.stream.Recorder] 是會阻塞的固定長度錄音器，回傳的是 int16
-而不是 float32：
+[`Recorder`][kudio.core.stream.Recorder] 是阻塞式、固定長度、傳回 int16 的錄音器，取樣率不會
+退而求其次：取樣率被拒絕或裝置無法啟動時，和 `record()` 一樣丟出寫明裝置編號和取樣率的
+`DeviceError`；裝置不再送資料時，在錄音該結束的十秒後也丟出 `DeviceError`。
 
 ```python
-import kudio
-
 with kudio.Recorder(record_times=3, rate=16000) as r:   # the system's default input
     y = r.start_record()                       # int16, (n,) for mono
     r.save("take.wav")                         # 16-bit WAV; True or False
 ```
 
-它照給定的裝置、取樣率和聲道數開啟，不會改用別的設定：裝置不接受時，
-[`start_record()`][kudio.core.stream.Recorder.start_record] 會引發 sounddevice 的
-`PortAudioError`，而不是 `DeviceError`；裝置不再送資料時，在錄音該結束後十秒會是
-`DeviceError`。它每次取每個聲道 `frames_per_buffer`（512）個樣本，共取
-`int(rate / frames_per_buffer * record_times)` 次，所以在 16 kHz 錄三秒是 93 個
-區塊：每個聲道 47,616 個樣本，也就是 2.976 秒。
-[`save(resample=...)`][kudio.core.stream.Recorder.save] 會逐聲道對擷取到的內容
-重新取樣，所以那 2.976 秒在新的取樣率下仍然是 2.976 秒，每個音高也都維持原樣。
-記憶體裡的陣列，則可以用 [`resample`][kudio.core.io.resample] 沿著 frames 軸
-做同樣的事：
+[`LocalStreamReader`][kudio.core.stream.LocalStreamReader] 開啟一個輸入，把每一塊（一維、聲道
+交錯，int16，`wav_format=kudio.PA_FLOAT32` 時是 float32）交給 `AudioBuffer`、`on_frame` 回呼，
+或兩者。打不開的裝置會讓它維持未初始化，`get_status()` 會說明；`get_setup()` 傳回實際開啟的
+設定。`on_frame` 在 PortAudio 的執行緒上執行，所以存下資料就返回；裡面丟出的例外會被記錄，串流
+繼續。
+
+[`AudioBuffer`][kudio.core.buffer.AudioBuffer] 是容量 `size`（2）塊的有界 FIFO，滿了就丟掉最舊
+的，適合畫面用。[`get()`][kudio.core.buffer.AudioBuffer.get] 等一塊，超過 `timeout` 秒丟出
+`TimeoutError`；[`get_fixed_size_data(n)`][kudio.core.buffer.AudioBuffer.get_fixed_size_data]
+等接下來的 `n` 塊，拒絕 `n = 0`。
+[`FetchBuffer(buf).get_data(n, timeout=...)`][kudio.core.buffer.FetchBuffer.get_data] 在自己的
+執行緒上做同樣的等待。
+
+[`RemoteStreamReader`][kudio.core.stream.RemoteStreamReader] 是 TCP 用戶端，給以原始 PCM
+串流的裝置用，格式是 `"16bit"` 或 `"32bit"`（浮點）：
 
 ```python
-import numpy as np
-
-x = y.astype(np.float32) / 32768               # y from start_record() above
-y8 = kudio.resample(x, orig_sr=16000, target_sr=8000)
-kudio.save_wave("take-8k.wav", y8, 8000)
-```
-
-### LocalStreamReader {#localstreamreader}
-
-[`LocalStreamReader`][kudio.core.stream.LocalStreamReader] 開啟輸入，把每個區塊
-交給 `AudioBuffer`、交給 `on_frame` 回呼函式，或兩者都給：
-
-```python
-import time
-
-import numpy as np
-import kudio
-
-chunks = []
-reader = kudio.LocalStreamReader(device=1,          # from kudio.list_devices()
-                                 rate=16000, frame_size=1024,
-                                 on_frame=chunks.append)
-if reader.get_status():                        # False: no input would open
-    device, rate, channels = reader.get_setup()   # what the device agreed to
-    reader.stream_start()
-    time.sleep(3)
-    reader.terminate()
-    take = np.concatenate(chunks)              # int16, channels interleaved
-```
-
-每個區塊都是一維的，共 `frame_size × channels` 個值，各聲道交錯排列：預設是 int16，
-用 `wav_format=kudio.PA_FLOAT32`（1，也就是 PortAudio 裡 float32 的格式代號）時是 float32。
-`rate` 和 `channels` 都只是要求，決定的方式和 `StreamRecorder` 一樣。`get_setup()`
-回傳實際開啟的設定，`terminate()` 執行過之後則回傳 `None`，所以要在那之前問。
-裝置打不開時，這裡不會引發例外：讀取器會維持未初始化，`get_status()` 會反映這一點，
-讓 GUI 可以提供重試。對這樣的讀取器呼叫 `stream_start()` 或 `play_audio()`，
-會引發 `DeviceError`。
-
-`on_frame` 在 PortAudio 的執行緒上執行，所以請把區塊存起來就回傳，處理留到別的
-地方做；區塊是它自己的一份複本，可以留著。在它裡面引發的例外，kudio 會攔下來並
-記錄，串流繼續進行。如果不攔，sounddevice 會印出 traceback 並停止串流，一個出錯的
-區塊就會讓整段錄音結束。
-
-### AudioBuffer 和 FetchBuffer {#audiobuffer-and-fetchbuffer}
-
-[`AudioBuffer`][kudio.core.buffer.AudioBuffer] 是有容量上限的 FIFO，它是拿來監看的，
-不是拿來錄音的：裝滿 `size` 個區塊（預設 2）之後，
-[`add()`][kudio.core.buffer.AudioBuffer.add] 會丟掉**最舊的**來騰出空間。顯示要的
-正是這樣：永遠是最新的音訊，不會越積越多。錄音則不要這樣，所以 `StreamRecorder`
-改用 `on_frame` 收集。這個緩衝區的方法名稱，把區塊叫做 frame。
-
-[`get()`][kudio.core.buffer.AudioBuffer.get] 會阻塞到有區塊到達，或在 `timeout` 秒後
-引發 `TimeoutError`。
-[`get_fixed_size_data(n)`][kudio.core.buffer.AudioBuffer.get_fixed_size_data]
-會等接下來的 `n` 個區塊，把它們頭尾相接後回傳。它在區塊進來的當下、還沒有任何東西
-被丟掉之前就收集，所以取用的一方再慢，也不會讓它少掉區塊，而原本就在等待中的區塊
-不算在內。它會拒絕 `n = 0`，因為那樣會永遠等下去，而任何短於一個區塊的長度，
-`int(seconds * sr / chunk)` 算出來就是 0；不是整數的數量也會被拒絕。給了 `timeout=`
-時，時間到會引發 `TimeoutError`，這次擷取也隨之結束，所以不會有東西留下來繼續等，
-把下一次擷取的區塊拿走。
-[`FetchBuffer(buf).get_data(n, timeout=...)`][kudio.core.buffer.FetchBuffer.get_data]
-在自己的執行緒上做同樣的等待，每個 `FetchBuffer` 一次，引發例外的方式也相同；
-緩衝區之後可以馬上再用。
-
-### RemoteStreamReader {#remotestreamreader}
-
-[`RemoteStreamReader`][kudio.core.stream.RemoteStreamReader] 透過 TCP 連到
-串流原始 PCM 的裝置，例如區域網路上一塊接了麥克風的板子。它以 daemon
-執行緒執行，每次讀 `frame_size` 個樣本（`"16bit"` 每個 2 位元組，`"32bit"`
-每個 4 位元組，也就是 float32），並把每個區塊加進 `AudioBuffer`：
-
-```python
-import kudio
-
 buf = kudio.AudioBuffer(size=16)
 remote = kudio.RemoteStreamReader(buf)
 if remote.connect_remote_device("192.168.1.50", 5000):
@@ -439,23 +204,6 @@ if remote.connect_remote_device("192.168.1.50", 5000):
     remote.terminate()                         # sends "stop", closes the socket
 ```
 
-kudio 不會送任何東西來啟動串流：連線一建立，伺服器就開始送樣本，並且應該在收到
-文字 `stop` 時停止，`terminate()` 在關閉之前會送出它。其他指令用
-[`sock_send()`][kudio.core.stream.RemoteStreamReader.sock_send] 送，而且要在
-`start()` 之前：讀取執行緒一開始跑，就會讀同一個 socket，回覆可能被當成區塊
-放進緩衝區。`initialize_params` 即使在本機不播放任何東西，也會匯入 sounddevice，
-所以這個類別同樣需要 `kudio[audio]`。
-
-!!! warning "分成許多小封包的區塊"
-    分段到達的區塊會被拼回來：第一次讀取不足之後，後續的每次讀取只要求這個區塊
-    剩下的部分。拿一台不管區塊從哪裡開始、一律把 40 個區塊切成 1460 位元組小段的
-    本機伺服器來測，40 個全部收到，順序也對。
-    一個區塊如果需要超過 10 次後續讀取（`break_count`，以讀取次數計，不是秒數），
-    讀取器就會停止，所以對每個區塊分成許多小封包送出的裝置，請在 `start()` 之前
-    調高 `remote.break_count`。
-
-## 參數在哪裡 {#where-the-parameters-are}
-
-錄音器、讀取器、緩衝區和裝置檢查，在 API 參考的[即時音訊](../reference/live-audio.md)；
-`SpectrogramStream` 在 [STFT 與特徵](../reference/features.md)，`StreamEnhancer`
-在[增強](../reference/enhancement.md)。
+連線一開啟，伺服器就送樣本，收到文字 `stop` 時應該停止。其他指令請在 `start()` 之前用
+[`sock_send()`][kudio.core.stream.RemoteStreamReader.sock_send] 送出。分成好幾段到達的一塊會被
+拼回來，最多再讀 `break_count`（10）次。參數在 API 參考的[即時音訊](../reference/live-audio.md)。

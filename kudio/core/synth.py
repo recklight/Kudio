@@ -463,7 +463,6 @@ class Synthesizer:
             is_silence: bool = False,
             p_silence: float = 0.02,
             target_sr: Optional[int] = None,
-            desired_sample: Optional[int] = None,
             seed: Optional[int] = None) -> Optional[list]:
         """Generate the noisy dataset.
 
@@ -496,7 +495,6 @@ class Synthesizer:
         :param target_sr: resample the mixture to this rate. ``None`` (the
             default) keeps each clean file's own rate; the noise is always
             resampled to match its clean partner.
-        :param desired_sample: deprecated alias for *target_sr*.
         :param seed: the base of everything random in the run. Each output
             file draws its noise crop, its room and its packet loss from the
             base and its own path, so a rerun rebuilds the same files whether
@@ -514,16 +512,8 @@ class Synthesizer:
             raise ValueError("Use 'syn_extra_mode' to run extra mode.")
         if mode not in ('reg', 'regular', 'inc', 'increment'):
             raise ValueError(f"Unknown mode: {mode!r}")
-        if desired_sample is not None:
-            warnings.warn(
-                "Synthesizer.syn(desired_sample=...) is deprecated and will be "
-                "removed in a future release; use target_sr=... instead.",
-                DeprecationWarning, stacklevel=2)
         # checked before the output folder is emptied, not on the first file
-        if target_sr is None:
-            target_sr = _check_rate(desired_sample, 'desired_sample', optional=True)
-        else:
-            target_sr = _check_rate(target_sr, 'target_sr', optional=True)
+        target_sr = _check_rate(target_sr, 'target_sr', optional=True)
         self._check_room()
         _check_snr(self.snrRatio, 'snr_ratio')
         self._check_any(self.cleanWaves, self.noiseWaves, self.snrRatio)
@@ -1239,10 +1229,10 @@ class Synthesizer:
         spread = float(np.std(y_noise))
         if not spread > 0.0:
             # Digital silence, or a constant: there is no scaling that puts
-            # this at the requested SNR, and dividing by it gave every sample
-            # NaN, which int16 wrote as zero -- a mixture with no speech in it
-            # and nothing said. One truncated download in a noise corpus was
-            # enough.
+            # this at the requested SNR, and dividing by it would make every
+            # sample NaN, which int16 writes as zero -- a mixture with no speech
+            # in it and nothing said. One truncated download in a noise corpus
+            # is enough.
             raise SynthesisError(
                 f"noise file has no variation and cannot be scaled to "
                 f"{_snr_value(snr)} dB: {noise_file}. It is digital silence or "

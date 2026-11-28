@@ -1,7 +1,7 @@
 # 入門 {#getting-started}
 
-這一頁說明怎麼安裝 kudio，把一段錄音從硬碟上的檔案處理成旁邊一個比較乾淨的檔案，
-最後介紹出問題時決定你會看到什麼的兩樣東西：例外和記錄。
+安裝 kudio、把一段有雜訊的錄音處理成降噪後的檔案，以及出問題時 kudio 會丟出什麼、警告
+什麼、記錄什麼。
 
 ## 安裝 {#installing}
 
@@ -9,72 +9,37 @@
 pip install kudio
 ```
 
-核心安裝會帶入 numpy、scipy、soundfile、soxr、PyYAML 和 tqdm。
-這樣就夠處理檔案、特徵、效果、響度、不需參考訊號的檢查報告、降噪、資料集合成，以及
-不需要外部套件的那些指標。`import kudio` 不會匯入下面任何一個選用套件，所以缺少某個
-選用套件組時，要到你呼叫需要它的函式時才會發現（畫圖工具則是在匯入
-`kudio.util.visual` 的時候），不會提早。
-
-WAV、FLAC、OGG、MP3、AIFF 和 libsndfile 認得的其他格式，這樣就能讀。m4a、aac、webm
-之類的格式還要 `compressed` 這組選用套件，以及 PATH 上的 ffmpeg，ffmpeg 不是 pip
-裝得了的（[音訊檔案](guide/audio-files.md#formats-soundfile-does-not-read)）。
-
-kudio 需要 Python 3.9 以上。CI 在 Linux 和 Windows 上用 3.9、3.11 和 3.13 測試。
+核心安裝是 numpy、scipy、soundfile、soxr、PyYAML 和 tqdm：檔案、特徵、效果、響度、
+降噪、資料集合成，以及 PESQ 和 DNSMOS 以外的所有指標。kudio 需要 Python 3.9 以上；CI
+在 Linux 和 Windows 上測 3.9、3.11 和 3.13。`import kudio` 不會匯入任何選用套件，所以
+缺了哪個選用套件組，要到呼叫需要它的函式時才會發現。
 
 ### 選用套件組 {#extras}
 
-凡是會帶進大型、需要編譯或用途很專門的套件，都放在選用套件組裡，需要哪個就指名安裝。
-加引號是為了避免 zsh 之類的 shell 把方括號當成檔名萬用字元：
+方括號要加引號，不然 zsh 會把它當成檔名萬用字元：
 
 ```bash
-pip install "kudio[eval,viz]"
+pip install "kudio[audio,viz]"
 ```
 
 | 套件組 | 會安裝 | 用途 |
 |---|---|---|
-| `audio` | sounddevice | 錄音與播放：[`record`][kudio.core.stream.record]、[`StreamRecorder`][kudio.core.stream.StreamRecorder]、[`play_audio`][kudio.core.stream.play_audio]、串流讀取器、[`list_devices`][kudio.util.check.list_devices] |
-| `eval` | 不裝任何東西 | 留著，讓 `pip install "kudio[eval]"` 照樣能裝：STOI、ESTOI 和 SDR 都不需要額外的套件 |
-| `pesq` | pesq | [`pesq`][kudio.core.evaluator.pesq]、`score` 和 `AudioEvaluate` 裡的 PESQ（ITU-T P.862 和 P.862.2），以及 [`composite`][kudio.core.quality.composite] 內部用的 PESQ |
-| `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos] 和 [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808]，不需乾淨參考訊號的 P.835 和 P.808 主觀分數預測 |
+| `audio` | sounddevice | [`record`][kudio.core.stream.record]、[`StreamRecorder`][kudio.core.stream.StreamRecorder]、[`play_audio`][kudio.core.stream.play_audio]、[`list_devices`][kudio.util.check.list_devices]；Linux 上要有系統的 PortAudio，Debian 和 Ubuntu 是 `libportaudio2` |
+| `pesq` | pesq | PESQ（ITU-T P.862 和 P.862.2），[`composite`][kudio.core.quality.composite] 裡也用到；PyPI 上只有原始碼，所以要有 C 編譯器，Windows 上是 MSVC Build Tools |
+| `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos] 和 [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808]；權重是 Microsoft 的，把 DNS-Challenge 的 repository clone 下來，再把裡面的 DNSMOS 資料夾傳給 `model_dir=`，或設 `KUDIO_DNSMOS_DIR` |
 | `viz` | matplotlib | [`kudio.util.visual`][kudio.util.visual] 裡的畫圖工具 |
-| `data` | pandas、openpyxl | [`AudioEvaluate.get_df`][kudio.core.evaluator.AudioEvaluate.get_df] 和 [`per_file`][kudio.core.evaluator.AudioEvaluate.per_file]、[`data2xlsx`][kudio.util.conv.data2xlsx] |
-| `compressed` | audioread | m4a、aac、webm，以及其他 ffmpeg 解得開的格式，kudio 每個讀檔的地方都一樣（[音訊檔案](guide/audio-files.md#formats-soundfile-does-not-read)）；ffmpeg 本身要在 PATH 上 |
-| `all` | `audio`、`eval`、`dnsmos`、`viz`、`data`、`compressed` | 除了 `pesq` 以外的所有執行期套件組 |
+| `data` | pandas、openpyxl | [`AudioEvaluate.get_df`][kudio.core.evaluator.AudioEvaluate.get_df]、[`per_file`][kudio.core.evaluator.AudioEvaluate.per_file]、[`data2xlsx`][kudio.util.conv.data2xlsx] |
+| `compressed` | audioread | m4a、aac、webm，以及 ffmpeg 能解碼的其他格式（[音訊檔案](guide/audio-files.md#formats-soundfile-does-not-read)）；ffmpeg 要在 PATH 上 |
+| `eval` | 不裝任何東西 | 空的套件組：STOI、ESTOI 和 SDR 只用核心安裝就能算 |
+| `all` | `audio`、`eval`、`dnsmos`、`viz`、`data`、`compressed` | `pesq` 以外的所有執行期套件組，`pesq` 要編譯器 |
 
-`[dev]`、`[check]` 和 `[docs]` 是開發 kudio 本身用的，不是拿 kudio 來做事用的，
-`[all]` 也不包含它們。其餘當中有四組要特別注意：
-
-`pesq`
-:   `pesq` 套件在 PyPI 上只有原始碼，所以安裝時要編譯 C 程式碼，需要編譯器：
-    Windows 上是 MSVC Build Tools。我把它排除在 `[eval]` 和 `[all]` 之外，
-    這樣沒有編譯器的電腦也裝得起來。
-
-`dnsmos`
-:   這裡裝的是執行環境，不是模型。權重屬於 Microsoft 的 DNS-Challenge，由那邊發布，
-    所以請 clone 那個儲存庫，把它的 DNSMOS 資料夾傳給 `model_dir=`，或把環境變數
-    `KUDIO_DNSMOS_DIR` 設成它。找不到模型時，kudio 會引發
-    [`FeatureError`][kudio.exceptions.FeatureError]，告訴你去哪裡取得。
-
-`audio`
-:   PortAudio 的繫結 sounddevice，用來錄音、播放和列出裝置，每個裝置只有一個編號
-    （[錄音與即時檢視](guide/live-audio.md)）。它在 Windows 和 macOS 的 wheel 自帶
-    PortAudio；Linux 上需要系統的 PortAudio 函式庫，Debian 和 Ubuntu 是
-    `libportaudio2`，不需要編譯任何東西。
-
-`eval`
-:   空的。STOI、ESTOI 和 SDR 都由 kudio 自己算。
-
-[`check_metrics_install`][kudio.core.evaluator.check_metrics_install] 會告訴你這台電腦
-有哪些指標後端；它回傳什麼，[品質評估](guide/metrics.md)有說明。
+`[dev]`、`[check]` 和 `[docs]` 是開發 kudio 本身用的。
 
 ## 第一次使用 {#a-first-session}
 
-這一段把一段含雜訊的錄音走過一般的流程：看檔案、載入、檢查、降噪、拿結果跟乾淨訊號
-比對評分，然後存檔。除了核心安裝之外什麼都不需要，另外需要兩個你可以自己產生的檔案：
-一段前後有停頓、含兩段有聲段落的乾淨訊號，以及同一段訊號以 2 dB SNR 混入白雜訊的版本。
-
-這兩個檔案和首頁導覽用的不是同一組，只是檔名相同。請在空資料夾裡執行下面的區塊，
-否則下面的數字都對不上。
+一段有雜訊的錄音：檢查、降噪、評分、存檔。先在空資料夾裡執行下面這段：它會寫出
+`clean.wav`，兩段有聲的片段，前後有停頓；以及 `noisy.wav`，同樣的訊號混上 2 dB SNR
+的白雜訊。
 
 ??? example "產生 `clean.wav` 和 `noisy.wav`"
 
@@ -103,34 +68,13 @@ pip install "kudio[eval,viz]"
     kudio.save_wave("noisy.wav", noisy, sr)
     ```
 
-    [`add_noise_snr`][kudio.effects.augment.add_noise_snr] 會把雜訊縮放到你要求的
-    SNR，語音功率是對整段片段平均，包含停頓。
-
-### 先看，再載入 {#look-then-load}
+### 載入並檢查 {#load-and-check}
 
 ```python
 import kudio
 
-print(kudio.audio_info("noisy.wav"))
 y, sr = kudio.file_load("noisy.wav")
-print(y.dtype, y.shape, sr)
-```
-
-```text
-noisy.wav: 4.500s, 16000 Hz, 1ch, PCM_16, peak 0.5430
-float32 (72000,) 16000
-```
-
-[`audio_info`][kudio.core.io.audio_info] 從檔頭就能回答取樣率、聲道數、長度和編碼。
-峰值則需要樣本，它會分塊讀取；`peak=False` 會跳過這一步，不管檔案多大都是瞬間完成。
-
-[`file_load`][kudio.core.io.file_load] 回傳 float32，取樣率是檔案本身的，或是你傳入的
-`sr=`。多聲道檔案會混成單聲道，除非你傳 `mono=False`，這時不論有沒有 `sr=`，
-都會以聲道在後的 `(frames, channels)` 回傳。
-
-### 檢查 {#check-it}
-
-```python
+print(kudio.audio_info("noisy.wav"))
 report = kudio.audio_report(y, sr)
 print(report)
 for problem in report.problems():
@@ -138,58 +82,31 @@ for problem in report.problems():
 ```
 
 ```text
+noisy.wav: 4.500s, 16000 Hz, 1ch, PCM_16, peak 0.5430
 4.50s @ 16000 Hz · peak -5.3 dBFS · -18.4 LUFS · SNR~9 dB · bandwidth 8000 Hz
 estimated SNR around 9 dB — noise close to the content gives that, and so does a steady sound such as hum or a running machine, whose loud and quiet frames hardly differ; the estimate cannot tell the two apart
 ```
 
-[`audio_report`][kudio.core.report.audio_report] 不需要乾淨的參考訊號。它量準位、響度、
-削峰、直流偏移、靜音、雜訊底，以及內容實際用到多少頻帶，
-[`problems`][kudio.core.report.AudioReport.problems] 則把值得處理的地方寫成句子。
-清單是空的，代表它量得到的東西都沒問題。響度是依 ITU-R BS.1770 計算的閘控整合響度，
-也就是 [`loudness`][kudio.core.loudness.loudness] 單獨呼叫時回傳的數字：片段聽起來有多大聲，
-這是峰值看不出來的。其他響度工具在[檢查錄音](guide/inspection.md)。
-
-檔案是用 2 dB 混的，報告卻說 9 dB。兩者都對，只是講的是不同的事。混音 SNR 是把語音對
-整個檔案平均，包含停頓；報告則把檔案切成 30 ms 的音框，拿響的音框（準位的第 95 百分位數）
-和安靜的音框（第 10 百分位數）比較。拿它來找出吵的檔案，不要拿來當引用的數字。
-下一步的圖上標出了這兩個百分位數。
+[`file_load`][kudio.core.io.file_load] 傳回 float32，取樣率是檔案本身的，或 `sr=`
+指定的；多聲道會混成單聲道，除非 `mono=False`，那時形狀是 `(frames, channels)`。
+[`audio_report`][kudio.core.report.audio_report] 不需要乾淨的參考訊號。它的 SNR 是拿
+響的 30 ms 音框和安靜的比，所以 2 dB 混出來的檔案會讀到大約 9 dB：用來找出吵的檔案，
+不是用來量混音的 SNR。
 
 ### 降噪 {#denoise}
 
 ```python
 denoised = kudio.spectral_enhance(y, sr)
-print(len(denoised) == len(y))
 ```
 
-```text
-True
-```
+[`spectral_enhance`][kudio.enhance.spectral.spectral_enhance] 預設是 MCRA 雜訊估計加
+log-MMSE 增益，傳回的樣本數和輸入一樣。
 
-[`spectral_enhance`][kudio.enhance.spectral.spectral_enhance] 預設使用 MCRA 雜訊估計
-加上 log-MMSE 增益，回傳的樣本數和輸入完全一樣，所以輸出和輸入逐一對齊。
+![noisy.wav 和 denoised.wav 在 4.5 秒內的音框位準，標出 noisy 位準的第 95 和第 10 百分位，相差 8.8 dB](images/start-levels-light.webp#only-light)
+![noisy.wav 和 denoised.wav 在 4.5 秒內的音框位準，標出 noisy 位準的第 95 和第 10 百分位，相差 8.8 dB](images/start-levels-dark.webp#only-dark)
 
-![noisy.wav 和 denoised.wav 在 4.5 秒內的音框準位，標出 noisy 準位的第 95 和第 10 百分位數，相差 8.8 dB](images/start-levels-light.webp#only-light)
-![noisy.wav 和 denoised.wav 在 4.5 秒內的音框準位，標出 noisy 準位的第 95 和第 10 百分位數，相差 8.8 dB](images/start-levels-dark.webp#only-dark)
-
-`noisy.wav` 就是報告量的那個檔案：每個音節的峰值大約 -14.5 dBFS，停頓則在雜訊底
--23.6 dBFS。`denoised.wav` 是上面那個呼叫的輸出，它的雜訊底低了 19 dB，在 -42.8 dBFS，
-也就是後面兩段停頓所在的位置。音節峰值只掉了大約 1 dB，因為在峰值處，準位主要是語音
-本身。語音底下的雜訊也降了，只是降得比較少：在兩段有聲段落上，與 `clean.wav` 的差異
-從 -23.5 降到 -31.4 dBFS。這個方法只能拿掉它分辨得出不是語音的部分。
-
-最前面半秒留下的雜訊比後面的停頓多大約 10 dB。MCRA 是邊處理邊學雜訊，在那裡還在學。
-這段片段一開頭是半秒的純雜訊，正好適合 `initial` 估計器：它把開頭的音框當成環境音，
-並一直沿用這個估計。
-
-```python
-denoised_initial = kudio.spectral_enhance(y, sr, noise="initial")
-```
-
-這樣三段停頓都會在大約 -38 dBFS，第一段比用 MCRA 時安靜 6 dB，後兩段則大聲 4 到 5 dB，
-下一步的 SI-SDR 會從 11.04 dB 變成 12.38 dB。七種增益規則、四種雜訊估計器，以及怎麼
-比較它們，都在[降噪](guide/enhancement.md)。那一頁也量了降噪從哪裡開始不划算：
-這段片段以 30 dB 而不是 2 dB 混音時，SI-SDR 仍然增加 8 dB；但那邊的人聲在輸入越乾淨時
-增加得越少，到 20 dB 時，七種增益規則都會讓它們比原來更差。
+雜訊底從 -23.6 降到 -42.8 dBFS，音節的峰值只降了大約 1 dB。
+[降噪](guide/enhancement.md)有其他的增益規則和雜訊估計方法。
 
 ### 跟乾淨訊號比對評分 {#score-against-the-clean-signal}
 
@@ -207,25 +124,11 @@ si_sdr    1.99 ->  11.04 dB
 segsnr   -3.56 ->   1.01 dB
 ```
 
-這兩次呼叫還會各在標準錯誤上印出一則 `UserWarning`：
-
-```text
-UserWarning: segmental_snr(): 105 of ref's 280 frames are digital silence; each scores -10 dB, or 0 dB where deg is silent there too
-```
-
-上面做出來的 `clean.wav`，停頓處是完全的零，這是任何麥克風都錄不出來的；分段 SNR 在
-那些音框裡沒有訊號可以拿來和雜訊比，所以它們都落在 -10 dB 的下限。本身帶有雜訊底的
-參考訊號不會出現這則警告。
-
-[`score`][kudio.core.evaluator.score] 以名稱指定指標。`pesq` 和複合指標的 `csig`、`cbak`、`covl`
-需要 `[pesq]`，`stoi`、`estoi` 和 `sdr` 需要 `[eval]`，其他的裝好 kudio 就能跑。不給清單時，
-它會跑 `snr`、`si_sdr`、`segsnr`、`sdi`，以及 `pesq`、`stoi`、`estoi`、`sdr` 之中這台電腦能跑的
-那些；其他指標要指名才會跑。
-
-這些數字需要乾淨訊號，自己混出來的音檔有，真實的錄音永遠沒有；那正是 `audio_report`
-的用途。它們也是拿第 *i* 個樣本和第 *i* 個樣本比，所以可能錯開的一對，要先用
-[`align`][kudio.core.align.align] 對齊。錯開 16 個樣本（1 ms）時，降噪後的片段 SI-SDR
-會是 -9.43 dB，而不是 11.04。其餘內容在[品質評估](guide/metrics.md)。
+兩次呼叫都會警告參考訊號 280 個音框裡有 105 個是數位靜音，segmental SNR 把這些音框算成
+它的下限 -10 dB。[`score`][kudio.core.evaluator.score] 不給清單時會算 `snr`、
+`si_sdr`、`segsnr`、`sdi`、`stoi`、`estoi` 和 `sdr`，裝了 `[pesq]` 且取樣率是 8 或
+16 kHz 時再加上 `pesq`。它拿第 *i* 個樣本和第 *i* 個樣本比，所以可能錯開的一對要先
+[`align`][kudio.core.align.align]：見[品質評估](guide/metrics.md)。
 
 ### 存檔 {#save}
 
@@ -238,149 +141,45 @@ print(kudio.audio_info("denoised.wav"))
 denoised.wav: 4.500s, 16000 Hz, 1ch, PCM_16, peak 0.3796
 ```
 
-[`save_wave`][kudio.core.io.save_wave] 預設寫 16-bit PCM，除非你傳別的 `subtype=`；
-它會建立不存在的資料夾，在整數格式中把超過 ±1.0 的部分削到滿刻度，遇到 NaN 或 inf
-則以 `AudioIOError` 拒絕。格式和原因在[音訊檔案](guide/audio-files.md)。
-
-降噪後的檔案量起來是 -21.6 LUFS，含雜訊的是 -18.4：被拿掉的雜訊本來也算在音量裡。
-要把兩者並排比聽之前，先用 [`match_loudness`][kudio.core.loudness.match_loudness]
-把它們調到相同響度；原因在[檢查錄音](guide/inspection.md)。
-
-### 在 shell 裡做同樣的事 {#the-same-from-a-shell}
-
-```bash
-kudio info noisy.wav
-kudio report noisy.wav                    # exit status 1: it found a problem
-kudio enhance noisy.wav denoised.wav
-```
-
-`problems()` 不是空的時候，`report` 會以 1 結束，所以可以當成 shell 腳本裡的測試。
-所有指令都在[命令列](cli.md)。
+[`save_wave`][kudio.core.io.save_wave] 預設寫 16 位元 PCM，`subtype=` 可以改；整數格式
+會把超過 ±1.0 的部分削掉，NaN 或 inf 則直接拒絕。在 shell 裡，這一段就是
+`kudio report noisy.wav` 和 `kudio enhance noisy.wav denoised.wav`（[命令列](cli.md)）。
 
 ## 錯誤 {#errors}
 
-kudio 自己的例外類別都繼承自 [`KudioError`][kudio.exceptions.KudioError]：
+kudio 自己的例外都繼承 [`KudioError`][kudio.exceptions.KudioError]：
 
-| 類別 | 引發時機 |
+| 類別 | 什麼時候丟出 |
 |---|---|
-| [`AudioIOError`][kudio.exceptions.AudioIOError] | 檔案無法讀取或寫入：`file_load`、`audio_info`、`save_wave` 以及建立在它們之上的功能 |
-| [`FeatureError`][kudio.exceptions.FeatureError] | 轉換或量測拒絕它的輸入：形狀不對、太短、未知的方法或參數；它同時也是 `ValueError` |
-| [`DeviceError`][kudio.exceptions.DeviceError] | `StreamRecorder` 找不到可用的輸入裝置，或裝了 sounddevice 但系統沒有 PortAudio 函式庫 |
-| [`SynthesisError`][kudio.exceptions.SynthesisError] | [`Synthesizer`][kudio.core.synth.Synthesizer] 不肯清空存放輸入檔、工作目錄、你的家目錄或檔案系統根目錄的資料夾，或遇到無法設定 SNR 的靜音雜訊或乾淨檔案 |
-| [`DependencyError`][kudio.exceptions.DependencyError] | 缺少選用套件；它同時也是 `ImportError` |
+| [`AudioIOError`][kudio.exceptions.AudioIOError] | 檔案讀不了或寫不了；[`UnsupportedFormatError`][kudio.exceptions.UnsupportedFormatError] 是它的子類別，kudio 本身不會丟 |
+| [`FeatureError`][kudio.exceptions.FeatureError] | 轉換或量測拒絕輸入：形狀不對、太短、方法或參數不認得；它也是 `ValueError` |
+| [`DeviceError`][kudio.exceptions.DeviceError] | 沒有能錄音的輸入裝置，或 sounddevice 找不到 PortAudio 函式庫 |
+| [`SynthesisError`][kudio.exceptions.SynthesisError] | [`Synthesizer`][kudio.core.synth.Synthesizer] 不肯清空放著輸入檔的資料夾、工作目錄、家目錄或檔案系統根目錄，或遇到沒辦法設定 SNR 的靜音檔 |
+| [`DependencyError`][kudio.exceptions.DependencyError] | 缺選用套件；它也是 `ImportError`，訊息裡寫著要裝哪個套件組 |
 
-kudio 裡沒有任何地方會引發 `AudioIOError` 的子類別
-[`UnsupportedFormatError`][kudio.exceptions.UnsupportedFormatError]。讀不了或解不開的
-檔案會以 `AudioIOError` 本身回報，所以請攔截它，例如在批次處理中略過讀不了的檔案：
+`KudioError` 以外的情況：
 
-```python
-for path in ["noisy.wav", "missing.wav"]:
-    try:
-        y, sr = kudio.file_load(path)
-    except kudio.AudioIOError:
-        print("skipped", path)
-```
+- 參數檢查丟 `ValueError` 或 `TypeError`：不認得的指標、給指標的立體聲對、取樣率 0。
+  輸入不存在是 `FileNotFoundError`。
+- 每個指標都會拒絕 NaN、inf 和 int64 樣本，丟出以指標名稱開頭的 `ValueError`；沒有東西
+  可算時，例如空的一對或靜音的參考訊號，給 nan 並發一次 `UserWarning`。
+- 緩衝區等超過 `timeout=` 時丟 `TimeoutError`。
+- [`play_audio`][kudio.core.stream.play_audio] 播不了時不丟例外，而是傳回一段說明；播成功
+  傳回 `None`。
 
-```text
-skipped missing.wav
-```
+## 警告與記錄 {#warnings-and-logging}
 
-訊息裡會寫出檔名和問題：這裡是檔案不存在，檔案壞掉時是 soundfile 給的原因，沒有 ffmpeg
-卻要讀 m4a 時則是缺少 ffmpeg。底下引發的例外串接在 `__cause__`，所以 traceback 兩個都會
-顯示。
+`UserWarning` 表示音訊或結果本身有問題：檔案裡有 NaN、片段被推過滿刻度、兩個訊號被裁到
+相同長度。不開 logging 也看得到。記錄裡是例行的事，寫在 `kudio` 底下的 logger，程式
+沒設定 `logging` 之前什麼都不會印出來；`logging.basicConfig(level=logging.WARNING)`
+之後，向 [`check_file`][kudio.core.io.check_file] 要一個已被佔用的檔名，會記下
+`WARNING:kudio.core.io:Existing file will be overwritten: noisy.wav`。
 
-`DependencyError` 會寫出要安裝的套件組，並把套件名稱和套件組存成屬性。在沒有 `[pesq]`
-的電腦上：
+`kudio` 指令的記錄等級是 `INFO`，加 `-v` 是 `DEBUG`。`TQDM_DISABLE=1` 會關掉批次工具的
+進度條（tqdm 4.66 以上）。
 
-```python
-try:
-    kudio.score(ref, denoised, sr, ["pesq"])
-except kudio.DependencyError as e:
-    print(e)
-    print(e.extra)
-```
+刻意不出聲的地方：整數格式會削掉超過 ±1.0 的部分，混音可能過熱時請寫
+`subtype="FLOAT"`；[`pesq`][kudio.core.evaluator.pesq] 在 16 kHz 預設給寬頻 MOS-LQO，
+`mode=` 和 `scale=` 可以改；所有用到亂數的地方都收 `seed=`，預設 `None`，每次執行重新抽。
 
-```text
-'pesq' is required for this feature. Install it with: pip install "kudio[pesq]"
-pesq
-```
-
-這裡 `score` 會引發例外，是因為 PESQ 是指名要求的。不給清單呼叫時，它會略過沒裝的指標，
-`eval_metrics` 則在那個位置回傳 `None`。
-
-有三類失敗不屬於 `KudioError`，或只部分屬於：
-
-- 許多參數檢查，以及少數對資料的檢查，會引發內建的 `ValueError` 或 `TypeError`：
-  `score` 裡未知的指標名稱、長度差太多無法評分的兩個訊號、交給指標的立體聲一對、
-  [`resample`][kudio.core.io.resample]、`file_load` 或 `save_wave` 裡為 0、NaN 或 `True`
-  的取樣率、給 `save_wave` 的三維陣列、`Synthesizer`
-  需要 SNR 清單卻給了字串、沒有任何 `.wav` 檔的乾淨資料夾。不存在的 `Synthesizer`
-  輸入會引發 `FileNotFoundError`。`except kudio.KudioError` 一個都攔不到。反過來，
-  `except ValueError` 兩邊都攔得到：`FeatureError` 也是 `ValueError`，所以 `vad` 或效果
-  拒絕的輸入，和指標拒絕的輸入，一起就攔下來了。
-- 等待超過 `timeout=` 的緩衝區會引發內建的 `TimeoutError`
-  （[錄音與即時檢視](guide/live-audio.md)）。
-- `play_audio` 無法播放時不會引發例外，連檔案不存在也一樣。它會回傳一段簡短的訊息說明
-  出了什麼問題，播放成功則回傳 `None`，所以請檢查回傳值。缺少 sounddevice 是例外：
-  那是 `DependencyError`，跟其他即時音訊功能一樣。
-
-## 記錄 {#logging}
-
-kudio 透過標準的 `logging` 模組記錄，logger 以模組命名（`kudio.core.loudness`、
-`kudio.core.synth` 等等），全部在 `kudio` 之下。這個 logger 只掛了一個 `NullHandler`，
-所以在你的程式設定 logging 之前，kudio 記錄的東西一律不會印出來，連 `WARNING` 等級也一樣。
-
-會寫進記錄的是例行事務：音訊本身沒有問題，但你可能想留個紀錄。向
-[`check_file`][kudio.core.io.check_file] 要一個已經被佔用的檔名，又不讓它改名，就是一例：
-
-```python
-import logging
-
-logging.basicConfig(level=logging.WARNING)
-path = kudio.check_file("noisy.wav", rename=False)
-```
-
-```text
-WARNING:kudio.core.io:Existing file will be overwritten: noisy.wav
-```
-
-沒有 `basicConfig` 那一行，同樣的呼叫什麼都不會印。以下情況也一樣：`Synthesizer.syn()`
-清空一個已經有檔案的輸出資料夾、`load_waves` 或 `copy_waves` 略過清單裡的某個項目、
-`eval_metrics` 略過某個指標後端，以及 `align` 發現一對訊號極性相反。任何建立資料集的
-程式，我都會把 logging 開在 `WARNING`。設好 `basicConfig` 之後，用這一行就能只加上
-kudio 的 `INFO` 訊息，不會連其他套件的也一起出來：
-
-```python
-logging.getLogger("kudio").setLevel(logging.INFO)
-```
-
-`kudio` 指令會自己設定 logging，預設是 `INFO`，加 `-v` 則是 `DEBUG`；
-這個旗標要放在哪裡，[命令列](cli.md)有說明。
-
-有兩類輸出完全不經過 logging：
-
-- 進度條。批次工具（`Synthesizer.syn`、`AudioEvaluate.eval`、`mfcc_from_files`、
-  `logspec_from_files`、`load_waves`、`copy_waves`、`map_waves`）會在 stderr 畫 tqdm
-  進度條。環境變數 `TQDM_DISABLE=1` 可以關掉它們。tqdm 從 4.66 版起才讀這個變數，
-  而 kudio 接受 4.60，所以如果變數沒有作用，請升級 tqdm。
-- Python 警告。`UserWarning` 用在音訊或結果本身有問題、即使沒開 logging 也該看到的情況：
-  檔案或陣列裡有 NaN 或 inf 樣本、`normalize_lufs` 把片段推過滿刻度、`score` 把兩個訊號
-  裁到相同長度、片段太短無法算 STOI、`Synthesizer` 寫出超過滿刻度的混音，或在
-  `overwrite=False` 時發現輸出資料夾已有檔案、
-  [`split_pairs`][kudio.core.dataset.split_pairs] 丟掉重複的列。`DeprecationWarning`
-  標示舊名稱，[從 v2 遷移](migrating.md)列出了它們。
-
-## 接下來 {#where-to-go-from-here}
-
-| 如果你手上有 | 請看 |
-|---|---|
-| 一資料夾要轉換、檢查或正規化的錄音 | [音訊檔案](guide/audio-files.md)、[檢查錄音](guide/inspection.md) |
-| 一個需要特徵的模型 | [STFT 與特徵](guide/features.md) |
-| 要找出語音，或要追蹤音高 | [語音活動與音高](guide/speech.md) |
-| 要剪接、濾波或擴增的片段 | [編輯與效果](guide/editing.md) |
-| 乾淨語音和雜訊，想做訓練資料 | [建立含雜訊資料集](guide/synthesis.md)、[房間與通道](guide/degradation.md) |
-| 要清理的含雜訊錄音，或要評估的降噪模型 | [降噪](guide/enhancement.md)、[品質評估](guide/metrics.md) |
-| 要為論文評分的測試集，附區間和參考文獻 | [整個測試集](guide/metrics.md#a-whole-test-set)、[`kudio score`](cli.md#score) |
-| 要評分的轉錄文字、語者驗證試驗、語者分段標記輸出或音高軌跡 | [語音辨識、語者驗證與音高追蹤](guide/task-metrics.md) |
-| 一支麥克風 | [錄音與即時檢視](guide/live-audio.md) |
-| 一個函式，想看所有參數 | [API 參考](reference/index.md) |
+[使用指南](guide/index.md)依工作挑頁面，[API 參考](reference/index.md)有每個參數。

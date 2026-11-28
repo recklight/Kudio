@@ -150,8 +150,8 @@ def test_a_threshold_nothing_is_likely_at_has_no_weight():
                                             (22050, 65.0, 400.0), (48000, 100.0, 600.0)])
 def test_the_last_bit_of_the_distribution_decides_nothing(monkeypatch, sr, fmin, fmax):
     """scipy before 1.12 has it stop one bit short of 1 until the very end. Troughs of no
-    chance then had one of 1e-16, and one such that shares a pitch with the deepest trough
-    of its frame counted instead of it."""
+    chance then have one of 1e-16, and one such that shares a pitch with the deepest
+    trough of its frame must not count instead of it."""
     import scipy.special
     y = 0.1 * np.random.default_rng(5).standard_normal(int(1.5 * sr))
     want = kudio.f0(y, sr, fmin=fmin, fmax=fmax)

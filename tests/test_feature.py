@@ -9,10 +9,10 @@ from kudio import (
     features2matrix,
     logspec_from_files,
     melspectrogram,
-    mfcc as w2mfcc,
+    mfcc,
     mfcc_from_files,
-    spectrogram_to_waveform as spec2wavform,
-    waveform_to_spectrogram as w2s,
+    spectrogram_to_waveform,
+    waveform_to_spectrogram,
     wave_separate,
     wave_slicing,
 )
@@ -26,51 +26,44 @@ def test_wave_separate_roundtrip():
     np.testing.assert_array_equal(chans[1], [1, 3, 5, 7, 9, 11])
 
 
-def test_w2s_shapes(sine):
-    spec = w2s(sine)
+def test_spectrogram_shapes(sine):
+    spec = waveform_to_spectrogram(sine)
     assert spec.ndim == 2
     assert spec.shape[1] == 257  # n_fft/2 + 1
 
-    seq = w2s(sine, sequence=True)
+    seq = waveform_to_spectrogram(sine, sequence=True)
     assert seq.shape == (1, *spec.shape)
 
-    ctx = w2s(sine, forward_backward=2)
+    ctx = waveform_to_spectrogram(sine, forward_backward=2)
     assert ctx.shape == (spec.shape[0], 5 * 257)
 
-    ctx_seq = w2s(sine, sequence=True, forward_backward=2)
+    ctx_seq = waveform_to_spectrogram(sine, sequence=True, forward_backward=2)
     assert ctx_seq.shape == (1, spec.shape[0], 5 * 257)
 
 
-def test_deprecated_alias_still_works(sine):
-    import kudio
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        np.testing.assert_array_equal(kudio.wavform2spec(sine), w2s(sine))
-
-
-def test_w2s_norm(sine):
-    spec = w2s(sine, norm=True)
+def test_spectrogram_norm(sine):
+    spec = waveform_to_spectrogram(sine, norm=True)
     np.testing.assert_allclose(spec.mean(axis=0), 0, atol=1e-6)
 
 
-def test_spec2wavform_roundtrip(sine):
-    spec = w2s(sine)  # un-normalized log power spectrogram
-    y_rec = spec2wavform(sine, spec)
+def test_spectrogram_to_waveform_roundtrip(sine):
+    spec = waveform_to_spectrogram(sine)  # un-normalized log power spectrogram
+    y_rec = spectrogram_to_waveform(sine, spec)
     assert len(y_rec) == len(sine)
     # reconstruction with original phase should correlate strongly
     assert np.corrcoef(y_rec, sine)[0, 1] > 0.99
 
 
-def test_w2mfcc_shape(sine):
-    mfcc = w2mfcc(sine, 16000, n_mfcc=40)
-    assert mfcc.ndim == 3
-    assert mfcc.shape[0] == 1 and mfcc.shape[2] == 40
+def test_mfcc_shape(sine):
+    coeffs = mfcc(sine, 16000, n_mfcc=40)
+    assert coeffs.ndim == 3
+    assert coeffs.shape[0] == 1 and coeffs.shape[2] == 40
 
 
 def test_mfcc_left_to_its_defaults_is_2048_512_and_128_bands(sine):
     np.testing.assert_array_equal(
-        w2mfcc(sine, 16000, n_mfcc=20),
-        w2mfcc(sine, 16000, n_mfcc=20, n_fft=2048, hop_length=512, n_mels=128, fmax=8000))
+        mfcc(sine, 16000, n_mfcc=20),
+        mfcc(sine, 16000, n_mfcc=20, n_fft=2048, hop_length=512, n_mels=128, fmax=8000))
 
 
 def test_mfcc_takes_the_analysis_of_the_mel_spectrogram():
@@ -78,12 +71,12 @@ def test_mfcc_takes_the_analysis_of_the_mel_spectrogram():
     8192 points fill them. The hop sets the number of frames."""
     y = np.random.default_rng(0).standard_normal(192000).astype(np.float32)
     with pytest.warns(UserWarning, match="3 of 128 mel bands hold no FFT bin"):
-        w2mfcc(y, 192000)
+        mfcc(y, 192000)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        wide = w2mfcc(y, 192000, n_fft=8192, hop_length=1920)
+        wide = mfcc(y, 192000, n_fft=8192, hop_length=1920)
     assert wide.shape == (1, 1 + 192000 // 1920, 40)
-    assert w2mfcc(y, 192000, n_mels=64, fmax=24000).shape == (1, 1 + 192000 // 512, 40)
+    assert mfcc(y, 192000, n_mels=64, fmax=24000).shape == (1, 1 + 192000 // 512, 40)
 
 
 def test_mfcc_from_files(wav_dir):
@@ -193,8 +186,8 @@ def test_stack_context_zero_is_a_passthrough():
     assert np.allclose(stack_context(frames, 0), frames)
 
 
-def test_forward_backward_still_zero_pads_after_the_refactor(sine):
-    """waveform_to_spectrogram delegates to stack_context; behaviour is unchanged."""
+def test_forward_backward_zero_pads_as_stack_context_does(sine):
+    """waveform_to_spectrogram stacks its context as stack_context(pad='zero') does."""
     from kudio import stack_context, waveform_to_spectrogram
 
     plain = waveform_to_spectrogram(sine, n_fft=256, hop_length=128)
@@ -283,7 +276,7 @@ def test_unfitted_standardizer_refuses_to_transform():
 
 
 def test_win_length_follows_n_fft(sine):
-    """A non-default n_fft used to crash: win_length was pinned at 512."""
+    """With win_length pinned at 512, a non-default n_fft would crash."""
     from kudio import waveform_to_spectrogram
 
     spec = waveform_to_spectrogram(sine, n_fft=256, hop_length=128)
@@ -309,16 +302,17 @@ def test_stft_object_and_function_agree_on_window(sine):
 def test_float32_audio_gives_a_float32_spectrogram(sine):
     """NumPy 2 promoted the spectrum to complex128 through the epsilon, a
     numpy float64 scalar, doubling every spectrogram computed from float32."""
-    spec = w2s(sine)
+    spec = waveform_to_spectrogram(sine)
     assert spec.dtype == np.float32
-    assert spec2wavform(sine, spec).dtype == np.float32
-    assert w2s(sine.astype(np.float64)).dtype == np.float64
+    assert spectrogram_to_waveform(sine, spec).dtype == np.float32
+    assert waveform_to_spectrogram(sine.astype(np.float64)).dtype == np.float64
 
 
 def test_the_silence_floor_did_not_move():
     """The value a digitally silent bin gets is part of what trained models
     have seen; the dtype fix must not change it."""
-    assert w2s(np.zeros(4096, np.float32)).min() == pytest.approx(-31.307, abs=1e-3)
+    floor = waveform_to_spectrogram(np.zeros(4096, np.float32)).min()
+    assert floor == pytest.approx(-31.307, abs=1e-3)
 
 
 def test_save_spectrogram_as_wave_clips_rather_than_wrapping(tmp_path, sine):
@@ -326,8 +320,8 @@ def test_save_spectrogram_as_wave_clips_rather_than_wrapping(tmp_path, sine):
     noisy = tmp_path / "noisy.wav"
     kudio.save_wave(noisy, sine, 16000)
     y, _ = kudio.file_load(noisy)
-    louder = w2s(y) + 2.0                 # +20 dB: peaks near 5x full scale
-    exact = spec2wavform(y, louder)
+    louder = waveform_to_spectrogram(y) + 2.0                 # +20 dB: peaks near 5x full scale
+    exact = spectrogram_to_waveform(y, louder)
     assert np.abs(exact).max() > 2.0
     out = tmp_path / "out.wav"
     kudio.save_spectrogram_as_wave(out, noisy, louder)
@@ -407,7 +401,7 @@ def test_a_stereo_waveform_is_not_read_as_a_spectrogram():
 
 
 def test_melspectrogram_resamples_a_file_when_asked(tmp_path):
-    """sr= used to be overwritten by the file's own rate."""
+    """sr= is the rate asked for, not the file's own."""
     import kudio
     sr = 44100
     path = tmp_path / "44k.wav"
@@ -481,7 +475,7 @@ def test_mfcc_refuses_more_coefficients_than_mel_bands(seconds):
 
 
 def test_mfcc_from_files_refuses_them_too(wav_file):
-    """It came back 128 wide, whatever was asked for."""
+    """Unchecked, it would come back 128 wide, whatever was asked for."""
     with pytest.raises(kudio.FeatureError, match=r"^mfcc_from_files\(\): n_mfcc=200"):
         kudio.mfcc_from_files([wav_file], n_mfcc=200)
     assert kudio.mfcc_from_files([wav_file, wav_file], n_mfcc=13).shape == (2, 32, 13)
@@ -520,8 +514,8 @@ TRANSFORMS = {
 @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
 @pytest.mark.parametrize("name", TRANSFORMS)
 def test_samples_that_are_not_finite_are_refused_by_name(name, bad):
-    """One NaN was every bin of the frames around it, and denoise_wav2spec took
-    a clip with one for a silent clip: it has no peak."""
+    """One NaN would be every bin of the frames around it, and denoise_wav2spec
+    would take a clip with one for a silent clip: it has no peak."""
     call, who = TRANSFORMS[name]
     y = np.full(4000, 0.1, np.float32)
     y[100:103] = bad

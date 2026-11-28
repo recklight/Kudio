@@ -186,8 +186,8 @@ SET = {
 @pytest.mark.parametrize("name", SET)
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf, True, '3', None, [3.0], 3 + 0j])
 def test_a_setting_that_is_no_finite_number_is_refused(name, value):
-    """With NaN an int16 clip came back all zeros, with numpy's "invalid value
-    encountered in cast" to say so, and a float one all NaN."""
+    """Taken as a setting, NaN would turn an int16 clip into zeros, with numpy's
+    "invalid value encountered in cast" to say so, and a float one into NaN."""
     for y in (INT, _tone()):
         with pytest.raises(ValueError, match="finite number"):
             SET[name](y, value)
@@ -199,7 +199,7 @@ def test_a_setting_that_is_no_finite_number_is_refused(name, value):
                                          ('add_noise_snr', -1e5), ('reverb delay_ms', 0),
                                          ('reverb delay_ms', -5)])
 def test_a_setting_out_of_range_is_refused(name, value):
-    """A reverb with a delay of 0 or less was an echo a sample later."""
+    """A reverb with a delay of 0 or less would be an echo a sample later."""
     for kind in (float, np.float64):
         with warnings.catch_warnings():
             warnings.simplefilter("error")
@@ -213,7 +213,7 @@ def test_a_setting_out_of_range_is_refused(name, value):
                                   lambda y: kudio.add_noise_snr(_tone(), y, 5)])
 @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
 def test_one_sample_that_is_not_finite_is_not_spread_over_the_clip(call, bad):
-    """The peak of a clip with inf in it is inf, and normalised, the rest came back 0."""
+    """The peak of a clip with inf in it is inf, and normalised, the rest would come back 0."""
     y = _tone(seconds=0.5)
     y[100] = bad
     with pytest.raises(kudio.FeatureError, match="1 sample.s. that are not finite"):

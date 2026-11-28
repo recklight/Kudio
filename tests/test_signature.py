@@ -933,15 +933,15 @@ def test_parse_reads_fields_it_does_not_know():
 
 
 @pytest.mark.parametrize('text, match', [
-    ("sr:16000|kudio:4.0.0", r"a kudio signature starts with kudio:<version>"),
+    ("sr:16000|kudio:5.0.0", r"a kudio signature starts with kudio:<version>"),
     ("BLEU|nrefs:1|case:mixed", r"'BLEU' does not start with a field name"),
-    ("kudio:4.0.0|pesq:mode=wb|pesq:mode=nb", r"pesq appears twice"),
-    ("kudio:4.0.0|pesq:mode=wb,mode=nb", r"pesq: mode appears twice"),
-    ("kudio:4.0.0|pesq:mode=wb,scale", r"pesq: 'scale' is not setting=value"),
-    ("kudio:4.0.0|sr:16000;8000", r"sr: '16000;8000' is not a value"),
-    ("kudio:4.0.0||snr", r"'' does not start with a field name"),
+    ("kudio:5.0.0|pesq:mode=wb|pesq:mode=nb", r"pesq appears twice"),
+    ("kudio:5.0.0|pesq:mode=wb,mode=nb", r"pesq: mode appears twice"),
+    ("kudio:5.0.0|pesq:mode=wb,scale", r"pesq: 'scale' is not setting=value"),
+    ("kudio:5.0.0|sr:16000;8000", r"sr: '16000;8000' is not a value"),
+    ("kudio:5.0.0||snr", r"'' does not start with a field name"),
     ("kudio", r"a kudio signature starts with kudio:<version>"),
-    (b"kudio:4.0.0", r"a signature is text"),
+    (b"kudio:5.0.0", r"a signature is text"),
 ])
 def test_parse_refuses(text, match):
     with pytest.raises(ValueError, match=r"^parse_signature\(\): " + match):

@@ -171,7 +171,7 @@ def test_pesq_refuses_rates_it_is_not_defined_at():
 
 
 def test_missing_backends_are_reported_once(monkeypatch, caplog):
-    """Per-file scoring used to log the same install hint for every file."""
+    """Per-file scoring would otherwise log the same install hint for every file."""
     monkeypatch.setattr(evaluator, "_has_module", lambda name: False)
     monkeypatch.setattr(evaluator, "_REPORTED", set())
     with caplog.at_level("WARNING", logger="kudio.core.evaluator"):
@@ -258,7 +258,7 @@ def test_audio_evaluate_keeps_every_file_and_reads_any_format(tmp_path):
 
     df = ev.get_df()
     assert list(df['Enh_method']) == ['good', 'nothing', 'Baseline']
-    assert ev.get_df().shape == df.shape, "get_df no longer grows each call"
+    assert ev.get_df().shape == df.shape, "get_df grows with each call"
     assert df['STOI'].iloc[1] == pytest.approx(df['STOI'].iloc[2])
 
 
@@ -266,8 +266,8 @@ def test_audio_evaluate_keeps_every_file_and_reads_any_format(tmp_path):
 # -- what the metrics refuse, and files that cannot be scored ------------------
 
 def test_stereo_is_refused_by_every_metric_alike():
-    """snr, sdi and segmental_snr used to score both channels at once, and
-    si_sdr failed with numpy's shape error."""
+    """Left alone, snr, sdi and segmental_snr would score both channels at
+    once, and si_sdr would fail with numpy's shape error."""
     import numpy as np
     pair = np.zeros((1600, 2)) + 0.1
     for fn in (kudio.snr, kudio.si_sdr, kudio.segmental_snr, kudio.sdi):
@@ -275,12 +275,58 @@ def test_stereo_is_refused_by_every_metric_alike():
             fn(pair, pair)
 
 
-def test_stoi_on_a_clip_too_short_for_it_is_nan():
+@pytest.mark.parametrize("name", ["stoi", "estoi"])
+def test_stoi_on_a_clip_too_short_for_it_is_nan(name):
     """STOI's 1e-5 placeholder is not a score to average in."""
     import numpy as np
     y = np.sin(2 * np.pi * 300 * np.arange(4000) / 16000)       # 0.25 s
     with pytest.warns(UserWarning, match="0.4 s"):
-        assert np.isnan(kudio.score(y, y, 16000, ["stoi"])["stoi"])
+        assert np.isnan(kudio.score(y, y, 16000, [name])[name])
+
+
+def _stoi_near_zero():
+    """A tone against itself in white noise at 0.05: no envelope is left to share."""
+    t = np.arange(16000) / 16000
+    x = 0.3 * np.sin(2 * np.pi * 220 * t)
+    return x, x + 0.05 * np.random.default_rng(0).standard_normal(16000)
+
+
+def _envelopes_swapped():
+    """500 Hz and 3 kHz swelling in turn at 4 Hz, and the other way round: every
+    band's envelope and every frame's spectrum run against the reference's."""
+    t = np.arange(16000) / 16000
+    swell = np.sin(2 * np.pi * 4 * t)
+    low, high = np.sin(2 * np.pi * 500 * t), np.sin(2 * np.pi * 3000 * t)
+    return (0.2 * (low * (1.2 + swell) + high * (1.2 - swell)),
+            0.2 * (low * (1.2 - swell) + high * (1.2 + swell)))
+
+
+@pytest.mark.parametrize("name, pair", [("stoi", _stoi_near_zero), ("stoi", _envelopes_swapped),
+                                        ("estoi", _envelopes_swapped)],
+                         ids=["stoi near 0", "stoi swapped", "estoi swapped"])
+def test_a_score_of_1e5_or_under_is_a_score(name, pair):
+    """STOI and ESTOI are means of correlations, and one at 1e-5 or under 0 is a
+    result: the worst items of a set, which a mean has to keep. Too short is said by
+    how many frames are left, not by the number."""
+    import warnings
+    from kudio.core import _stoi
+    ref, deg = pair()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        got = kudio.score(ref, deg, 16000, [name])[name]
+    assert got < 1e-5
+    assert got == float(_stoi.stoi(ref, deg, 16000, extended=(name == "estoi")))
+
+
+def test_the_placeholder_stays_as_pystoi_gives_it():
+    """kudio's STOI answers a clip too short for it as pystoi does, 1e-5 and a
+    RuntimeWarning, and says so to score() with None."""
+    from kudio.core import _stoi
+    y = np.sin(2 * np.pi * 300 * np.arange(4000) / 16000)
+    for extended in (False, True):
+        assert _stoi.stoi_or_none(y, y, 16000, extended=extended) is None
+        with pytest.warns(RuntimeWarning, match="fewer than 30 frames"):
+            assert _stoi.stoi(y, y, 16000, extended=extended) == _stoi.TOO_SHORT == 1e-5
 
 
 @pytest.mark.parametrize("name", ["stoi", "estoi"])
@@ -304,9 +350,9 @@ def test_stoi_of_digital_silence_is_nan_on_every_call(name, silent):
         assert caught[0].filename == __file__
 
 
-def _snr_family_as_391(ref, deg):
-    """snr, si_sdr, segmental_snr and sdi as 3.9.1 computed them, on a pair
-    of one length."""
+def _snr_family_written_out(ref, deg):
+    """snr, si_sdr, segmental_snr and sdi written out from their definitions,
+    on a pair of one length."""
     snr = 10 * np.log10((np.sum(ref ** 2) + 1e-12) / (np.sum((ref - deg) ** 2) + 1e-12))
     r, d = ref - ref.mean(), deg - deg.mean()
     proj = (np.dot(d, r) / (np.dot(r, r) + 1e-12)) * r
@@ -320,7 +366,7 @@ def _snr_family_as_391(ref, deg):
     return float(snr), float(si_sdr), float(np.mean(frames)), float(sdi)
 
 
-def test_the_snr_family_scores_an_ordinary_pair_as_3_9_1_did():
+def test_the_snr_family_scores_an_ordinary_pair_by_its_definitions():
     """The input rule changes only what happens to input with nothing to
     score; a pair that scores gets the same four numbers to the last bit."""
     rng = np.random.default_rng(11)
@@ -330,7 +376,7 @@ def test_the_snr_family_scores_an_ordinary_pair_as_3_9_1_did():
         deg = ref * rng.uniform(0.2, 2.0) + rng.standard_normal(n) * 10 ** rng.uniform(-5, 0)
         got = (kudio.snr(ref, deg), kudio.si_sdr(ref, deg),
                kudio.segmental_snr(ref, deg), kudio.sdi(ref, deg))
-        assert got == _snr_family_as_391(ref, deg), trial
+        assert got == _snr_family_written_out(ref, deg), trial
 
 
 def test_a_constant_output_scores_0_db_si_sdr_and_says_where_that_comes_from():
@@ -362,8 +408,8 @@ def test_segmental_snr_says_how_many_frames_of_ref_are_digital_silence():
 
 
 def test_one_sample_is_a_signal_rather_than_a_shape_error():
-    """squeeze() made a one-sample array 0-d, which the length check then
-    called a shape it could not score."""
+    """squeeze() makes a one-sample array 0-d, and the length check takes it as
+    one sample, not as a shape it cannot score."""
     got = kudio.score(np.r_[0.5], np.r_[0.25], 16000, ['snr', 'sdi'])
     assert got['snr'] == pytest.approx(10 * np.log10(4.0))
     assert got['sdi'] == pytest.approx(0.25)

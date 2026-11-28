@@ -1,26 +1,19 @@
 # 建立含雜訊資料集 {#building-a-noisy-dataset}
 
-降噪模型是從成對的資料學的：一段劣化的錄音，以及它背後的乾淨訊號。
-[`Synthesizer`][kudio.core.synth.Synthesizer] 用乾淨語音和雜訊做出這樣的配對，
-並照你的要求，把說話者到檔案之間的路徑加進去，要加多少就加多少，
-順序和訊號實際經過的一樣：
+[`Synthesizer`][kudio.core.synth.Synthesizer] 用乾淨語音和雜訊做出訓練用的配對，並依訊號遇到
+的順序，加上你要的那段從說話者到檔案的路徑：
 
 ```text
 talker -> room (rt60=) -> + noise (snr_ratio=) -> link (channel=) -> file
 ```
 
-房間作用在說話者身上，雜訊和房間留下的聲音一起到達麥克風，
-鏈結再把麥克風收到的一切傳出去，雜訊也包括在內。這條鏈上隨機的部分
-（雜訊從哪裡截取、房間、遺失的封包）每個輸出檔各有各的種子，
-[`manifest()`][kudio.core.synth.Synthesizer.manifest] 則記下哪份混音來自哪個
-乾淨檔案，之後就沒有人需要再從檔名去推敲。如果只是記憶體裡的一段片段，用
-[`add_noise_snr`][kudio.effects.augment.add_noise_snr] 就夠了
-（[編輯與效果](editing.md)）；`Synthesizer` 是給硬碟上的語料庫用的。
+隨機的部分（雜訊從哪裡裁、房間、掉的封包）每個輸出檔案各有自己的種子，
+[`manifest()`][kudio.core.synth.Synthesizer.manifest] 記下每個混音來自哪個乾淨檔案。記憶體裡
+只有一段片段時，[`add_noise_snr`][kudio.effects.augment.add_noise_snr] 就夠了。
 
-??? example "這一頁範例使用的語料庫"
+??? example "本頁範例使用的語料"
 
-    兩位說話者的三段簡短語句，加上一段嘶聲和一段市電嗡嗡聲。全部都是合成的，
-    所以這一頁的每個數字，都能用這個區塊重建出來。
+    兩個說話者的三段短語句、一段嘶聲和一段市電嗡聲。
 
     ```python
     import numpy as np
@@ -51,8 +44,6 @@ talker -> room (rt60=) -> + noise (snr_ratio=) -> link (channel=) -> file
 ## 第一次執行 {#a-first-run}
 
 ```python
-import kudio
-
 syx = kudio.Synthesizer("data/clean", "data/noise", out_path="data/mixed",
                         snr_ratio=(-5, 0, 5))
 rows = syx.syn(mode="inc", seed=17)
@@ -70,276 +61,119 @@ data/mixed/f01/sa1_hiss_5dB.wav <- sa1.wav hiss.wav 5
 data/mixed/f01/sa1_hum_n5.wav <- sa1.wav hum.wav -5
 ```
 
-[`syn()`][kudio.core.synth.Synthesizer.syn] 每寫一個檔案，就回傳一個
-`(output, clean, noise, snr)` tuple，不管你另外開了什麼選項，都維持四個元素：
-回傳的形狀如果會隨某個關鍵字參數改變，每個把它拆開來用的呼叫端都會壞掉，
-所以房間、鏈結和目標改放在 [manifest](#the-manifest) 裡。檔名的格式是
-`{clean}_{noise}_{snr}.wav`：+5 寫成 `5dB`，−5 寫成 `n5`，不加 `dB`。
-小數用 `p` 表示（`2p5dB`、`n2p5`），因為檔名裡的小數點會被當成副檔名的開頭；
-有房間時再加上 `_rt300ms`。
+[`syn()`][kudio.core.synth.Synthesizer.syn] 每個檔案傳回一個 `(output, clean, noise, snr)`；
+房間、鏈路和目標訊號記在 [manifest](#the-manifest)。檔名是 `{clean}_{noise}_{snr}.wav`：
++5 寫成 `5dB`，−5 寫成 `n5`，2.5 寫成 `2p5dB`，有房間時再加上 `_rt300ms`。
 
 !!! warning "`out_path` 會先被清空"
-    在預設的 `overwrite=True` 下，`syn()` 寫檔之前會刪掉 `out_path` 裡的所有東西。
-    如果那個資料夾裡有某個輸入檔、工作目錄或家目錄，或它本身是連結或檔案系統的根目錄，
-    它會以 [`SynthesisError`][kudio.exceptions.SynthesisError] 拒絕，這樣
-    `out_path=` 多往上指了一層時就攔得下來；裡面有刪不掉的東西時也會拒絕，例如
-    Windows 上別的程式開著的檔案，或沒有寫入權限的子資料夾。除此之外，裡面的東西都會
-    消失。`overwrite=False` 則不動非空的資料夾，只發出警告並回傳 `None`，
-    所以後面還要繼續跑的腳本，請檢查回傳值。
+    預設 `overwrite=True` 時，`syn()` 寫檔前會刪掉 `out_path` 裡的所有東西。資料夾裡有輸入檔、
+    是工作目錄或家目錄，或是連結或檔案系統根目錄時，它改丟
+    [`SynthesisError`][kudio.exceptions.SynthesisError]。刪除之前，它會先在不碰樣本的情況下
+    把整個執行試過一遍。`overwrite=False` 時不動非空的資料夾，發出警告並傳回 `None`。
 
-    刪除之前會先把這次執行試過一遍，不讀樣本試得到的都試：
-
-    - 會讀到的每個輸入檔的檔頭和長度；
-    - 每個房間在它那個檔案的取樣率下、`target_sr=`、SNR、種子，有檔案要重新取樣時
-      還有 soxr；
-    - 鏈結在每個取樣率下能不能用；如果它成串遺失一半以上的封包，還有每個輸出的封包，
-      用該輸出自己的長度和種子；
-    - 在 `out_path` 旁邊的資料夾裡，每個取樣率各寫一個樣本，並以最長的檔名寫一次，
-      寫完就刪掉那個資料夾。
-
-    行不通的會引發例外，資料夾裡的語料庫還在，`seed`、`rooms` 和 `manifest()`
-    描述的仍是它。
-
-    有些問題要讀到樣本或寫檔時才看得出來，那時資料夾已經清空了：乾淨檔案是數位靜音、
-    雜訊截到的那段沒有變化、NaN 或 inf、檔頭之後的內容壞掉、磁碟滿了或記憶體不夠、
-    輸入檔在執行途中被改動或移走、按了 Ctrl-C。被你的 filter 變成錯誤的警告也是，除非
-    它說的是檔頭，例如[截斷的 WAV](audio-files.md#a-file-that-was-cut-short)。沒有其他
-    副本的語料庫，請寫到新的資料夾，舊的自己刪。
-
-## 用哪種模式：`reg` 還是 `inc` {#which-mode-reg-or-inc}
-
-| `mode=` | 寫出的檔案 | 什麼時候用 |
+| `mode=` | 寫出的檔案 | 用途 |
 |---|---|---|
-| `"regular"` / `"reg"`（預設） | 每個乾淨檔案一個 | 訓練集和乾淨語料庫一樣大，各種條件分散在其中 |
-| `"increment"` / `"inc"` | 乾淨 × 雜訊 × SNR | 每段語句都要在每種條件下出現，例如之後要依 SNR 拆開來看的測試集 |
+| `"regular"` / `"reg"`（預設） | 每個乾淨檔案一個，條件輪流分配 | 和乾淨語料一樣大的訓練集 |
+| `"increment"` / `"inc"` | 乾淨 × 雜訊 × SNR | 依條件拆開分析的測試集 |
 
-給了 `rt60=` 時，兩種模式的檔案數都會再乘上房間數。`reg` 輪流分配雜訊和 SNR，
-所以不管兩者各有幾個，只要連續取「雜訊數 × SNR 數」那麼多個檔案，
-每種組合都剛好出現一次。語料庫比這個數目小時，就會有組合沒出現：
-這裡的三個乾淨檔案對上 2 種雜訊和 3 個 SNR，拿到的是 −5 和 5 dB 的嘶聲，
-以及 0 dB 的嗡嗡聲。
+兩種模式都會再乘上房間數。`rdn_choice_num=N` 隨機挑 N 個乾淨檔案來合成。
 
-`rdn_choice_num=N` 不會合成全部的乾淨檔案，而是隨機抽 N 個（不重複抽取）來合成；
-N 比語料庫還大時，會全部使用，並發出警告。
+## 資料夾、清單與 `root=` {#folders-lists-and-root}
 
-## 資料夾、清單和 `root=` {#folders-lists-and-root}
+`clean` 和 `noise` 收 [`check_input`][kudio.core.io.check_input] 收的東西：資料夾、`.wav`
+檔、`.txt` 清單，或由這些組成的清單，所以像 `sorted(Path("data/clean").rglob("sx*.wav"))`
+這樣的子集合不必先複製出來就能合成。輸出會在乾淨檔案的資料夾、清單共同的最深資料夾，或
+`root=` 底下照原本的結構放，所以兩個說話者的 `sx133` 不會撞名。雜訊只以檔名主幹辨識，所以來自
+不同資料夾的雜訊檔要先改成不同的名字。`syn(mkdir_parents=False)` 全部平鋪寫出。
 
-`clean` 和 `noise` 接受 [`check_input`][kudio.core.io.check_input] 接受的任何東西：
-資料夾、`.wav` 檔、列出路徑的 `.txt` 清單，或是由這些組成的清單
-（規則在[音訊檔案](audio-files.md)）。只讀 WAV 檔，`.wav` 或 `.WAV` 都可以。
-搜尋資料夾時，其他格式一律默默略過；清單裡不是現有 `.wav` 檔的項目，
-則會略過並發出 `UserWarning`。想只合成一部分、又不想先把它們複製出來，
-就用清單。
-
-輸出會照乾淨檔案的資料夾結構排列。資料夾以它自己為起點；
-清單或 `.txt` 檔，則以其中檔案共同所在、最深的那一層資料夾為起點，
-所以兩位說話者都唸了 `sx133`，還是會得到兩個檔案：
+## SNR 是相對於什麼量的 {#what-the-snr-is-measured-against}
 
 ```python
-from pathlib import Path
-import kudio
-
-# every talker's sx files, and nothing else
-subset = sorted(Path("data/clean").rglob("sx*.wav"))
-syx = kudio.Synthesizer(subset, "data/noise", out_path="data/mixed_sx",
-                        snr_ratio=0)
-for out, *_ in syx.syn(seed=17):
-    print(out.as_posix())
-```
-
-```text
-data/mixed_sx/f01/sx133_hiss_0dB.wav
-data/mixed_sx/m02/sx133_hum_0dB.wav
-```
-
-如果那個共同的資料夾比你要的更深，就傳 `root=`。同一位說話者的檔案，
-共同所在的就是那位說話者自己的資料夾，所以單獨拿來合成時，
-會直接平鋪在 `out_path` 裡；加上 `root="data/clean"` 之後，
-就會放到 `out_path/f01/`。`root=` 沒有包含所有乾淨檔案時，
-會以 `ValueError` 拒絕。
-
-只有乾淨檔案這一邊會照結構排列。雜訊檔不論是在輸出檔名，
-還是在 manifest 的 `noise` 欄位裡，都只用主檔名辨識，
-所以不同資料夾裡有同名檔案的雜訊集，要先改成不同的名字
-（以 DEMAND 為例，每個環境的資料夾裡都有 `ch01.wav` 到 `ch16.wav`，
-請複製出來，改名成 `kitchen_ch01.wav` 之類）。否則 `syn()` 會警告有輸出檔同名，
-最後寫入的雜訊會留下來，manifest 則每個都留一列，
-卻沒有任何欄位能說明檔案裡實際是哪個雜訊。
-
-[`syn(mkdir_parents=False)`][kudio.core.synth.Synthesizer.syn] 會把所有東西平鋪
-寫進 `out_path`。這時如果兩個同名的乾淨檔案要求同一個輸出檔名，
-先要的那個會拿到，另一個則從這次執行和 manifest 中剔除，
-並有一則警告指出它。
-
-## SNR 以什麼為基準 {#what-the-snr-is-measured-against}
-
-雜訊會先去掉平均值，再縮放到功率等於乾淨訊號的平均功率除以 $10^{\mathrm{SNR}/10}$。
-這個平均是對整個乾淨檔案取的，停頓也算在內。寫成 `FLOAT` 時，
-混音減掉乾淨檔案，會逐樣本得回縮放後的雜訊，所以可以用
-[`snr`][kudio.core.evaluator.snr] 直接拿硬碟上的檔案驗證：
-
-```python
-import kudio
-
 syx = kudio.Synthesizer("data/clean/f01/sa1.wav", "data/noise/hiss.wav",
                         out_path="data/check", snr_ratio=5, subtype="FLOAT")
 [(out, clean, noise, snr)] = syx.syn(seed=17)
-
 speech, sr = kudio.file_load(clean)
 mix, sr = kudio.file_load(out)
 talking = speech != 0                     # the pauses are digital zero
-print(f"whole file     {kudio.snr(speech, mix):.2f} dB")
-print(f"while talking  {kudio.snr(speech[talking], mix[talking]):.2f} dB")
+print(f"whole file {kudio.snr(speech, mix):.2f} dB, "
+      f"while talking {kudio.snr(speech[talking], mix[talking]):.2f} dB")
 ```
 
 ```text
-whole file     5.00 dB
-while talking  6.54 dB
+whole file 5.00 dB, while talking 6.54 dB
 ```
 
-這位說話者有 30% 的時間沒出聲，所以在說話的時候，SNR 比標示的高 1.54 dB。
-頭尾的靜音也有同樣的效果，所以如果標示要描述的是語音本身，
-請先裁切乾淨檔案（[語音活動與音高](speech.md)可以找出語音在哪裡）。
+雜訊去掉平均值後，依乾淨檔案整段（含停頓）的平均功率縮放，所以有 30% 時間沒說話的人，說話
+時會比標示的 SNR 高 1.5 dB；如果標示應該描述語音本身，請先修剪乾淨檔案。SNR 介於 -300 到
+3000 dB。較短的雜訊會循環，較長的從依種子決定的位置裁切，並重新取樣到乾淨檔案的取樣率。
+沒有任何變化的雜訊或乾淨檔案會丟出 `SynthesisError`。
 
-SNR 介於 -300 和 3000 dB 之間。一端的雜訊是語音的 $10^{15}$ 倍，另一端的增益是 0。
-
-雜訊檔比搭配的乾淨檔案短時，會重複接到一樣長；比較長時，
-則從一個由該檔種子決定的隨機位置截取。混音前，雜訊會先重新取樣到乾淨檔案的取樣率。
-完全沒有變化的雜訊檔，也就是數位靜音或固定準位，會引發
-[`SynthesisError`][kudio.exceptions.SynthesisError] 並指出是哪個檔案，
-因為沒有任何增益能把一個常數調到某個 SNR。數位靜音的乾淨檔案也會同樣被拒絕：
-雜訊是依語音來縮放的，沒有語音，混出來的就會是一個全是零、
-卻標著 SNR 的檔案。
-
-## 房間：`rt60=` 與殘響目標 {#rooms-rt60-and-reverberant-targets}
-
-`rt60=` 接受一個或多個以秒為單位的殘響時間，在加入雜訊之前，
-先讓乾淨訊號經過一個房間；房間用 [`rir`][kudio.core.room.rir] 建立，用
-[`apply_rir`][kudio.core.room.apply_rir] 套用。`drr_db=` 設定直達聲與殘響比，
-預設 0 dB，大約是一兩公尺遠（刻度在[房間與通道](degradation.md)）。
-每個檔案都有自己的房間，從它的種子抽出來，因為整個語料庫重複用同一個房間，
-模型就會把那個房間學起來。混音保留乾淨檔案的長度，所以兩者逐樣本對齊。
-
-在 manifest 裡，目標仍然是乾淨檔案，所以從混音學到乾淨檔案的模型，
-除了雜訊之外，還得把房間也去掉。如果不想要求這麼多，`write_targets=True`
-會另外把有殘響但乾淨的訊號寫到 `out_path/TARGETS/`，相對路徑和它的混音相同：
-也就是房間作用之後的語音，沒有雜訊，也沒有鏈結。沒有 `rt60=` 時，
-它會警告並且什麼都不寫，因為乾淨檔案本身就是那個訊號。
-`TARGETS/` 位在 `out_path` 裡面，所以任何把 `out_path` 當成資料夾來讀的東西，
-都會把這些目標當成混音；請改從 manifest 取得混音。
-
-和雜訊競爭的是房間作用後留下的聲音，所以 SNR 是對**有殘響的**語音量的：
+## 房間與鏈路 {#rooms-and-links}
 
 ```python
 from pathlib import Path
-import kudio
 
 syx = kudio.Synthesizer("data/clean", "data/noise", out_path="data/rooms",
                         snr_ratio=(0, 5), rt60=(0.3, 0.8), drr_db=3.0,
                         write_targets=True)
 syx.syn(mode="reg", seed=17)
 kudio.save_manifest("data/rooms.json", syx.manifest())
-
-for p in syx.manifest():
-    dry, wet, mix = (kudio.file_load(f)[0]
-                     for f in (p.clean, p.target, p.noisy))
+for p in syx.manifest()[:3]:
+    dry, wet, mix = (kudio.file_load(f)[0] for f in (p.clean, p.target, p.noisy))
     noise = mix - wet
-    name = Path(p.noisy).relative_to("data/rooms").as_posix()
-    print(f"{name:30} against wet {kudio.snr(wet, wet + noise):5.2f} dB,"
+    print(f"{Path(p.noisy).name:26} against wet {kudio.snr(wet, wet + noise):5.2f} dB,"
           f" against dry {kudio.snr(dry, dry + noise):5.2f} dB")
 ```
 
 ```text
-f01/sa1_hiss_0dB_rt300ms.wav   against wet  0.00 dB, against dry  1.92 dB
-f01/sa1_hiss_0dB_rt800ms.wav   against wet  0.00 dB, against dry  0.94 dB
-f01/sx133_hum_5dB_rt300ms.wav  against wet  5.00 dB, against dry  5.35 dB
-f01/sx133_hum_5dB_rt800ms.wav  against wet  5.00 dB, against dry  8.08 dB
-m02/sx133_hiss_5dB_rt300ms.wav against wet  5.00 dB, against dry  5.89 dB
-m02/sx133_hiss_5dB_rt800ms.wav against wet  5.00 dB, against dry  5.66 dB
+sa1_hiss_0dB_rt300ms.wav   against wet  0.00 dB, against dry  1.92 dB
+sa1_hiss_0dB_rt800ms.wav   against wet  0.00 dB, against dry  0.94 dB
+sx133_hum_5dB_rt300ms.wav  against wet  5.00 dB, against dry  5.35 dB
 ```
 
-如果改用沒有殘響的乾檔來量，同樣這六個標示會差 0.35 到 3.08 dB，
-而且差多少每個檔案都不一樣。
+`rt60=` 收一個或多個殘響時間，在加雜訊之前讓每個乾淨檔案經過它自己的房間
+（[`rir`][kudio.core.room.rir]、[`apply_rir`][kudio.core.room.apply_rir]），距離由 `drr_db=`
+（0 dB）決定。雜訊要和房間留下的聲音競爭，所以 SNR 是相對於有殘響的語音設定的。manifest 的
+目標是乾淨檔案；`write_targets=True` 會另外把有殘響的乾淨訊號寫到 `out_path/TARGETS/`，給不該
+負責消除房間效應的模型用。
 
-## 電話線路或編解碼器：`channel=` {#a-phone-line-or-codec-channel}
+`channel=` 讓每個完成的混音經過一條鏈路，可以是 [`CHANNEL_PRESETS`][kudio.effects.channel.CHANNEL_PRESETS]
+的預設或一個 dict（[房間與通道](degradation.md)），`TARGETS/` 不受影響。它是整次執行的一個
+設定，不是一個軸，manifest 的每一列都會標上它。
 
-`channel=` 讓每份完成的混音經過一條鏈結。鏈結可以用
-[`CHANNEL_PRESETS`][kudio.effects.channel.CHANNEL_PRESETS] 裡的預設組合名稱指定，
-也可以是以 [`CHANNEL_DEFAULTS`][kudio.effects.channel.CHANNEL_DEFAULTS] 的鍵
-組成的 dict（`{"preset": "voip", "loss": 0.1}`）。它不會動 `TARGETS/` 裡的檔案：
-要求模型重現一個編解碼器，就不是降噪了。
+## 種子與多行程 {#seeds-and-the-pool}
 
-鏈結不是要掃過的軸。`snr_ratio` 和 `rt60` 會逐一掃過，檔案數也跟著倍增；
-`channel` 則是整次執行只有一個設定，也不會出現在檔名裡，
-因為一份語料庫要嘛是透過電話線路錄的，要嘛不是。要比較兩種鏈結，
-就執行兩次，寫到兩個資料夾。manifest 會在每一列標上鏈結：
-`"telephone"`，或是上面那個 dict 對應的 `"mu_law+loss10%x4-hold"`。
-
-## 種子，以及行程池為什麼改變不了檔案 {#seeds-and-why-the-pool-cannot-change-a-file}
-
-`seed=` 是一個基底值，不是整次執行共用的某個產生器的種子。
-每個檔案的雜訊截取位置、房間和封包遺失，都由這個基底值加上它在
-`out_path` 底下的路徑決定（用路徑而不是檔名，因為這裡兩位說話者都有
-`sx133.wav`，不該共用同一個房間）。所以同樣的要求會逐位元組重建出同樣的檔案，
-寫入的順序、由哪個行程寫，都改變不了任何一個檔案。沒有 `seed=` 時，
-基底值從 numpy 的全域亂數產生器抽取（這個產生器從不會被重設種子），
-並記在 [`.seed`][kudio.core.synth.Synthesizer.seed] 裡，
-所以沒人給過種子的執行也能重建：
+`seed=` 是基底：每個檔案的裁切位置、房間和掉的封包，都由基底加上它在 `out_path` 底下的路徑
+決定，所以同樣的要求會逐位元組重建同樣的檔案，不論寫出的順序或由哪個行程寫。沒給種子時，基底
+從 numpy 的全域亂數產生器抽，並保存在 [`.seed`][kudio.core.synth.Synthesizer.seed]：
 
 ```python
-from pathlib import Path
-import numpy as np
-import kudio
-
-# seeded only so that the number printed below is the same every time
-np.random.seed(2026)
+np.random.seed(2026)                       # only so the number below repeats
 first = kudio.Synthesizer("data/clean", "data/noise", out_path="data/run1",
                           rt60=0.5, channel="voip")
-first.syn(mode="inc")         # no seed
-print("drew", first.seed)
-
+first.syn(mode="inc")                      # no seed
 again = kudio.Synthesizer("data/clean", "data/noise", out_path="data/run2",
                           rt60=0.5, channel="voip")
 again.syn(mode="inc", seed=first.seed)
-
-run1 = sorted(Path("data/run1").rglob("*.wav"))
-run2 = sorted(Path("data/run2").rglob("*.wav"))
-print(len(run1), "files, identical:",
+run1, run2 = (sorted(Path(d).rglob("*.wav")) for d in ("data/run1", "data/run2"))
+print("drew", first.seed, len(run1), "files, identical:",
       [f.read_bytes() for f in run1] == [f.read_bytes() for f in run2])
 ```
 
 ```text
-drew 942082305
-18 files, identical: True
+drew 942082305 18 files, identical: True
 ```
 
-`is_pool=True` 在一次執行超過 200 個檔案時，用 8 個工作行程寫檔，
-200 個以下則依序寫。在這份語料庫上以 `inc` 模式搭配 `snr_ratio=range(-10, 26)`，
-用行程池和依序執行得到的 216 個檔案逐位元組相同。在 Windows 和 macOS 上，
-Python 會把每個工作行程當成全新的直譯器啟動，工作行程一開始會重新匯入你的腳本，
-所以這個呼叫必須放在 `if __name__ == "__main__":` 底下。少了這道防護，
-每個工作行程一啟動就失敗，行程池不斷補上新的，整個執行就卡住了，這時
-`out_path` 還沒有清空。
+`is_pool=True` 在一次執行超過 200 個檔案時，用 8 個工作行程寫出，位元組和單一行程的結果
+相同。在 Windows 和 macOS 上，這個呼叫要放在 `if __name__ == "__main__":` 底下。
 
 ## 寫出檔案 {#writing-the-files}
 
-`subtype=` 決定檔案的寫法，預設是 `"PCM_16"`；WAV 檔裝不下的 subtype，
-在建立 Synthesizer 時就會被拒絕。混音是相加的結果，可能超過滿刻度。
-定點的 subtype 會把它削在滿刻度（[`save_wave`][kudio.core.io.save_wave]
-寫入之前就先削掉，所以不會溢位繞回），`PCM_16` 還會捨入到最接近的量化階。
-接著 [`syn()`][kudio.core.synth.Synthesizer.syn] 會發出警告，附上檔案數和最大的峰值，
-[`.clipped`][kudio.core.synth.Synthesizer.clipped] 則把每個這樣的檔案對應到它的峰值。
-`"FLOAT"` 會保留樣本原本的值：
-
 ```python
-import kudio
-
 y, sr = kudio.file_load("data/clean/f01/sa1.wav")
 kudio.save_wave("data/loud/sa1.wav", kudio.normalize(y, peak=0.9), sr)
-
 for subtype in ("PCM_16", "FLOAT"):
-    syx = kudio.Synthesizer("data/loud", "data/noise",
-                            out_path=f"data/loud_{subtype}",
+    syx = kudio.Synthesizer("data/loud", "data/noise", out_path=f"data/loud_{subtype}",
                             snr_ratio=(0, 10), subtype=subtype)
     syx.syn(mode="inc", seed=17)
     print(subtype, sorted(round(peak, 2) for peak in syx.clipped.values()))
@@ -350,151 +184,43 @@ PCM_16 [1.05, 1.26, 1.37, 2.07]
 FLOAT []
 ```
 
-`PCM_16` 那次執行還會警告「4 of 4 file(s) went past full scale and were clipped
-when written as PCM_16 (worst peak 2.07, +6.3 dBFS)」，
-並建議降低乾淨檔案的準位，或改用 `subtype='FLOAT'`。
-
-`syn()` 的 `target_sr=` 會重新取樣輸出；預設保留每個乾淨檔案自己的取樣率。
-立體聲的乾淨檔案在讀入時就會混成單聲道。
+`subtype=` 預設 `"PCM_16"`。超過滿刻度的混音在定點格式裡會被削峰，`syn()` 會發出警告，寫明
+個數和最大峰值；[`.clipped`][kudio.core.synth.Synthesizer.clipped] 列出每個這樣的檔案和它的
+峰值。`"FLOAT"` 保留原樣。`syn()` 的 `target_sr=` 會把輸出重新取樣；立體聲的乾淨檔案會混成
+單聲道。
 
 ## manifest {#the-manifest}
 
-每個檔案一個 [`Pair`][kudio.core.dataset.Pair]：混音、它背後的乾淨檔案，
-以及中間做了什麼。[`save_manifest`][kudio.core.dataset.save_manifest]
-把它們寫成單純的 JSON list，任何工具不用 kudio 也讀得了，
-[`load_manifest`][kudio.core.dataset.load_manifest] 則把它們讀回來。
-上面寫出的 `data/rooms.json` 其中一列：
-
-```json
-{
-  "noisy": "data/rooms/f01/sa1_hiss_0dB_rt300ms.wav",
-  "clean": "data/clean/f01/sa1.wav",
-  "noise": "hiss",
-  "snr_db": 0,
-  "rt60": 0.3,
-  "channel": null,
-  "target": "data/rooms/TARGETS/f01/sa1_hiss_0dB_rt300ms.wav"
-}
-```
-
-只有 `noisy` 和 `clean` 是必要的，不認得的鍵會被丟掉，
-所以其他工具寫的 JSON list，只要每一列都有這兩個欄位就能載入。
-自己建立的 `Pair` 可以放 `Path` 或 numpy 數字，寫出來就是那段文字和那個數字。
-JSON 寫不出來的值會引發 `ValueError` 並指出是第幾列，原本就在那個路徑的 manifest 不會被動到。
-
-!!! note "相對路徑維持相對"
-    路徑以正斜線寫入，Windows 和 Linux、macOS 一樣讀得懂，
-    所以在一個系統上做的 manifest，在其他系統上也能載入。
-    相對的 `out_path` 或輸入，產生的仍然是相對路徑，而且是相對於執行腳本時
-    所在的資料夾，不是相對於 JSON 檔。請在那個資料夾裡載入 manifest；
-    如果會從別的地方讀取，就傳入絕對路徑，否則
-    [`Pair.exists()`][kudio.core.dataset.Pair.exists] 會是 `False`。
-
-在 [`syn()`][kudio.core.synth.Synthesizer.syn] 加上 `is_silence=True`，
-還會把大約 `p_silence` 比例的輸出再寫一次純雜訊的版本，
-命名為 `..._n00.wav`：預設是 2%，捨入成整數個檔案，而且至少一個，
-所以第一次執行的 18 個輸出會附帶一個。這些檔案會出現在 `syn()` 的回傳值裡，
-`snr_db` 為 0，但不在 manifest 裡：它們沒有語音，
-所以當初為它們抽的那個乾淨檔案，並不是它們的參考訊號。
+[`save_manifest`][kudio.core.dataset.save_manifest] 把每個檔案寫成一個
+[`Pair`][kudio.core.dataset.Pair]，存成純 JSON：`noisy`、`clean`、`noise`、`snr_db`、`rt60`、
+`channel` 和 `target`；[`load_manifest`][kudio.core.dataset.load_manifest] 讀回來。只有 `noisy`
+和 `clean` 是必要的，不認得的鍵會丟掉並發出警告。路徑用正斜線寫，輸入是相對路徑時就是相對
+路徑，以執行腳本的資料夾為準。`is_silence=True` 會再把大約 `p_silence`（2%）的輸出寫成只有
+雜訊的 `..._n00.wav`，`syn()` 會傳回它們，manifest 則不收。
 
 ## 訓練、驗證與測試 {#train-validation-and-test}
 
-[`split_pairs`][kudio.core.dataset.split_pairs] 用
-`numpy.random.default_rng(seed)` 洗牌一次，再把各列切成
-`(train, validation, test)`。請傳 `seed=`：預設的 `None` 每次呼叫都會切出
-不同的結果。如果照比例切完會沒有東西可以訓練，就改成放棄驗證集和測試集。
-
 ```python
-import kudio
-
 pairs = kudio.load_manifest("data/mixed.json")
 train, val, test = kudio.split_pairs(pairs, 0.2, 0.2, seed=17)
-print(len(train), len(val), len(test))
 shared = {p.clean for p in train} & {p.clean for p in test}
-print(len(shared), "of 3 clean files in both train and test")
+print(len(train), len(val), len(test), len(shared), "clean files in train and test")
 ```
 
 ```text
-10 4 4
-2 of 3 clean files in both train and test
+10 4 4 2 clean files in train and test
 ```
 
-問題出在第二行。`split_pairs` 分的是列，不是說話者、語句或雜訊，
-一個乾淨檔案配上三個 SNR 就是三列，可能落在不同的切分裡。
-每一列測試資料都是模型沒看過的混音，但裡面的說話者和雜訊，模型通常都聽過：
-這裡兩種雜訊在訓練集和測試集裡都有，4 列測試資料中有 2 列，
-同樣的雜訊和 SNR 組合在訓練集裡也有。這樣的切分問的是模型有沒有學到
-訓練混音以外的東西，對它從沒聽過的說話者或雜訊則什麼也說明不了。
-要回答後者，請先切分乾淨檔案（或雜訊檔），再把每個切分各自合成到自己的資料夾；
-用清單當輸入再加上 `root=`，就能寫成一個迴圈：
+[`split_pairs`][kudio.core.dataset.split_pairs] 以 `seed=` 洗牌（預設 `None`，每次切法都不同），
+分的是列，不是說話者或雜訊，所以同一個乾淨檔案的三個 SNR 可能分別落在訓練集和測試集。要測
+模型沒聽過的說話者或雜訊，請先切分乾淨檔案或雜訊檔，再用 `root=` 把每一份合成到各自的資料夾。
+完全重複的列會丟掉並發出警告；指向同一個混音、內容卻不一致的兩列會丟出 `ValueError`。
 
-```python
-from pathlib import Path
-import kudio
-
-talkers = {"train": ["f01"], "test": ["m02"]}
-for split, who in talkers.items():
-    files = [f for t in who
-             for f in sorted(Path("data/clean", t).glob("*.wav"))]
-    syx = kudio.Synthesizer(files, "data/noise", out_path=f"data/{split}",
-                            root="data/clean", snr_ratio=(-5, 0, 5))
-    syx.syn(mode="inc", seed=17)
-    kudio.save_manifest(f"data/{split}.json", syx.manifest())
-    print(split, len(syx.manifest()), "rows")
-```
-
-```text
-train 12 rows
-test 6 rows
-```
-
-同一列出現兩次（`snr_ratio=` 裡有重複的值就會這樣），會先被拿去訓練，
-再被當成沒參與訓練的資料來評分，所以 `split_pairs` 會丟掉完全相同的重複列，
-並發出警告。兩列指向同一份混音、其他地方卻有出入時，會引發 `ValueError`。
-
-## 在背景上再疊雜訊：`syn_extra_mode` {#noise-over-a-background-syn_extra_mode}
+## 背景上的雜訊，以及命令列 {#noise-over-a-background-and-the-command-line}
 
 [`syn_extra_mode(background_path, background_snr)`][kudio.core.synth.Synthesizer.syn_extra_mode]
-分兩階段混音。先把每種雜訊以每個 `background_snr` 和每個背景檔混合；
-再把每個乾淨檔案以每個 SNR，分別和這些混合結果、每個單純的雜訊，
-以及每個背景混合。2 個乾淨檔案、2 種雜訊、1 個背景搭配一個 `background_snr`，
-再加上 2 個 SNR，就是 2 × (2 + 2 + 1) × 2 = 20 列。其中 2%、至少一個檔案，
-會再寫一次純雜訊的版本，所以這裡 `syn_extra_mode` 回傳 21 列，
-manifest 裡則是 20 列。每個乾淨檔案也會原封不動地複製一份，
-命名為 `{stem}_n0.wav`，只有語音，正好和只有雜訊的 `_n00` 相對；
-這些複本既不在回傳值裡，也不在 manifest 裡。
-
-輸出資料夾在第二階段之前清空，防護和 [`syn()`][kudio.core.synth.Synthesizer.syn]
-一樣，也會先把第二階段照樣試過一遍；雜訊和背景的問題在第一階段就看得出來，那一階段
-寫在別的地方。其他地方不同：
-
-- 不套用房間和鏈結。
-- 正負兩種 SNR 的檔名都帶 `dB`，也就是 `n5dB` 和 `5dB`，而 `syn()` 寫的是 `n5`。
-  硬碟上現有的語料庫兩種寫法都有，所以兩邊都不改；
-  請用 manifest 的 `snr_db` 比對，不要用檔名。
-- 輸出是平鋪的：同名的乾淨檔案，例如兩位說話者的 `sx133.wav`，
-  會寫到相同的輸出檔名。它會發出警告，後一個會覆寫前一個，
-  所以給這個模式的乾淨檔案，名字請不要重複。
-- 它不接受 `target_sr=`：每個輸出都維持乾淨檔案自己的取樣率，
-  不管同一個 Synthesizer 之前的 `syn()` 要求過什麼。雜訊則和 `syn()` 一樣，
-  以它要混入的那個檔案的取樣率讀進來。
-- 輸出超過 200 個時，除非傳 `is_pool=False`，否則會用 8 個行程的行程池寫檔，
-  這時在 Windows 和 macOS 上就需要 `if __name__ == "__main__":` 這道防護。
-
-## 從命令列 {#from-the-command-line}
-
-`kudio synth` 不必寫腳本就能建立同樣的語料庫。它的 `--mode` 預設是 `inc`，
-而 [`syn()`][kudio.core.synth.Synthesizer.syn] 預設是 `regular`。
-它會先清空 `--out`，防護和 `syn()` 一樣，並印出用到的種子，
-所以沒有給 `--seed` 的執行，也能用它印出來的數字重建：
-
-```bash
-kudio synth --clean data/clean --noise data/noise --out data/cli \
-    --snr -5 0 5 --seed 17 --rt60 0.3 0.8 --targets --manifest data/cli.json
-```
-
-這會寫出 36 份混音、`data/cli/TARGETS/` 底下的 36 個目標，以及 manifest。
-所有選項都列在[命令列](../cli.md)那一頁。
-
-接下來交給[降噪](enhancement.md)和[品質評估](metrics.md)：混音是輸入，
-manifest 裡的乾淨檔案則是評分時對照的參考訊號。
+分兩階段混音：先把每個雜訊和每個背景以每個 `background_snr` 混合，再把每個乾淨檔案和這些混合、
+每個雜訊、每個背景以每個 SNR 混合。它不套用房間和鏈路，平鋪寫出，−5 寫成 `n5dB`，也不收
+`target_sr=`。`kudio synth --clean data/clean --noise data/noise --out data/cli --snr -5 0 5
+--seed 17` 在 shell 裡執行一次合成，預設 `--mode inc`，並印出用的種子。[降噪](enhancement.md)和
+[品質評估](metrics.md)接著拿混音和它們的乾淨參考訊號往下做。

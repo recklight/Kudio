@@ -134,7 +134,6 @@ plugins:
             Configuration and errors: 設定與錯誤
             Utilities: 工具
             Changelog: 更新紀錄
-            Migrating from v2, 3.x and 4.x: 從 v2、3.x 與 4.x 遷移
   # each API page exists once per language, so a name has two anchors; a
   # link goes to the one in its own language
   - autorefs:
@@ -217,7 +216,6 @@ nav:
       - Utilities: reference/utilities.md
   - Changelog:
       - changelog.md
-      - Migrating from v2, 3.x and 4.x: migrating.md
 
 # The toolchain this file needs is declared in the [docs] extra, so a clean
 # checkout can install it instead of copying package names out of a comment:

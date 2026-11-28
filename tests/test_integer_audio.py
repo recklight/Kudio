@@ -60,7 +60,7 @@ def test_a_room_measured_from_an_int16_response():
     _same([a.t30, a.edt, a.c50, a.drr], [b.t30, b.edt, b.c50, b.drr])
 
 
-def test_the_report_no_longer_calls_int16_past_full_scale(pair):
+def test_the_report_does_not_call_int16_past_full_scale(pair):
     as_int, _ = pair
     report = kudio.audio_report(as_int, SR)
     assert -13 < report.peak_dbfs < -11
@@ -148,7 +148,8 @@ def test_trimming_cuts_int16_where_it_cuts_float(pair):
 
 def test_uint8_silence_is_its_midpoint():
     """8-bit WAV is unsigned, with silence at 128: read as numbers, the
-    silence around a tone was not quiet and trim_silence kept all of it."""
+    silence around a tone would not be quiet and trim_silence would keep all
+    of it."""
     t = np.arange(SR) / SR
     y = np.concatenate([np.zeros(SR // 2), 0.5 * np.sin(2 * np.pi * 300 * t), np.zeros(SR // 2)])
     as_u8 = np.clip(np.round(y * 128 + 128), 0, 255).astype(np.uint8)

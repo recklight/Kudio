@@ -222,7 +222,8 @@ def with_stoi(package, monkeypatch):
         lengths.append((len(ref), len(deg)))
         return 0.5
 
-    monkeypatch.setattr(_stoi, 'stoi', stoi)
+    # what score() calls; stoi() is pystoi's interface around it
+    monkeypatch.setattr(_stoi, 'stoi_or_none', stoi)
     monkeypatch.setattr(evaluator, '_has_module', lambda name: name == 'pesq')
     return lengths
 

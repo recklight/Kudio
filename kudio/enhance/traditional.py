@@ -48,8 +48,8 @@ def wavelet_low_pass_filter(y: np.ndarray, thres: float = 0.8,
     finite(y, 'wavelet_low_pass_filter', FeatureError)
     thres = within(thres, 'thres', 'wavelet_low_pass_filter', FeatureError, low=0)
     bank = _dwt.filter_bank(wavelet, 'wavelet_low_pass_filter')
-    # the peak, not the signed maximum: a clip below zero throughout got a
-    # negative threshold and came back unfiltered
+    # the peak, not the signed maximum: a clip below zero throughout would get
+    # a negative threshold and come back unfiltered
     level = thres * float(np.nanmax(np.abs(y))) if y.size else 0.0
     if not level > 0:
         # a threshold of zero divides zero by zero below: NaN everywhere
@@ -157,8 +157,8 @@ def trad_enhance(y: np.ndarray, sr: int) -> np.ndarray:
         x_old = xi[len1: len_]
         k = k + len2
 
-    # the last frame's second half has no later frame to overlap with; it
-    # used to be dropped, leaving the final 256 samples at zero
+    # the last frame's second half has no later frame to overlap with;
+    # dropped, it would leave the final 256 samples at zero
     if Nframes > 0:
         xfinal[k - 1: k - 1 + len1] = x_old
     out = np.zeros(len(y), dtype=np.float32)

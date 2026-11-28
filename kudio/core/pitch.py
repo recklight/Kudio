@@ -250,8 +250,8 @@ def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
     sr = sample_rate(sr, 'f0', FeatureError)
     y = np.asarray(one_channel(y, 'f0', FeatureError))
     if y.ndim != 1:
-        # reshape(-1) used to read a stereo clip as one interleaved signal at
-        # half its pitch: fan.wav came back at 65 Hz instead of 126
+        # reshape(-1) would read a stereo clip as one interleaved signal at
+        # half its pitch: fan.wav would come back at 65 Hz instead of 126
         raise FeatureError(f"f0 takes mono audio, got shape {y.shape}; pass "
                            f"one channel or mix down first")
     with np.errstate(over='ignore'):        # a float64 past float32 is inf in it
@@ -307,7 +307,7 @@ def f0(y: np.ndarray, sr: int, *, fmin: float = SPEECH_FMIN,
         values, voiced, chance = _yin.track(y, sr, fmin, fmax, frame_length, hop, bool(center))
         least = 2 * sr / len(y)
         if least > fmin:
-            # ten samples of anything came back as fmin, voiced
+            # ten samples of anything would come back as fmin, voiced
             untold = voiced & (values < least)
             values[untold], voiced[untold] = np.nan, False
             warn(f"f0(): the clip has {len(y)} sample(s) and two periods of fmin={fmin:g} Hz "
