@@ -39,16 +39,20 @@ def _resonator(x: np.ndarray, f: float, bandwidth: float) -> np.ndarray:
     return lfilter([1 - r], [1, -2 * r * math.cos(2 * math.pi * f / SR), r * r], x)
 
 
-def _speech(seconds: float = 36.0, seed: int = 1, floor: float = 1e-3) -> np.ndarray:
+def _speech(seconds: float = 36.0, seed: int = 1, floor: float = 1e-3,
+            syllables: bool = False):
     """Syllables at 16 kHz: a harmonic source gliding in pitch, through three
     formants moving from one vowel to another, two in five of them led by a
     burst of hiss from 3 to 7 kHz, each syllable at its own level within
     8 dB. Pauses of 50 to 250 ms lie between them on white noise of RMS
-    *floor*, 54 dB under the peak by default. With ``floor=0`` the pauses are
-    digital silence and the syllables the same samples."""
+    *floor*, 54 dB under the peak by default. With *syllables* it returns as
+    well where the syllables were written, a boolean array: their windows end
+    in samples that are 0 or a rounding of it, depending on the numpy build,
+    so the samples cannot say where a pause is."""
     rng = np.random.default_rng(seed)
     n = int(seconds * SR)
     y = np.zeros(n)
+    spoken = np.zeros(n, dtype=bool)
     hiss = butter(4, [3000, 7000], 'bandpass', fs=SR, output='sos')
     start = int(0.1 * SR)
     while start < n - int(0.45 * SR):
@@ -71,11 +75,12 @@ def _speech(seconds: float = 36.0, seed: int = 1, floor: float = 1e-3) -> np.nda
         syllable *= 10 ** (rng.uniform(-8.0, 0.0) / 20)
         stop = min(start + len(syllable), n)
         y[start:stop] = syllable[:stop - start]
+        spoken[start:stop] = True
         start = stop + int(rng.uniform(0.05, 0.25) * SR)
     y *= 0.5 / np.max(np.abs(y))
     if floor:
         y = y + floor * rng.standard_normal(n)
-    return y
+    return (y, spoken) if syllables else y
 
 
 def _white(n: int, seed: int) -> np.ndarray:
@@ -225,18 +230,35 @@ def test_a_delay_costs_a_lot(talk):
     assert siib_gauss(talk, late, SR) == pytest.approx(221.19, abs=0.01)
 
 
-def test_noise_in_the_pauses_of_the_reference_costs_siib_nothing(talk):
+@pytest.mark.parametrize("window", ["as numpy gives it", "ending a rounding off 0"])
+def test_noise_in_the_pauses_of_the_reference_costs_siib_nothing(talk, window, monkeypatch):
     """The frames are chosen on the reference alone, and what the output holds
     in the others is never looked at. White noise 7.5 dB louder than the
-    speech, added to a copy in the pauses alone, leaves SIIB at the ceiling
-    and takes SIIB^Gauss to 811, through the frames at the edges of the
-    syllables."""
-    pauses = _speech(floor=0) == 0
+    speech, added to a copy in the pauses alone, the 213,900 samples outside
+    every syllable, leaves SIIB at the ceiling and takes SIIB^Gauss to 845,
+    through the frames at the edges of the syllables. The last sample of a
+    Hann window is 0.5 - 0.5 cos(2 pi), 0 or 1.1e-16 by the numpy build and
+    the CPU, and neither the pauses nor the score may follow it."""
+    if window == "as numpy gives it":
+        pauses = ~_speech(syllables=True)[1]
+    else:
+        hanning = np.hanning
+
+        def nudged(m):
+            w = hanning(m)
+            w[-1] = 0.5 - 0.5 * np.nextafter(1.0, 0.0)
+            return w
+
+        with monkeypatch.context() as patch:
+            patch.setattr(np, "hanning", nudged)
+            talk, spoken = _speech(syllables=True)
+        pauses = ~spoken
     assert 20 * math.log10(0.1 / np.sqrt(np.mean(talk ** 2))) == pytest.approx(7.55,
                                                                                 abs=0.01)
     deg = talk + 0.1 * _white(len(talk), 9) * pauses
     assert siib(talk, deg, SR) == pytest.approx(CEILING, rel=1e-15)
-    assert siib_gauss(talk, deg, SR) == pytest.approx(811.28, abs=0.01)
+    assert int(pauses.sum()) == 213900
+    assert siib_gauss(talk, deg, SR) == pytest.approx(845.07, abs=0.01)
 
 
 def test_an_output_of_digital_silence_scores_0_or_a_little(talk):

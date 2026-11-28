@@ -68,7 +68,10 @@ def _sounddevice():
 
     Installed but unable to find the PortAudio library -- Linux without
     libportaudio2 -- it raises OSError on import, which is not a missing
-    extra: pip cannot fix it, the system package can.
+    extra: pip cannot fix it, the system package can. With the library there,
+    importing it starts PortAudio, and where that fails -- Linux with no sound
+    server to connect to, a container or a CI runner -- it raises
+    ``sounddevice.PortAudioError``, which is a DeviceError here as well.
     """
     try:
         import sounddevice as sd
@@ -81,6 +84,12 @@ def _sounddevice():
             f"sounddevice is installed but could not load PortAudio ({e}). "
             f"Install the PortAudio library: libportaudio2 on Debian and "
             f"Ubuntu, portaudio on Homebrew.") from e
+    except Exception as e:                                    # noqa: BLE001
+        raise DeviceError(
+            f"sounddevice is installed but PortAudio did not start "
+            f"({type(e).__name__}: {e}). On Linux it is usually that no sound "
+            f"server, PulseAudio or PipeWire, is running, as in a container or on "
+            f"a CI runner.") from e
 
 
 def _nothing(*args) -> None:

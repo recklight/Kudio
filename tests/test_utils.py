@@ -54,14 +54,16 @@ def test_list_devices_rejects_a_bad_kind():
 
 
 def test_list_devices_shape_and_filtering():
-    """Skips when there is no audio backend, e.g. on a headless CI runner."""
+    """Skips where kudio says there is no audio backend: no sounddevice, or a
+    PortAudio that does not start, as on a CI runner with no sound server."""
     from kudio import list_devices
+    from kudio.exceptions import DependencyError, DeviceError
 
-    sd = pytest.importorskip("sounddevice")
     try:
         every = list_devices()
-    except Exception as e:                      # no PortAudio host on this box
+    except (DependencyError, DeviceError) as e:
         pytest.skip(f"no audio backend: {e}")
+    import sounddevice as sd
 
     assert isinstance(every, list)
     for d in every:
@@ -75,6 +77,28 @@ def test_list_devices_shape_and_filtering():
     assert len(inputs) <= len(every)
     # indices index into sounddevice's own table -- the contract record() relies on
     assert [d['index'] for d in every] == list(range(len(sd.query_devices())))
+
+
+def test_a_portaudio_that_does_not_start_is_a_device_error(tmp_path, monkeypatch):
+    """sounddevice starts PortAudio as it is imported, and on Linux with no sound
+    server to connect to that raises its own PortAudioError, neither ImportError
+    nor OSError. It is a DeviceError saying so, with the error it came from."""
+    import sys
+
+    import kudio
+    (tmp_path / "sounddevice.py").write_text(
+        "class PortAudioError(Exception):\n"
+        "    pass\n"
+        "raise PortAudioError(\"Error initializing PortAudio: Unanticipated host error "
+        "[PaErrorCode -9999]: 'PulseAudio_Initialize: Can't connect to server'\")\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "sounddevice", raising=False)
+    with pytest.raises(kudio.DeviceError, match=r"^sounddevice is installed but PortAudio did "
+                                                r"not start \(PortAudioError: Error initializing "
+                                                r"PortAudio: .*Can't connect to server'\)") as caught:
+        kudio.list_devices()
+    assert type(caught.value.__cause__).__name__ == "PortAudioError"
+    assert "sounddevice" not in sys.modules
 
 
 # -- optional dependencies -----------------------------------------------------
