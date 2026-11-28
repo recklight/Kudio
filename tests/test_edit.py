@@ -281,7 +281,7 @@ def test_a_bad_shape_or_duration_is_rejected():
     a = np.ones(100, dtype=np.float32)
     with pytest.raises(FeatureError, match="shape"):
         kudio.crossfade(a, a, SR, 0.005, 'sigmoid')
-    with pytest.raises(FeatureError, match=">= 0"):
+    with pytest.raises(FeatureError, match="of 0 or more"):
         kudio.crossfade(a, a, SR, -0.1)
 
 

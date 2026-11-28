@@ -164,8 +164,8 @@ that stay separate on the left merge into one band.
   [`FeatureError`][kudio.exceptions.FeatureError].
 - The defaults are `n_fft=1024` and `hop_length=512`, not the spectrogram's
   512 and 256. Pass both, as in the last line above, to get one row per row of
-  the [`STFT`][kudio.core.stft.STFT]. The window stays Hann, librosa's
-  default; `melspectrogram` has no window argument.
+  the [`STFT`][kudio.core.stft.STFT]. The window stays Hann, as librosa's
+  does; `melspectrogram` has no window argument.
 - A clip shorter than `n_frames` frames gives an empty `(0, n_mels * n_frames)`
   array, not an error, and [`frame_windows`][kudio.core.feature.frame_windows]
   refuses it with `FeatureError`. Drop such clips before they reach a training
@@ -175,8 +175,8 @@ that stay separate on the left merge into one band.
 
 [`mfcc`][kudio.core.feature.mfcc] takes an array and its rate, no path, and
 returns `(1, mel_frames, n_mfcc)`; `[0]` drops the batch axis. `n_fft`,
-`hop_length`, `n_mels` and `fmax` are librosa's where they are left out: Hann
-window, `n_fft=2048`, a 512-sample hop and 128 mel bands. More coefficients
+`hop_length`, `n_mels` and `fmax` are librosa's defaults where they are left
+out: Hann window, `n_fft=2048`, a 512-sample hop and 128 mel bands. More coefficients
 than mel bands is a [`FeatureError`][kudio.exceptions.FeatureError], as
 `n_mfcc`, 40 by default, is beside `n_mels=32`. MFCCs on the spectrogram's
 256-sample grid: `kudio.mfcc(y, sr, n_mfcc=13, n_fft=512, hop_length=256)[0]`

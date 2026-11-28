@@ -436,8 +436,7 @@ def ncm(ref: np.ndarray, deg: np.ndarray, sr: int) -> float:
             f"ncm(): NCM is defined at 8 and 16 kHz, not {rate} Hz: its 20 "
             f"bands run from 300 Hz to 600 Hz under half the rate, so another "
             f"rate is another measure, and NCM.m refuses it. Resample first, "
-            f"with kudio.resample or, without librosa, "
-            f"scipy.signal.resample_poly(y, 16000, sr)")
+            f"with kudio.resample(y, sr, 16000)")
     sr = int(rate)
     ref, deg = _paired(ref, deg, 'ncm')
     need = (_MIN_ENVELOPE - 1) * (sr // _ENVELOPE_RATE) + 1
@@ -472,8 +471,7 @@ def _csii_rate(sr) -> float:
         raise ValueError(
             f"csii(): CSII needs a rate of 8 kHz or more, got {rate}: its 16 "
             f"bands reach 3675 Hz, and half the rate has to clear that. "
-            f"Resample first, with kudio.resample or, without librosa, "
-            f"scipy.signal.resample_poly(y, 16000, sr)")
+            f"Resample first, with kudio.resample(y, sr, 16000)")
     return float(rate)
 
 

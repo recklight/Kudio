@@ -299,13 +299,13 @@ for problem in kudio.audio_report(broken, sr).problems():
 
 它排在最前面，而且單獨出現，因為其他檢查不一定會注意到：
 跟 NaN 比較，不論 NaN 寫在哪一邊，結果都是 false。請看 `problems()`，不要看欄位；
-除了這個計數，同一份報告還是給出了 28 dB 的估計 SNR。
-響度函式會自己檢查，所以損壞的片段絕不會量成靜音的讀數 `-inf`：
-[`loudness`][kudio.core.loudness.loudness] 和
+除了這個計數，同一份報告還是給出了 28 dB 的估計 SNR；它也會發一則警告，寫出有幾個樣本
+不是有限數，給只記警告的批次用。響度函式會自己檢查，不會把損壞的片段當成靜音，量出靜音的
+讀數 `-inf`：[`loudness`][kudio.core.loudness.loudness] 和
 [`true_peak`][kudio.core.loudness.true_peak] 會回傳 `nan` 並發出警告，
-[`loudness_over_time`][kudio.core.loudness.loudness_over_time] 得到的曲線會寫著
-「171 of 171 window(s) unmeasurable」，`normalize_lufs` 和 `match_loudness`
-則會引發 `FeatureError`，而不是拿一個不存在的準位去縮放。載入、`audio_info` 和
+[`loudness_over_time`][kudio.core.loudness.loudness_over_time] 和
+[`loudness_range`][kudio.core.loudness.loudness_range] 以 `FeatureError` 拒絕它，
+`normalize_lufs` 和 `match_loudness` 也一樣，而不是拿一個不存在的準位去縮放。載入、`audio_info` 和
 `save_wave` 對這種檔案各有各的處理方式（[音訊檔案](audio-files.md)）。
 
 ### 數字無法告訴你的事 {#what-the-numbers-cannot-tell-you}

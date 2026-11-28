@@ -12,7 +12,6 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-import librosa
 import numpy as np
 from matplotlib import patheffects
 
@@ -21,8 +20,8 @@ import kudio
 
 SR = 16000
 SECONDS = 6
-#: the frame geometry split_on_silence hands to librosa, so the level curve
-#: is the one its top_db is compared against
+#: the frames split_on_silence goes by, so the level curve is the one its top_db
+#: is compared against
 FRAME, HOP = 2048, 512
 TOP_DB = 30.0
 #: a finer grid than the library default, so single harmonics show
@@ -73,9 +72,10 @@ def recording() -> dict:
 
 
 def _level_db(y: np.ndarray) -> np.ndarray:
-    """Frame level relative to the loudest frame, as librosa's split sees it."""
-    rms = librosa.feature.rms(y=y, frame_length=FRAME, hop_length=HOP)[0]
-    return librosa.power_to_db(rms ** 2, ref=np.max, top_db=None)
+    """Frame level relative to the loudest frame, as split_on_silence sees it."""
+    frames = np.lib.stride_tricks.sliding_window_view(np.pad(y, FRAME // 2), FRAME)[::HOP]
+    db = 10.0 * np.log10(np.maximum(1e-10, np.mean(np.square(frames), axis=1)))
+    return db - db.max()
 
 
 def draw_level(fig, p) -> None:
@@ -85,7 +85,7 @@ def draw_level(fig, p) -> None:
                                         ("fan", "Same voice in front of a fan"))):
         y = clips[name]
         db = _level_db(y)
-        t = librosa.frames_to_time(np.arange(len(db)), sr=SR, hop_length=HOP)
+        t = np.arange(len(db)) * HOP / SR
         for n, (a, b) in enumerate(kudio.vad(y, SR)):
             ax.axvspan(a, b, color=p["c3"], alpha=0.22, lw=0,
                        label="vad() span" if n == 0 else None)

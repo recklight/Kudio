@@ -12,7 +12,8 @@ from typing import Sequence
 
 import numpy as np
 
-from kudio._samples import as_float, channels_last, to_float
+from kudio._numbers import within
+from kudio._samples import as_float, channels_last, finite, to_float
 from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
@@ -47,8 +48,7 @@ def _ramp(n: int, shape: str) -> np.ndarray:
 
 
 def _fade_samples(n_samples: int, duration: float, sr: int, what: str) -> int:
-    if duration < 0:
-        raise FeatureError(f"{what} duration must be >= 0, got {duration}")
+    duration = within(duration, 'duration', what, FeatureError, low=0, of=' of seconds')
     n = int(round(duration * sr))
     if n > n_samples:
         raise FeatureError(
@@ -147,8 +147,10 @@ def crossfade(first: np.ndarray, second: np.ndarray, sr: int,
         return second.copy()
     if second.size == 0:
         return first.copy()
-    if duration < 0:
-        raise FeatureError(f"crossfade duration must be >= 0, got {duration}")
+    duration = within(duration, 'duration', 'crossfade', FeatureError, low=0, of=' of seconds')
+    if first.ndim not in (1, 2) or first.shape[1:] != second.shape[1:]:
+        raise FeatureError(f"crossfade() joins two clips of as many channels, (frames,) or "
+                           f"(frames, channels), and got shapes {first.shape} and {second.shape}")
 
     n = int(round(duration * sr))
     n = min(n, first.shape[0], second.shape[0])
@@ -193,6 +195,9 @@ def splice(parts: Sequence[np.ndarray], sr: int, duration: float = DEFAULT_CROSS
     is the other case, and defaults the other way.
     """
     sr = sample_rate(sr, 'splice', FeatureError)
+    if isinstance(parts, np.ndarray) and parts.ndim < 2:
+        raise FeatureError(f"splice() takes a list of clips, and got one array of shape "
+                           f"{parts.shape}")
     usable = [channels_last(p, 'splice', FeatureError)
               for p in parts if np.asarray(p).size]
     if not usable:
@@ -221,6 +226,7 @@ def remove_dc(y: np.ndarray) -> np.ndarray:
     x, back = to_float(y, 'remove_dc', FeatureError)
     if y.size == 0:
         return y.copy()
+    finite(np.asarray(x), 'remove_dc', FeatureError)       # one NaN is the mean of it all
     # accumulate in float64: a float32 mean over a long clip carries enough
     # rounding error to leave behind the offset it was asked to remove
     offset = np.mean(x, axis=0, dtype=np.float64, keepdims=True)

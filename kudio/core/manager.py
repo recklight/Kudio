@@ -10,6 +10,7 @@ from typing import KeysView, List, Optional, Union, ValuesView
 
 import numpy as np
 
+from kudio._numbers import flag, whole
 from kudio._samples import to_float
 from kudio.core._policy import sample_rate
 from kudio.core.feature import wave_separate
@@ -40,8 +41,15 @@ class AudioDataManager:
     reset = reset_defaults
 
     def set_params(self, sr: int, ch: int) -> None:
+        """The rate and the channels, 1 or 2, of what is added from now on.
+
+        :raises ValueError: for another number of channels. Taken for 1, six of
+            them were saved one after the other, six times as long.
+        """
         sr = sample_rate(sr, 'set_params')
-        self.ch_ = ch if 0 < ch < 3 else 1
+        if whole(ch) not in (1, 2):
+            raise ValueError(f"set_params(): ch has to be 1 or 2 channels, got {ch!r}")
+        self.ch_ = whole(ch)
         self.rate_ = sr
         self.default_dict = {"dir": None, "wave": [], "sr": sr, "ch": self.ch_}
 
@@ -104,6 +112,7 @@ class AudioDataManager:
         :raises ValueError: for a *wave* that is not a list of one waveform, a
             bare array among them.
         """
+        override = flag(override, 'override', 'AudioDataManager.add_new_file', ValueError)
         if name is None:
             if dir is None:
                 log.warning("Manager: please provide a name or dir")

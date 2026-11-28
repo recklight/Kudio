@@ -10,6 +10,8 @@ from typing import List, Optional
 
 import numpy as np
 
+from kudio._numbers import flag
+
 __all__ = ['AudioBuffer', 'FetchBuffer']
 
 log = logging.getLogger(__name__)
@@ -72,6 +74,7 @@ class AudioBuffer:
         With ``drop_full=True`` (default) the oldest frame is dropped when the
         buffer is full; otherwise the call blocks until a slot is free.
         """
+        drop_full = flag(drop_full, 'drop_full', 'AudioBuffer.add', ValueError)
         with self._cond:
             # feed an active fixed-size capture first so timed recordings
             # do not lose frames to a slow consumer

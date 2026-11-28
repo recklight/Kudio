@@ -24,10 +24,11 @@ means with bootstrap confidence intervals, a sign-flip test against a
 baseline, a signature line that says how the numbers were computed, and the
 BibTeX keys for kudio and every work behind them.
 
-The core install is numpy, scipy, soundfile and librosa, with PyYAML, tqdm and
-PyWavelets; plotting, dataframes, PESQ, STOI and SDR, DNSMOS and live audio
-are extras. WAV, FLAC, OGG, MP3 and AIFF are read with that; m4a, aac and webm
-take `pip install audioread` and ffmpeg on the PATH.
+The core install is numpy, scipy, soundfile and soxr, with PyYAML, tqdm and
+PyWavelets; plotting, dataframes, PESQ, STOI and SDR, DNSMOS, live audio and
+the compressed formats are extras. WAV, FLAC, OGG, MP3 and AIFF are read with
+that; m4a, aac and webm take `pip install "kudio[compressed]"` and ffmpeg on
+the PATH.
 
 The [documentation](https://recklight.github.io/Kudio/) has a guide to each
 part of the library, the full API reference, and
@@ -37,14 +38,15 @@ and how closely it agrees with its reference; this README is the short tour.
 ## Install
 
 ```bash
-pip install kudio            # core: I/O, features, effects, synthesis, metrics
-pip install "kudio[audio]"   # + live capture / playback (PyAudio, sounddevice)
-pip install "kudio[eval]"    # + STOI / SDR back-ends (pystoi, mir_eval)
-pip install "kudio[pesq]"    # + PESQ (pesq) -- builds from source, needs a C compiler
-pip install "kudio[dnsmos]"  # + DNSMOS perceptual score (onnxruntime)
-pip install "kudio[viz]"     # + plotting helpers (matplotlib)
-pip install "kudio[data]"    # + Excel / dataframe export (pandas, openpyxl)
-pip install "kudio[all]"     # everything but [pesq]
+pip install kudio                # core: I/O, features, effects, synthesis, metrics
+pip install "kudio[audio]"       # + live capture / playback (PyAudio, sounddevice)
+pip install "kudio[eval]"        # + STOI / SDR back-ends (pystoi, mir_eval)
+pip install "kudio[pesq]"        # + PESQ (pesq) -- builds from source, needs a C compiler
+pip install "kudio[dnsmos]"      # + DNSMOS perceptual score (onnxruntime)
+pip install "kudio[viz]"         # + plotting helpers (matplotlib)
+pip install "kudio[data]"        # + Excel / dataframe export (pandas, openpyxl)
+pip install "kudio[compressed]"  # + m4a, aac, webm (audioread; ffmpeg is your system's)
+pip install "kudio[all]"         # everything but [pesq]
 ```
 
 > `pesq` is published on PyPI as source only, so `kudio[pesq]` compiles it:

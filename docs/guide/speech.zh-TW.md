@@ -3,7 +3,7 @@
 拿到一段語音錄音，我幾乎做任何事之前都會先問兩個問題：裡面哪裡有人在說話，
 以及說話的人音高多少。[`vad`][kudio.core.vad.vad]（語音活動偵測）和它的相關函式
 回答第一個問題，除了 numpy 之外什麼都不需要。[`f0`][kudio.core.pitch.f0] 回答第二個：
-它用 librosa 的 pYIN（機率式 YIN）追蹤基頻，並把有聲／無聲的判斷和音高放在一起。
+它用 pYIN（機率式 YIN）追蹤基頻，並把有聲／無聲的判斷和音高放在一起。
 
 | 要做的事 | 用 |
 |---|---|
@@ -280,9 +280,9 @@ background = np.median(spec[~speech], axis=0)  # per bin, over what vad turned d
 
 ## 用 f0 追蹤音高 {#pitch-with-f0}
 
-[`f0`][kudio.core.pitch.f0] 透過 librosa 執行 pYIN（Mauch & Dixon 2014）[^pyin]，
-回傳一個 [`PitchTrack`][kudio.core.pitch.PitchTrack]。它比 `vad` 花的時間多得多：
-在我的電腦上，一分鐘 16 kHz 的音訊，`f0` 要 1.3 到 2.6 秒，`vad` 只要 0.04 到 0.07 秒，
+[`f0`][kudio.core.pitch.f0] 執行 pYIN（Mauch & Dixon 2014）[^pyin]，算出的和 `librosa.pyin`
+完整搜尋的結果逐位元相同，回傳一個 [`PitchTrack`][kudio.core.pitch.PitchTrack]。它比 `vad` 花的時間多得多：
+在我的電腦上，一分鐘 16 kHz 的音訊，`f0` 要 0.8 秒，`vad` 只要 0.04 到 0.07 秒，
 所以如果只是想知道檔案裡到底有沒有人聲，
 用 [`speech_ratio`][kudio.core.vad.speech_ratio] 問比較快。
 

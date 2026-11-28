@@ -67,18 +67,17 @@ def test_w2mfcc_shape(sine):
     assert mfcc.shape[0] == 1 and mfcc.shape[2] == 40
 
 
-def test_mfcc_left_to_its_defaults_is_librosas_own(sine):
-    import librosa
-    ours = w2mfcc(sine, 16000, n_mfcc=20)
-    theirs = librosa.feature.mfcc(y=np.asarray(sine), sr=16000, n_mfcc=20)
-    np.testing.assert_array_equal(ours[0], theirs.T)
+def test_mfcc_left_to_its_defaults_is_2048_512_and_128_bands(sine):
+    np.testing.assert_array_equal(
+        w2mfcc(sine, 16000, n_mfcc=20),
+        w2mfcc(sine, 16000, n_mfcc=20, n_fft=2048, hop_length=512, n_mels=128, fmax=8000))
 
 
 def test_mfcc_takes_the_analysis_of_the_mel_spectrogram():
-    """At 192 kHz librosa's 2048-point default leaves 3 of 128 bands empty and
-    warns; 8192 points fill them. The hop sets the number of frames."""
+    """At 192 kHz the 2048-point default leaves 3 of 128 bands empty and says so;
+    8192 points fill them. The hop sets the number of frames."""
     y = np.random.default_rng(0).standard_normal(192000).astype(np.float32)
-    with pytest.warns(UserWarning, match="Empty filters"):
+    with pytest.warns(UserWarning, match="3 of 128 mel bands hold no FFT bin"):
         w2mfcc(y, 192000)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -496,3 +495,209 @@ def test_an_unsigned_reference_gives_the_phase_of_the_audio():
     spec = kudio.waveform_to_spectrogram(as_u8)
     back = kudio.spectrogram_to_waveform(as_u8, spec)
     assert np.max(np.abs(back - (as_u8 / 128.0 - 1.0))) < 1e-3
+
+
+# -- what a transform is given ---------------------------------------------------
+
+#: every function that transforms a waveform at a geometry of the caller's:
+#: the call, given *y* and keywords
+FRAMED = {
+    'waveform_to_spectrogram': lambda y, **k: kudio.waveform_to_spectrogram(y, **k),
+    'spectrogram_to_waveform': lambda y, **k: kudio.spectrogram_to_waveform(
+        y, kudio.waveform_to_spectrogram(np.zeros(4000, np.float32)), **k),
+}
+#: and every one that takes a waveform at all, with what its name is in a message
+TRANSFORMS = {
+    **{name: (call, name) for name, call in FRAMED.items()},
+    'STFT.forward': (lambda y: kudio.STFT().forward(y), 'waveform_to_spectrogram'),
+    'STFT.analyse': (lambda y: kudio.STFT().analyse(y), 'STFT.analyse'),
+    'STFT.inverse': (lambda y: kudio.STFT().inverse(
+        y, kudio.waveform_to_spectrogram(np.zeros(4000, np.float32))), 'spectrogram_to_waveform'),
+    'denoise_wav2spec': (lambda y: kudio.denoise_wav2spec(y), 'denoise_wav2spec'),
+}
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+@pytest.mark.parametrize("name", TRANSFORMS)
+def test_samples_that_are_not_finite_are_refused_by_name(name, bad):
+    """One NaN was every bin of the frames around it, and denoise_wav2spec took
+    a clip with one for a silent clip: it has no peak."""
+    call, who = TRANSFORMS[name]
+    y = np.full(4000, 0.1, np.float32)
+    y[100:103] = bad
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(kudio.FeatureError) as caught:
+            call(y)
+    assert str(caught.value) == (f"{who}() got 3 sample(s) that are not finite (NaN or inf); "
+                                 f"repair the clip first")
+
+
+@pytest.mark.parametrize("y, what", [(np.ones(4000, bool), "bool"),
+                                     (np.ones(4000, complex), "complex128"),
+                                     (np.array(['a'] * 4000), "<U1")], ids=["bool", "complex", "text"])
+@pytest.mark.parametrize("name", TRANSFORMS)
+def test_samples_that_are_not_numbers_are_refused_by_name(name, y, what):
+    call, who = TRANSFORMS[name]
+    with pytest.raises(kudio.FeatureError) as caught:
+        call(y)
+    assert str(caught.value) == f"{who}(): the samples are {what}, not real numbers"
+
+
+@pytest.mark.parametrize("value", [0, -1, 2.5, float('nan'), float('inf'), True, '512', [512]],
+                         ids=repr)
+@pytest.mark.parametrize("name", FRAMED)
+@pytest.mark.parametrize("size", ['n_fft', 'hop_length', 'win_length'])
+def test_a_size_that_is_not_a_number_of_samples_is_refused(name, size, value):
+    with pytest.raises(kudio.FeatureError) as caught:
+        FRAMED[name](np.zeros(4000, np.float32), **{size: value})
+    assert str(caught.value) == (f"{name}(): {size} must be >= 1, a whole number of samples, "
+                                 f"got {value!r}")
+
+
+@pytest.mark.parametrize("value", [512.0, np.int64(512), np.float32(512), np.array(512)], ids=repr)
+def test_a_whole_number_of_any_type_is_that_size(sine, value):
+    want = kudio.waveform_to_spectrogram(sine, n_fft=512, hop_length=512, win_length=512)
+    assert np.array_equal(kudio.waveform_to_spectrogram(
+        sine, n_fft=value, hop_length=value, win_length=value), want)
+
+
+@pytest.mark.parametrize("name", FRAMED)
+def test_a_window_longer_than_the_frame_is_refused(name):
+    with pytest.raises(kudio.FeatureError) as caught:
+        FRAMED[name](np.zeros(4000, np.float32), n_fft=512, win_length=513)
+    assert str(caught.value) == f"{name}(): win_length (513) cannot exceed n_fft (512)"
+
+
+@pytest.mark.parametrize("name", FRAMED)
+def test_a_window_there_is_not_is_refused_by_name(name):
+    with pytest.raises(kudio.FeatureError, match=rf"^{name}\(\): 'nonsense' is not a window"):
+        FRAMED[name](np.zeros(4000, np.float32), window='nonsense')
+
+
+@pytest.mark.parametrize("value", [-1, -8000, 0, 2.5, float('nan'), '100', False], ids=repr)
+def test_a_length_to_cut_to_is_a_number_of_samples(sine, value):
+    """-8000 cut 8000 samples off the end, and 0 none."""
+    with pytest.raises(kudio.FeatureError) as caught:
+        kudio.waveform_to_spectrogram(sine, desired_length=value)
+    assert str(caught.value) == (f"waveform_to_spectrogram(): desired_length is a whole number of "
+                                 f"samples to keep, 1 or more, or None for all of them, got "
+                                 f"{value!r}")
+    assert np.array_equal(kudio.waveform_to_spectrogram(sine, desired_length=8000.0),
+                          kudio.waveform_to_spectrogram(sine[:8000]))
+
+
+@pytest.mark.parametrize("n", [1, 100, 511])
+def test_a_clip_shorter_than_a_frame_is_transformed_with_a_warning(n):
+    """It is mostly the zeros around it. Said at the caller's line and under the
+    name of the function that was called."""
+    y = np.full(n, 0.1, np.float32)
+    calls = [('waveform_to_spectrogram', lambda: kudio.waveform_to_spectrogram(y)),
+             ('STFT.analyse', lambda: kudio.STFT().analyse(y)),
+             ('denoise_wav2spec', lambda: kudio.denoise_wav2spec(y))]
+    for name, call in calls:
+        with pytest.warns(UserWarning) as caught:
+            call()
+        said, = (w for w in caught if issubclass(w.category, UserWarning))
+        assert str(said.message) == (f"{name}(): the clip has {n} sample(s), fewer than one frame "
+                                     f"of 512; what is transformed is mostly the zeros around it")
+        assert said.filename == __file__
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        kudio.waveform_to_spectrogram(np.full(512, 0.1, np.float32))
+
+
+def test_an_odd_frame_fits_no_empty_clip():
+    """There are n_fft // 2 zeros on each side, one fewer than an odd frame."""
+    with pytest.raises(kudio.FeatureError, match=r"^waveform_to_spectrogram\(\): the clip has no "
+                                                 r"samples, and an odd frame of 65"):
+        kudio.waveform_to_spectrogram(np.zeros(0, np.float32), n_fft=65)
+
+
+def test_what_a_spectrogram_costs_is_its_size_not_the_frames():
+    import tracemalloc
+    y = (0.1 * np.random.default_rng(0).standard_normal(16000 * 60)).astype(np.float32)
+    tracemalloc.start()
+    try:
+        spec = kudio.waveform_to_spectrogram(y, n_fft=2048, hop_length=128)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    # the complex64 spectrum and its magnitude, which becomes the result
+    assert peak < 3.2 * spec.nbytes + 2 * y.nbytes, f"{peak / spec.nbytes:.1f} times the result"
+
+
+# -- cutting and stacking ----------------------------------------------------------
+
+@pytest.mark.parametrize("channels", [2, 2.0, np.int64(2)], ids=repr)
+def test_a_clip_with_its_channels_side_by_side_is_separated_by_column(channels):
+    """Every second frame of it is not a channel."""
+    wave = np.arange(12, dtype=np.int16).reshape(6, 2)
+    left, right = wave_separate(wave, channels)
+    assert (left.tolist(), right.tolist()) == ([0, 2, 4, 6, 8, 10], [1, 3, 5, 7, 9, 11])
+    assert np.shares_memory(left, wave)
+
+
+def test_a_column_is_split_as_the_waveform_it_holds():
+    left, right = wave_separate(np.arange(8)[:, None], 2)
+    assert (left.tolist(), right.tolist()) == ([0, 2, 4, 6], [1, 3, 5, 7])
+
+
+@pytest.mark.parametrize("wave, channels, says", [
+    (np.zeros((100, 2)), 1, r"the array holds 2 channels, and 1 was asked for"),
+    (np.zeros((100, 2)), 3, r"the array holds 2 channels, and 3 were asked for"),
+    (np.zeros((4, 4, 4)), 2, r"takes \(frames,\) or \(frames, channels\), got shape \(4, 4, 4\)"),
+    (np.float64(1.0), 2, r"takes \(frames,\) or \(frames, channels\), got shape \(\)"),
+    (np.zeros(100), 0, r"channels must be >= 1, a whole number, got 0"),
+    (np.zeros(100), 1.5, r"channels must be >= 1, a whole number, got 1.5"),
+    (np.zeros(100), True, r"channels must be >= 1, a whole number, got True")])
+def test_what_cannot_be_separated_is_refused(wave, channels, says):
+    with pytest.raises(kudio.FeatureError, match=r"^wave_separate\(\):? ?" + says):
+        wave_separate(wave, channels)
+
+
+def test_a_stereo_array_is_not_kept_as_one_channel_by_the_manager():
+    manager = kudio.AudioDataManager()
+    with pytest.raises(ValueError, match="holds 2 channels, and 1 was asked for"):
+        manager.add_new_file("take", wave=[np.zeros((100, 2))], sr=16000, ch=1)
+    manager.add_new_file("take", wave=[np.zeros((100, 2))], sr=16000, ch=2)
+    assert [w.shape for w in manager.audios_["take"]["wave"]] == [(100,), (100,)]
+
+
+@pytest.mark.parametrize("features, says", [
+    ([np.zeros(5), np.zeros(5)], r"item 0 has shape \(5,\)"),
+    ([np.zeros((2, 5)), np.zeros(5)], r"item 1 has shape \(5,\)"),
+    ([np.zeros((2, 5)), np.zeros((2, 4))], r"item 1 has 4 columns and item 0 has 5"),
+    ([np.zeros((2, 5, 1))], r"item 0 has shape \(2, 5, 1\)"), ([], "there are none")])
+def test_features2matrix_takes_matrices_of_one_width(features, says):
+    """Two vectors of 5 became a matrix of 2 rows with 10 labels."""
+    with pytest.raises(kudio.FeatureError, match=r"^features2matrix\(\).*" + says):
+        features2matrix(features)
+
+
+def test_features2matrix_takes_lists_and_a_matrix_with_no_rows():
+    matrix, labels = features2matrix([[[1, 2], [3, 4]], np.zeros((0, 2)), np.ones((1, 2))])
+    assert matrix.tolist() == [[1, 2], [3, 4], [1, 1]] and labels.tolist() == [0, 0, 2]
+
+
+@pytest.mark.parametrize("n, frame, hop", [(100, 100, 1), (1000, 64, 16), (1000, 64, 100),
+                                           (1001, 7, 3), (5, 1, 2)])
+def test_slices_are_the_frames_cut_by_hand(n, frame, hop):
+    for dtype in (np.int16, np.float32):
+        y = np.arange(n, dtype=dtype)
+        want = np.stack([y[s:s + frame] for s in range(0, n - frame + 1, hop)])
+        got = wave_slicing(y, frame, hop, is_reshape=False)
+        assert got.dtype == dtype and np.array_equal(got, want.T)
+        assert np.array_equal(wave_slicing(y, frame, hop), want.reshape(-1))
+
+
+@pytest.mark.parametrize("y, frame, hop, says", [
+    (np.zeros(100), 101, 1, r"the clip has 100 sample\(s\), fewer than one frame of 101"),
+    (np.zeros(0), 10, 1, r"the clip has 0 sample\(s\), fewer than one frame of 10"),
+    (np.zeros(100), 0, 1, r"frame_length must be >= 1, a whole number of samples, got 0"),
+    (np.zeros(100), 10, 0, r"hop_length must be >= 1, a whole number of samples, got 0"),
+    (np.zeros(100), 10, 1.5, r"hop_length must be >= 1, a whole number of samples, got 1.5"),
+    (np.zeros((100, 2)), 10, 5, r"takes a mono waveform \(n,\), got shape \(100, 2\)")])
+def test_what_cannot_be_sliced_is_refused(y, frame, hop, says):
+    with pytest.raises(kudio.FeatureError, match=r"^wave_slicing\(\):? ?" + says):
+        wave_slicing(y, frame, hop)

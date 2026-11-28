@@ -332,15 +332,16 @@ for problem in kudio.audio_report(broken, sr).problems():
 It comes first and alone, because the other checks cannot be relied on to
 notice: a comparison against NaN is false whichever way round it is written.
 Read `problems()`, not the fields; beside the count, this report still gives
-an estimated SNR of 28 dB. The loudness functions check for themselves, so a
-corrupt clip never measures `-inf`, the reading for silence:
+an estimated SNR of 28 dB, and says how many samples are not finite in a
+warning too, for a batch that only logs. The loudness functions check for
+themselves and do not read a corrupt clip as silence, whose reading is `-inf`:
 [`loudness`][kudio.core.loudness.loudness] and
-[`true_peak`][kudio.core.loudness.true_peak] return `nan` with a warning, a
-curve from [`loudness_over_time`][kudio.core.loudness.loudness_over_time]
-reads "171 of 171 window(s) unmeasurable", and `normalize_lufs` and
-`match_loudness` raise `FeatureError` rather than scale by a level that is not
-there. Loading, `audio_info` and `save_wave` each handle such a file their own
-way ([Audio files](audio-files.md)).
+[`true_peak`][kudio.core.loudness.true_peak] return `nan` with a warning,
+[`loudness_over_time`][kudio.core.loudness.loudness_over_time] and
+[`loudness_range`][kudio.core.loudness.loudness_range] refuse it with a
+`FeatureError`, and so do `normalize_lufs` and `match_loudness`, rather than
+scale by a level that is not there. Loading, `audio_info` and `save_wave` each
+handle such a file their own way ([Audio files](audio-files.md)).
 
 ### What the numbers cannot tell you
 

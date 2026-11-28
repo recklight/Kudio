@@ -288,12 +288,11 @@ def test_malformed_input_is_refused_by_name(case):
 
 @pytest.mark.parametrize("fn", [getattr(kudio, n) for n in QUALITY]
                          + [kudio.composite, kudio.srmr], ids=lambda fn: fn.__name__)
-def test_a_rate_the_measure_is_not_defined_at_names_both_resamplers(fn):
+def test_a_rate_the_measure_is_not_defined_at_names_the_resampler(fn):
     args = (CLIP, 44100) if fn is kudio.srmr else (CLIP, CLIP, 44100)
     with pytest.raises(ValueError) as refused:
         fn(*args, **({'pesq': 2.0} if fn is kudio.composite else {}))
-    said = str(refused.value)
-    assert "kudio.resample" in said and "scipy.signal.resample_poly(y, 16000, 44100)" in said
+    assert "kudio.resample(y, 44100, 16000)" in str(refused.value)
 
 
 @pytest.mark.parametrize("case", NAN)

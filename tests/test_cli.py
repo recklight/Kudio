@@ -691,18 +691,31 @@ def test_a_missing_file_is_one_line_not_a_traceback(tmp_path, capsys):
     assert err.startswith("kudio info:") and "Traceback" not in err
 
 
-def test_a_refusal_from_librosa_is_one_line(tmp_path, capsys, monkeypatch):
-    """main() finds librosa's error class among the imported modules when
-    something is raised, rather than importing librosa before every command."""
-    librosa = pytest.importorskip("librosa")
-    import kudio.cli
+def test_a_metrics_refusal_is_one_line_not_a_traceback(tmp_path, capsys):
+    """A plain ValueError, as the metrics raise it."""
+    import kudio
+    kudio.save_wave(tmp_path / "in.wav", np.zeros(1600), 16000)
+    assert main(["score", str(tmp_path / "in.wav"), "--reference", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("kudio score: score_dataset()") and "Traceback" not in err
 
-    def refuse(args):
-        raise librosa.util.exceptions.ParameterError("frame_length is too short")
 
-    monkeypatch.setattr(kudio.cli, "_run", refuse)
-    assert main(["pitch", str(tmp_path / "a.wav")]) == 2
-    assert capsys.readouterr().err == "kudio pitch: frame_length is too short\n"
+@pytest.mark.parametrize("command", [
+    ["convert", "{wav}", "{file}/out.wav"], ["trim", "{wav}", "{file}/out.wav"],
+    ["channel", "{wav}", "{file}/out.wav", "--telephone"],
+    ["pitch", "{wav}", "--labels", "{file}/labels.txt"]], ids=lambda c: c[0])
+def test_a_folder_that_is_a_file_is_one_line_not_a_traceback(tmp_path, capsys, command):
+    import kudio
+    t = np.arange(32000) / 16000
+    noise = 0.01 * np.random.default_rng(0).standard_normal(len(t))
+    kudio.save_wave(tmp_path / "in.wav", 0.1 * np.sin(2 * np.pi * 220 * t) + noise, 16000)
+    (tmp_path / "file").write_text("no folder")
+    argv = [part.format(wav=tmp_path / "in.wav", file=tmp_path / "file") for part in command]
+    assert main(argv) == 2
+    err = capsys.readouterr().err
+    assert err.startswith(f"kudio {command[0]}: ") and "Traceback" not in err
+    assert str(tmp_path / "file") in err.replace("\\\\", "\\")
+    assert (tmp_path / "file").read_text() == "no folder"
 
 
 def test_loudness_of_a_stereo_file_keeps_its_channels(tmp_path, capsys):

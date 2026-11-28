@@ -16,9 +16,11 @@ from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 
-from kudio._samples import channels_last
+from kudio._numbers import count, flag, within
+from kudio._samples import as_float, channels_last
+from kudio.core._policy import warn
 from kudio.core.buffer import AudioBuffer
-from kudio.core.io import PathLike, _read_native, _reason, check_file
+from kudio.core.io import PathLike, _check_rate, _read_native, _reason, check_file
 from kudio.exceptions import DependencyError, DeviceError
 from kudio.util.check import CheckDevice
 
@@ -48,8 +50,15 @@ def record(seconds: float, sr: int = 16000, channels: int = 1,
     *device* is a **sounddevice** index — get one from
     :func:`kudio.list_devices`, not from :class:`kudio.CheckDevice`, which
     numbers devices through PyAudio for the streaming classes.
+
+    :raises ValueError: for *seconds* that are not a number of 0 or more, an
+        *sr* that is not a positive whole rate and *channels* that are not a
+        whole number of 1 or more.
     """
     from kudio.util.check import _sounddevice
+    sr = _check_rate(sr)
+    seconds = within(seconds, 'seconds', 'record', low=0, of=' of seconds')
+    channels = count(channels, 'channels', 'record')
     sd = _sounddevice()
     frames = int(seconds * sr)
     data = sd.rec(frames, samplerate=sr, channels=channels,
@@ -76,19 +85,51 @@ def _pyaudio():
 
 
 def wave_decode(in_data: bytes, channels: int) -> np.ndarray:
-    """Raw int16 bytes -> array of shape ``(chunk_length, channels)``."""
-    result = np.frombuffer(in_data, dtype=np.int16)
-    chunk_length = len(result) // channels
-    return np.reshape(result, (chunk_length, channels))
+    """Raw int16 bytes -> array of shape ``(chunk_length, channels)``.
+
+    :raises ValueError: for bytes that are no whole number of frames.
+    """
+    channels = count(channels, 'channels', 'wave_decode')
+    if len(in_data) % (2 * channels):
+        raise ValueError(f"wave_decode(): {len(in_data)} bytes are no whole number of frames of "
+                         f"{channels} 16-bit sample(s)")
+    return np.frombuffer(in_data, dtype=np.int16).reshape(-1, channels)
 
 
 def wave_encode(signal: np.ndarray) -> bytes:
     """Array ``(frames, channels)`` -> interleaved int16 bytes.
 
+    int16 samples are written as they are, and so are 16-bit numbers in an
+    array of 32- or 64-bit integers. Float audio, full scale at 1, and other
+    integers on their type's are brought to 16 bits, rounded, and what is past
+    full scale is held there with a warning.
+
     :raises ValueError: for an array that is channels first, which would come
-        out with the channels one after the other.
+        out with the channels one after the other, samples that are not finite,
+        64-bit integers that 16 bits do not hold, and floats past 2, which are
+        16-bit numbers held as floats and not audio whose full scale is 1.
     """
-    return channels_last(signal, 'wave_encode').flatten().astype(np.int16).tobytes()
+    signal = channels_last(signal, 'wave_encode')
+    if (signal.dtype.kind in 'iu' and signal.dtype.itemsize >= 4
+            and (not signal.size or (signal.min() >= -32768 and signal.max() <= 32767))):
+        signal = signal.astype(np.int16)
+    if signal.dtype != np.int16:
+        y = as_float(signal, 'wave_encode')
+        bad = int(np.count_nonzero(~np.isfinite(y)))
+        if bad:
+            raise ValueError(f"wave_encode() got {bad} sample(s) that are not finite (NaN or inf)")
+        peak = float(np.max(np.abs(y))) if y.size else 0.0
+        if peak > 2:
+            raise ValueError(f"wave_encode(): the samples are {signal.dtype} and go as high as "
+                             f"{peak:g}, and float audio has its full scale at 1; pass 16-bit "
+                             f"numbers as int16, and floats over 32768")
+        scaled = np.round(y * 32768.0)
+        over = int(np.count_nonzero((scaled > 32767) & (y > 1)) + np.count_nonzero(scaled < -32768))
+        if over:
+            warn(f"wave_encode(): {over} sample(s) are past full scale, the highest at {peak:.3g}, "
+                 f"and are held there")
+        signal = np.clip(scaled, -32768, 32767).astype(np.int16)
+    return signal.flatten().tobytes()
 
 
 def play_audio(wav: Union[str, Path, wave.Wave_read, np.ndarray],
@@ -184,6 +225,10 @@ class Recorder:
     def __init__(self, device: Optional[int] = None, record_times: int = 3,
                  rate: int = 16000, channels: int = 1,
                  frames_per_buffer: int = 512):
+        rate = _check_rate(rate, 'rate')
+        channels = count(channels, 'channels', 'Recorder')
+        frames_per_buffer = count(frames_per_buffer, 'frames_per_buffer', 'Recorder')
+        within(record_times, 'record_times', 'Recorder', low=0, of=' of seconds')
         pyaudio = _pyaudio()
         self.format = pyaudio.paInt16
         self.input_device_index = device
@@ -234,6 +279,7 @@ class Recorder:
     def save(self, file_dir: PathLike, rename: bool = False,
              resample: Optional[int] = None) -> bool:
         """Write the last recording to *file_dir* (16-bit PCM)."""
+        rename = flag(rename, 'rename', 'Recorder.save', ValueError)
         if self.frames is None:
             log.error("Recorder: nothing recorded yet")
             return False
@@ -463,6 +509,9 @@ class LocalStreamReader:
     def set_stream(self, device: Optional[int] = None, rate: Optional[int] = None,
                    channels: int = 1, frame_size: int = 2048,
                    wav_format: int = PA_INT16) -> bool:
+        rate = _check_rate(rate, 'rate', optional=True)
+        channels = count(channels, 'channels', type(self).__name__)
+        frame_size = count(frame_size, 'frame_size', type(self).__name__)
         if wav_format not in (PA_FLOAT32, PA_INT16):
             # before PortAudio is opened, so a refused format leaves nothing running
             log.error("Stream: unsupported wav_format %r", wav_format)
@@ -601,17 +650,20 @@ class StreamRecorder:
             the device accepts, and its own default only when none of them
             opens.
         :param max_seconds: hard cap on the take, so a recorder left running
-            cannot fill memory. ``None`` removes the cap.
+            cannot fill memory. ``None`` and ``inf`` remove the cap.
         :param monitor: echo the input to the default output while recording.
         """
+        monitor = flag(monitor, 'monitor', 'StreamRecorder', ValueError)
         self._chunks: List[np.ndarray] = []
         self._lock = threading.Lock()
         self._level = 0.0
         self._frames = 0
         self._drained = 0                     # chunks already handed to drain()
         self._capped = False
-        self._channels = max(1, int(channels))
-        self._max_seconds = max_seconds
+        sr = _check_rate(sr, optional=True)
+        self._channels = count(channels, 'channels', 'StreamRecorder')
+        self._max_seconds = None if max_seconds is None else within(
+            max_seconds, 'max_seconds', 'StreamRecorder', above=0, of=' of seconds', inf=True)
         self._monitor = monitor
 
         self._stream_args = (device, sr, self._channels, frame_size, PA_FLOAT32)

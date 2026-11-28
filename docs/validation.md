@@ -44,8 +44,10 @@ conformance recordings and pySIIB's demo recording is committed.
 | `audio_report`'s `clipped_samples`, `full_scale_samples` | no implementation; 1000 smooth peaks, 409 cut sines, an overdriven voice | no smooth peak counted; every plateau of a sine driven 1.01 times or more counted in full |
 | `audio_report`'s `sample_step`, `grid_bits` | no implementation; 7 known grids and 4 clips without one | 0 |
 
-The sections below have the details, and the last two say how to run the
-scripts and how the input rule and the import without librosa are tested.
+The sections below have the details. [kudio and librosa](#kudio-and-librosa)
+says where kudio follows librosa and how close it comes, and the last two say how
+to run the scripts and how the input rule and the import without the optional
+packages are tested.
 
 ## Hu and Loizou's measures and the composite
 
@@ -1014,6 +1016,86 @@ defined on [Measuring quality](guide/metrics.md#what-each-metric-sees).
 the pair to the length it shares and passes it on, so their numbers are those
 packages' numbers.
 
+## kudio and librosa
+
+The resampling, the short-time transform and its inverse, the mel filters, the
+mel spectrogram and MFCC, cutting at silence, pYIN and the time stretch follow
+librosa[^librosa], and kudio computes them itself, on numpy, scipy and soxr. The
+conventions are librosa's, down to how a frame is padded and how a mel filter is
+scaled, and I owe them to its authors; librosa is under the ISC licence. The
+algorithms go back to where they were published: the inverse transform is
+Griffin and Lim's least-squares estimate[^gl84], the mel scale Slaney's[^s98],
+the cepstrum Davis and Mermelstein's[^dm80], the pitch tracker pYIN[^pyin], which
+is built on YIN[^yin], and the time stretch a phase vocoder[^fg66][^ld99].
+
+`tools/validation/against_librosa.py` compares kudio with librosa on the cases of
+`tests/test_against_librosa.py`, made from the same seeds:
+
+| Compared with | Cases | Largest difference |
+|---|---|---|
+| `librosa.resample` and `librosa.load(sr=...)`: 13 pairs of rates, 8 resamplers, 1, 2 and 6 channels, 12 sample types, 5 layouts in memory, 6 kinds of file | 1626 | 0 |
+| `librosa.stft`: 16 geometries, 8 windows, float16, float32 and float64, from one sample to 5001 | 1062 | 0 |
+| `librosa.istft`: 15 geometries, 3 windows, 1 to 40 frames, complex64 and complex128 | 1644 | 0 |
+| the spectrogram functions on top of the two | 128 | 0 |
+| `librosa.filters.mel`: 7 rates, 6 frames, 1 to 256 bands, 4 lowest and 5 highest frequencies | 5880 | 0 |
+| `librosa.mel_frequencies` | 30 | 0 |
+| `librosa.feature.mfcc` and `librosa.feature.melspectrogram`: 8 kinds of clip, 2 precisions, 3 rates | 720 and 192 | 0 |
+| `librosa.effects.trim` and `librosa.effects.split`: 25 clips, 2 precisions, 6 thresholds, 7 frames | 2100 each | 0 |
+| `librosa.pyin`, its whole search: 528 hard signals and 1243 more over hops, frames, ranges, rates and lengths | 1771 | 0 |
+| `librosa.effects.time_stretch`: two seconds of a voice at 8, 16 and 44.1 kHz, 6 rates, the end left out | 18 | 0.47 % of the peak against 0.11, 4.3 parts in a million against 1.0 |
+
+A difference of 0 is to the bit: the same shape, the same type and the same
+bits, a NaN in the same place. Three things differ, each on purpose.
+
+The length of a resampled clip. librosa works it out in floating point,
+`ceil(n * target_sr / orig_sr)`, and from a rate of the 11025 Hz family to 12,
+24, 48, 96 or 192 kHz the product comes out a hair over a whole number: a second
+of 44.1 kHz is 48001 samples at 48 kHz, the last one zero. kudio works it out in
+whole numbers. Of the 182 pairs among 14 rates from 8 to 192 kHz those 25 are
+the ones it moves, at 275 of their 300 lengths that come out whole. The
+table above compares the samples with librosa's extra one left off.
+
+pYIN's search. librosa 1.0 leaves out of the search every move less likely than
+one in ten thousand, `transition_min_prob=1e-4`, unless it is passed `None`.
+kudio searches all of them, as librosa 0.11 does, so the table compares 1.0's
+whole search. Its default voices otherwise in 4 of the 528 hard signals, a sweep
+from 60 to 800 Hz at 22.05 and at 48 kHz in float32 and in float64: frame 111 of
+142 at 22.05 kHz and frames 116, 117 and 121 of 146 at 48 kHz. Where both call a
+frame voiced, the pitch is the same. The frames it voices otherwise grow with
+the hop. Of a minute of a voice with pauses, 16 kHz and 65 to 400 Hz, over white
+noise 60 or 40 dB under the voice:
+
+| Hop (ms) | 5 | 10 | 15 | 20 | 25 | 30 | 40 | 45 | 50 | 60 | 70 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| floor 60 dB down | 0/12001 | 0/6001 | 0/4001 | 0/3001 | 0/2401 | 0/2001 | 1/1501 | 5/1334 | 267/1201 | 63/1001 | 21/858 |
+| floor 40 dB down | 0/12001 | 0/6001 | 0/4001 | 0/3001 | 0/2401 | 0/2001 | 1/1501 | 5/1334 | 267/1201 | 63/1001 | 20/858 |
+
+The time stretch, which is not meant to be librosa's. kudio keeps the phases in
+float64, where librosa 0.11 kept those of float32 audio in float32, and past the
+last frame of the clip it holds the magnitudes and turns the phases on, where
+0.11 fades the end and 1.0 draws the magnitudes on and lets the phases stand. At
+the end, then, the voice differs by up to 0.8 % of the peak from 0.11 and
+1.1 % from 1.0. What the phases do shows over a long clip. A tone at 48 kHz in
+float32, stretched, is measured second by second as the best sine with its
+frequency left free; each cell gives how far that is from the tone at the end, in
+cents, and what it leaves at the end and in its worst second (SINAD):
+
+| Tone, stretched by 1.25 | librosa 0.11.0 | librosa 1.0.1 | kudio |
+|---|---|---|---|
+| 187.3 Hz, 10 s | -0.032 cents; 98.1 / 58.5 dB | 0.000 cents; 99.0 / 93.8 dB | 0.000 cents; 99.1 / 93.8 dB |
+| 3001.7 Hz, 10 s | +0.033 cents; 70.3 / 29.1 dB | 0.000 cents; 121.4 / 113.5 dB | 0.000 cents; 140.5 / 139.3 dB |
+| 187.3 Hz, 300 s | +1.314 cents; 75.1 / 20.1 dB | 0.000 cents; 93.1 / 91.6 dB | 0.000 cents; 93.1 / 91.6 dB |
+| 3001.7 Hz, 300 s | -1.514 cents; 64.4 / 3.9 dB | 0.000 cents; 97.7 / 97.6 dB | 0.000 cents; 117.7 / 117.7 dB |
+| 20640 Hz, 300 s | +0.868 cents; 43.0 / -4.3 dB | 0.000 cents; 68.3 / 68.1 dB | 0.000 cents; 130.6 / 129.4 dB |
+
+librosa 1.0.1 keeps the pitch as well, and what it leaves beside a high tone
+grows over a long clip: 68.3 dB of 20640 Hz after five minutes, where kudio
+leaves 130.6.
+
+Without `--all` one pitch case in nine is compared, the ones the tests take;
+`--long` adds the tones of 60 and 300 s. The numbers here are from librosa 0.11.0
+on Python 3.9.13 and librosa 1.0.1 on Python 3.13.9.
+
 ## Running the scripts
 
 From the top of a checkout:
@@ -1048,8 +1130,9 @@ either is in kudio.
 | `f0eval.py` | the F0 measures | mir_eval | 2 s |
 | `separation.py` | `pit_si_sdr`, `si_sdr_improvement`, `bss_eval` | torchmetrics, mir_eval | 70 s; 3 minutes on newer numpy |
 | `stats.py [--repetitions N]` | `bootstrap_ci`, `paired_ci`, `rate_ci`, `paired_rate_ci`, `permutation_test`, `holm` | scipy | 85 s; 30 s with `--repetitions 500` |
-| `band_limit.py` | the band limit of `audio_report` | soxr, which librosa installs | 2 minutes |
+| `band_limit.py` | the band limit of `audio_report` | nothing | 2 minutes |
 | `report_checks.py` | `tonal_lines`, and the clipping count and sample grid of `audio_report` | nothing | 2 minutes |
+| `against_librosa.py [--all] [--long]` | resampling, the transform and its inverse, mel bands and MFCC, cutting at silence, `f0`, `time_stretch` | librosa | 1 minute with librosa 0.11, 1.5 with 1.0; 6 and 4.5 with `--all --long` |
 
 The numbers on this page come from five environments:
 
@@ -1075,7 +1158,7 @@ The numbers on this page come from five environments:
 
 The times are from a desktop CPU.
 
-## The input rule and the import without librosa
+## The input rule and the import without optional packages
 
 `tests/test_metric_policy.py` holds the
 [input rule](guide/metrics.md#input-a-metric-cannot-score) as two lists of
@@ -1106,22 +1189,31 @@ inf, zero, a negative number, a list or None has to be refused by name. With
 pystoi and mir_eval installed, STOI, ESTOI and SDR at 1e160 of full scale
 have to give nan and one warning that says the pair is too loud.
 
-`tests/test_lightweight.py` starts a fresh Python and puts `None` in
-`sys.modules` for librosa, pesq, pystoi, mir_eval, pandas, matplotlib,
-onnxruntime, PyAudio and sounddevice, which makes importing any of them fail
-the way a missing package does, before it imports kudio. In that process
-every metric module has to import, every metric that needs no optional
-package has to give a finite number with every warning raised as an error,
-`score` has to run every name that needs no package, a file has to be read at
-its own rate, every feature built on librosa, resampling among them, has to
-raise `DependencyError` naming it, `kudio report` has to run,
-and librosa must still be unloaded at the end. The test then computes some of
-the metrics again in its own process, librosa loaded, and they have to be the
-same numbers. `tests/test_package.py` checks that `import kudio` loads none
-of matplotlib, pandas, librosa, scipy.signal, PyWavelets and tqdm. One more
-test puts a numba that refuses to import in front of the real one, and
-`kudio.f0` has to raise `DependencyError` with numba's message and
-`kudio pitch` has to exit with 2 and no traceback.
+`tests/test_lightweight.py` starts a fresh Python and, before it imports kudio,
+puts `None` in `sys.modules` for every optional package, audioread, pesq,
+pystoi, mir_eval, pandas, openpyxl, matplotlib, onnxruntime, PyAudio,
+sounddevice and pyloudnorm, and for librosa and what comes with it, numba,
+scikit-learn and the rest, which the comparison tests may have loaded; importing
+any of them then fails the way a missing package does. In that process, with
+every warning raised as an error, `import kudio` has to load none of them, and
+every module has to import but the plots, which say they need the `viz` extra.
+Every metric that needs no optional package has to give a finite number, and
+`score` has to run every name that needs none. A file has to be read at its own
+rate, every way to resample has to need nothing but soxr, and the spectrograms,
+mel bands, cepstra, cuts at silence, pitch and time stretch have to give a
+number, the same one with soxr blocked as well. `kudio report`, `kudio pitch`
+and `kudio convert` have to run, and nothing blocked may have been loaded at the
+end. The test then computes some of the metrics again in its own process, the
+packages loaded, and they have to be the same numbers. With soxr blocked,
+resampling has to raise `DependencyError` saying to install it, scipy's methods
+apart, and what resamples nothing has to give what it gave with soxr. One more
+test puts a soxr that fails to import in front of the real one: a file read at
+another rate has to be a `DependencyError` with soxr's own message, at its own
+rate it is read, and `kudio convert --rate` exits with 2.
+`tests/test_package.py` checks that `import kudio` loads none of matplotlib,
+pandas, librosa, soxr, scipy.signal, PyWavelets and tqdm, and that nothing in
+kudio, nor what makes the figures of the documentation, imports librosa or
+numba.
 
 [^hl08]: Y. Hu and P. C. Loizou, "Evaluation of objective quality measures for speech enhancement", IEEE Trans. Audio, Speech, Lang. Process. 16(1), pp. 229-238, 2008, doi:10.1109/TASL.2007.911054.
 [^hl06]: Y. Hu and P. C. Loizou, "Evaluation of objective measures for speech enhancement", Proc. Interspeech 2006, doi:10.21437/Interspeech.2006-84.
@@ -1164,3 +1256,11 @@ test puts a numba that refuses to import in front of the real one, and
 [^vkh18a]: S. Van Kuyk, W. B. Kleijn and R. C. Hendriks, "An instrumental intelligibility metric based on information theory", IEEE Signal Process. Lett. 25(1), pp. 115-119, 2018, doi:10.1109/LSP.2017.2774250.
 [^vkh18b]: S. Van Kuyk, W. B. Kleijn and R. C. Hendriks, "An evaluation of intrusive instrumental intelligibility metrics", IEEE/ACM Trans. Audio, Speech, Lang. Process. 26(11), pp. 2153-2166, 2018, doi:10.1109/TASLP.2018.2856374.
 [^ksg04]: A. Kraskov, H. Stögbauer and P. Grassberger, "Estimating mutual information", Phys. Rev. E 69(6), 066138, 2004, doi:10.1103/PhysRevE.69.066138.
+[^librosa]: B. McFee, C. Raffel, D. Liang, D. P. W. Ellis, M. McVicar, E. Battenberg and O. Nieto, "librosa: Audio and music signal analysis in Python", Proc. 14th Python in Science Conference (SciPy 2015), pp. 18-24, doi:10.25080/Majora-7b98e3ed-003. Code: <https://github.com/librosa/librosa>, under the ISC licence.
+[^gl84]: D. W. Griffin and J. S. Lim, "Signal estimation from modified short-time Fourier transform", IEEE Trans. Acoust., Speech, Signal Process. 32(2), pp. 236-243, 1984, doi:10.1109/TASSP.1984.1164317.
+[^s98]: M. Slaney, "Auditory Toolbox, version 2", Technical Report 1998-010, Interval Research Corporation, 1998.
+[^dm80]: S. B. Davis and P. Mermelstein, "Comparison of parametric representations for monosyllabic word recognition in continuously spoken sentences", IEEE Trans. Acoust., Speech, Signal Process. 28(4), pp. 357-366, 1980, doi:10.1109/TASSP.1980.1163420.
+[^yin]: A. de Cheveigné and H. Kawahara, "YIN, a fundamental frequency estimator for speech and music", J. Acoust. Soc. Am. 111(4), pp. 1917-1930, 2002, doi:10.1121/1.1458024.
+[^pyin]: M. Mauch and S. Dixon, "pYIN: A fundamental frequency estimator using probabilistic threshold distributions", Proc. ICASSP 2014, pp. 659-663, doi:10.1109/ICASSP.2014.6853678.
+[^fg66]: J. L. Flanagan and R. M. Golden, "Phase vocoder", Bell System Technical Journal 45(9), pp. 1493-1509, 1966, doi:10.1002/j.1538-7305.1966.tb01706.x.
+[^ld99]: J. Laroche and M. Dolson, "Improved phase vocoder time-scale modification of audio", IEEE Trans. Speech Audio Process. 7(3), pp. 323-332, 1999, doi:10.1109/89.759041.

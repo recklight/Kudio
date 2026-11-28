@@ -820,7 +820,7 @@ PESQ gets the two whole, and a 3 s reference against the 10 s `noisy.wav`,
 a pair of equal length.
 
 `ms` is wall-clock time per run, taken after a warm-up so the first method is
-not charged librosa's one-time compilation. STOI needs `kudio[eval]` and PESQ
+not charged for the imports it is the first to need. STOI needs `kudio[eval]` and PESQ
 `kudio[pesq]` ([Getting started](getting-started.md) says what each extra
 installs); without them the column shows `—` and a warning on standard error
 says what to install. The PESQ column is on kudio's default scale, MOS-LQO:
@@ -1005,8 +1005,8 @@ metric that is not defined at the rate, PESQ at 44.1 kHz say, both with exit 2.
 A file scored at another rate than its reference is not resampled behind your
 back: that utterance gets no score, and the reason says why. `--sr` resamples
 every file to one rate as it is read, nothing is then refused for its rate,
-and the signature names the resampler (`resample:soxr_hq`, with librosa and
-soxr under `pkg`).
+and the signature names the resampler (`resample:soxr_hq`, with soxr under
+`pkg`).
 
 Without `--reference` only the metrics that need no reference can run:
 dnsmos, dnsmos_p808, srmr and wada_snr. When `--metrics` is not given, that is

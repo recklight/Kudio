@@ -194,16 +194,25 @@ def test_a_file_is_not_said_to_be_upsampled_from_its_own_rate():
 
 
 # -- a corrupt clip, said once -------------------------------------------------
-def test_a_corrupt_clip_is_reported_without_a_second_warning():
-    """The report names the bad samples itself; loudness() repeating it as a
-    warning printed the same finding twice on `kudio report`."""
-    import warnings
+def test_a_corrupt_clip_is_reported_with_one_warning_and_said_once_on_the_command_line(
+        tmp_path, capsys):
+    """The report names the bad samples itself, and a warning says how many to
+    whoever reads no report; loudness() repeating it as a warning printed the same
+    finding twice on `kudio report`, which leaves the warning out."""
+    import soundfile as sf
+    from kudio.cli import main
     y = 0.1 * np.random.default_rng(0).standard_normal(16000)
     y[100] = np.nan
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
+    with pytest.warns(UserWarning) as said:
         report = kudio.audio_report(y, 16000)
+    assert [str(w.message) for w in said] == [
+        "audio_report(): 1 of the 16000 samples are not finite (NaN or inf); the peak, RMS "
+        "and loudness are nan, the rest is of the finite frames"]
     assert np.isnan(report.lufs) and report.non_finite_samples == 1
+    sf.write(tmp_path / "bad.wav", y, 16000, subtype="FLOAT")
+    assert main(["report", str(tmp_path / "bad.wav")]) == 1
+    out, err = capsys.readouterr()
+    assert "audio_report()" not in err and "1 samples are not finite (NaN or inf)" in out
 
 
 # -- recordings at a high rate, and sounds that do not pause -------------------

@@ -36,6 +36,7 @@ from typing import Optional
 
 import numpy as np
 
+from kudio._numbers import count
 from kudio._samples import one_channel
 from kudio.core._framing import overlapped
 from kudio.core._policy import sample_rate
@@ -67,8 +68,8 @@ class StreamEnhancer:
     :param noise: ``'mcra'``, ``'initial'`` or ``'minimum'`` — see
         :func:`kudio.make_noise_tracker`. ``'quantile'`` cannot stream.
     :param n_fft: analysis frame; also the latency.
-    :param hop_length: defaults to ``n_fft // 4``. One too long for the window
-        is refused, as :func:`kudio.spectral_enhance` refuses it.
+    :param hop_length: ``n_fft // 4`` when omitted, and when 0. One too long for
+        the window is refused, as :func:`kudio.spectral_enhance` refuses it.
     :param params: method parameters, defaulted from ``METHODS[method]``.
     """
 
@@ -97,17 +98,16 @@ class StreamEnhancer:
         from kudio.enhance.spectral import _check_ranges
         _check_ranges(method, settings)
 
-        self.sr = int(sr)
+        self.sr = sr
         self.method = method
         self.noise = noise
-        self.n_fft = int(n_fft)
-        self.hop_length = int(hop_length or n_fft // 4)
+        self.n_fft = count(n_fft, 'n_fft', 'StreamEnhancer', FeatureError, ' of samples')
+        self.hop_length = max(1, self.n_fft // 4) if not hop_length else \
+            count(hop_length, 'hop_length', 'StreamEnhancer', FeatureError, ' of samples')
         self.settings = settings
         self._noise_kwargs = dict(noise_kwargs or {})
         self._g_min = 10.0 ** (settings.get('gain_floor_db', -25.0) / 20.0)
 
-        if self.hop_length < 1:
-            raise FeatureError(f"StreamEnhancer(): hop_length must be >= 1, got {hop_length}")
         self._window = _get_window(window, self.n_fft)
         _check_overlap(overlapped(self._window ** 2, self.hop_length), self.n_fft,
                        self.hop_length, 'StreamEnhancer')
@@ -172,6 +172,9 @@ class StreamEnhancer:
         hop-sized pieces. Concatenate what comes back and call :meth:`flush`
         at the end; sample *i* of that concatenation lines up with sample *i*
         of the input.
+
+        :raises FeatureError: for a block that is not mono, or holds NaN or inf.
+            The stream is as it was before it.
         """
         block = np.asarray(one_channel(block, 'StreamEnhancer.process', FeatureError),
                            dtype=np.float64)
@@ -179,6 +182,11 @@ class StreamEnhancer:
             # flattened, a stereo block is one interleaved signal twice as long
             raise FeatureError(f"StreamEnhancer takes mono blocks, got shape "
                                f"{block.shape}")
+        bad = int(np.count_nonzero(~np.isfinite(block)))
+        if bad:
+            # in the noise estimate it would be NaN for good
+            raise FeatureError(f"StreamEnhancer.process() got {bad} sample(s) that are not finite "
+                               f"(NaN or inf); repair the block first, or feed zeros in its place")
         self._input = np.concatenate([self._input, block])
         self._samples_in += len(block)
 

@@ -110,7 +110,7 @@ def signal(y, label: str, name: Optional[str]) -> np.ndarray:
         raise ValueError(f"{who}{label} has shape {y.shape}, more than one "
                          f"channel, and the metrics take mono signals; score "
                          f"the channels one at a time, or mix down first")
-    y = np.asarray(as_float(y), dtype=np.float64).reshape(-1)
+    y = np.asarray(as_float(y, held=False), dtype=np.float64).reshape(-1)
     bad = int(np.count_nonzero(~np.isfinite(y)))
     if bad:
         raise ValueError(f"{who}{label} has {bad} sample(s) that are not finite "

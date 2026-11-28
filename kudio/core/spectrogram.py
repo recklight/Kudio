@@ -27,8 +27,8 @@ before it exists, which is :attr:`~SpectrogramStream.latency_seconds`.
 
 **Values are dBFS** on a linear axis. Amplitude is normalised by the window,
 so a full-scale sine reads 0 dB whatever the frame size and window are. A mel
-axis sums bins through librosa's area-normalised filters, so there the number
-is band power in dB, not dBFS: a full-scale sine reads about -18 dB at 1 kHz. The number on screen
+axis sums bins through filters of area 1, so there the number is band power in
+dB, not dBFS: a full-scale sine reads about -18 dB at 1 kHz. The number on screen
 then means the same thing after someone changes ``n_fft`` -- which it does not
 if the scaling is left to the FFT.
 """
@@ -39,8 +39,9 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
-from kudio import _optional
-from kudio._samples import one_channel
+from kudio._numbers import count, real, whole
+from kudio._samples import finite, one_channel
+from kudio.core import _mel
 from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
@@ -59,7 +60,8 @@ class SpectrogramStream:
 
     :param sr: sample rate of the audio that will be pushed.
     :param n_fft: analysis frame, in samples. Also the latency.
-    :param hop_length: samples between columns; defaults to ``n_fft // 4``.
+    :param hop_length: samples between columns; ``n_fft // 4`` when omitted. One
+        longer than *n_fft* leaves samples out between columns.
     :param window: any window name :func:`scipy.signal.get_window` accepts.
     :param seconds: how much history to keep on screen. Rounded to a whole
         number of columns, at least one.
@@ -71,8 +73,9 @@ class SpectrogramStream:
         one. Speech at 16 kHz spends most of its energy in the bottom eighth
         of a linear axis; 64 mel bands spend about a third of the picture
         below 1 kHz.
-    :param fmin: lowest mel band, ignored when *n_mels* is 0.
-    :param fmax: highest mel band; Nyquist when omitted.
+    :param fmin: where the lowest mel band starts, ignored when *n_mels* is 0.
+    :param fmax: where the highest one ends; Nyquist when omitted.
+    :raises FeatureError: for a setting that is not a number, or out of its range.
     """
 
     def __init__(self, sr: int, *, n_fft: int = 512,
@@ -80,28 +83,37 @@ class SpectrogramStream:
                  seconds: float = 3.0, top_db: float = 80.0, ref: float = 1.0,
                  n_mels: int = 0, fmin: float = 0.0,
                  fmax: Optional[float] = None):
-        sr = sample_rate(sr, 'SpectrogramStream', FeatureError)
+        where = 'SpectrogramStream'
+        sr = sample_rate(sr, where, FeatureError)
+        n_fft = count(n_fft, 'n_fft', where, FeatureError, ' of samples')
         if n_fft < 2:
-            raise FeatureError(f"n_fft must be >= 2, got {n_fft}")
-        hop = max(1, int(n_fft) // 4) if hop_length is None else int(hop_length)
-        if hop < 1:
-            raise FeatureError(f"hop_length must be >= 1, got {hop_length}")
-        if seconds <= 0:
-            raise FeatureError(f"seconds must be positive, got {seconds}")
-        if top_db <= 0:
-            raise FeatureError(f"top_db must be positive, got {top_db}")
-        if ref <= 0:
-            raise FeatureError(f"ref must be positive, got {ref}")
+            raise FeatureError(f"{where}(): n_fft must be >= 2, got {n_fft}")
+        hop = max(1, n_fft // 4) if hop_length is None else \
+            count(hop_length, 'hop_length', where, FeatureError, ' of samples')
+        for name, value in (('seconds', seconds), ('top_db', top_db), ('ref', ref)):
+            number = real(value)
+            if number is None or number <= 0:
+                raise FeatureError(f"{where}(): {name} must be positive, a finite number, got "
+                                   f"{value!r}")
 
-        self.sr = int(sr)
-        self.n_fft = int(n_fft)
+        self.sr = sr
+        self.n_fft = n_fft
         self.hop_length = hop
         self.window = window
         self.top_db = float(top_db)
         self.ref = float(ref)
-        self.n_mels = int(n_mels or 0)
-        self.fmin = float(fmin)
-        self.fmax = float(fmax) if fmax is not None else self.sr / 2.0
+        # 0 and None are a linear axis
+        bands = 0 if n_mels is None else whole(n_mels)
+        if bands is None or bands < 0:
+            raise FeatureError(f"{where}(): n_mels is a whole number of mel bands, or 0 for a "
+                               f"linear axis, got {n_mels!r}")
+        self.n_mels = bands
+        if self.n_mels:
+            from kudio.core.feature import _limits
+            self.fmin, self.fmax = _limits(fmin, fmax, self.sr, where)
+        else:
+            self.fmin = float(fmin)
+            self.fmax = float(fmax) if fmax is not None else self.sr / 2.0
 
         self._window = _get_window(window, self.n_fft)
         wsum = float(np.sum(self._window)) or 1.0
@@ -117,15 +129,9 @@ class SpectrogramStream:
 
         self._mel_fb = None
         if self.n_mels:
-            librosa = _optional.librosa()
-            self._mel_fb = np.asarray(librosa.filters.mel(
-                sr=self.sr, n_fft=self.n_fft, n_mels=self.n_mels,
-                fmin=self.fmin, fmax=self.fmax), dtype=np.float64)
-            # the band centres: mel_frequencies(n_mels + 2) spans fmin to
-            # fmax, and the filters sit on its inner points
-            self._freqs = np.asarray(librosa.mel_frequencies(
-                n_mels=self.n_mels + 2, fmin=self.fmin, fmax=self.fmax)[1:-1],
-                dtype=np.float64)
+            self._mel_fb = _mel.filters(self.sr, self.n_fft, self.n_mels, self.fmin, self.fmax,
+                                        where).astype(np.float64)
+            self._freqs = _mel.centres(self.n_mels, self.fmin, self.fmax)
         else:
             self._freqs = np.fft.rfftfreq(self.n_fft, 1.0 / self.sr)
 
@@ -197,6 +203,7 @@ class SpectrogramStream:
         self._write = 0
         self._filled = 0
         self._pending = np.zeros(0, dtype=np.float64)
+        self._skip = 0
         self._frames = 0
 
     def push(self, block: np.ndarray) -> np.ndarray:
@@ -214,6 +221,8 @@ class SpectrogramStream:
             block did not complete a frame. More than :attr:`n_columns` of them
             when the block was longer than the window -- all are returned, only
             the last :attr:`n_columns` are kept.
+        :raises FeatureError: for a block that is not mono, or holds NaN or inf.
+            The window is as it was before it.
         """
         block = one_channel(block, 'SpectrogramStream.push', FeatureError)
         if block.ndim > 1:
@@ -221,13 +230,19 @@ class SpectrogramStream:
                 f"SpectrogramStream takes mono audio, got shape {block.shape}. "
                 f"Mix down first (y.mean(axis=1)) -- flattening interleaved "
                 f"channels would analyse a signal that does not exist.")
+        block = finite(block, 'SpectrogramStream.push', FeatureError)
         block = block.astype(np.float64, copy=False).reshape(-1)
-        if block.size:
-            self._pending = np.concatenate([self._pending, block])
+        # a hop longer than the frame: what lies between two columns and had not
+        # arrived with the first of them
+        between = min(self._skip, block.size)
+        self._skip -= between
+        if block.size > between:
+            self._pending = np.concatenate([self._pending, block[between:]])
 
         columns = []
         while len(self._pending) >= self.n_fft:
             columns.append(self._column(self._pending[:self.n_fft]))
+            self._skip = max(0, self.hop_length - len(self._pending))
             self._pending = self._pending[self.hop_length:]
         if not columns:
             return np.zeros((0, self.n_bins), dtype=np.float32)

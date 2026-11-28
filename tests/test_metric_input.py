@@ -16,6 +16,7 @@ and through kudio.score:
 """
 from __future__ import annotations
 
+import functools
 import importlib.util
 import math
 import warnings
@@ -104,6 +105,13 @@ def _quiet(name, *args, **kwargs):
     return value, [str(w.message) for w in caught]
 
 
+@functools.lru_cache(maxsize=None)
+def _vector(name):
+    """``_quiet(name, *_pair(name))``, the score every other way of giving the pair is held
+    to: worked out once a measure, not once a case."""
+    return _quiet(name, *_pair(name))
+
+
 ALL = list(PAIRED) + list(SINGLE)
 
 
@@ -112,7 +120,7 @@ ALL = list(PAIRED) + list(SINGLE)
 def test_one_channel_as_a_column_or_a_row_scores_as_the_vector(name, shape):
     shaped = (lambda y: y[:, None]) if shape == 'column' else (lambda y: y[None, :])
     ref, deg = _pair(name)
-    vector, said = _quiet(name, ref, deg)
+    vector, said = _vector(name)
     assert said == []
     value, said = _quiet(name, shaped(ref), shaped(deg))
     assert said == []
@@ -252,7 +260,7 @@ def test_a_rate_that_is_not_one_positive_number_is_refused_by_name(name, case):
                          ids=['0-d array', 'numpy int', 'numpy float', 'float'])
 def test_a_rate_given_another_way_scores_as_the_int(name, sr):
     ref, deg = _pair(name)
-    assert _same(_run(name, ref, deg, sr), _run(name, ref, deg, SR))
+    assert _same(_run(name, ref, deg, sr), _vector(name)[0])
 
 
 def test_score_passes_the_rate_on_as_it_was_given():

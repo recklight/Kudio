@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from kudio._samples import layout_known
+from kudio.exceptions import KudioError
 
 log = logging.getLogger("kudio.cli")
 
@@ -333,8 +334,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     line rather than as a traceback (``-v`` shows the traceback)."""
     _replace_what_stdout_cannot_write()          # before --help prints
     args = build_parser().parse_args(argv)
-    # kudio's loggers only: DEBUG on the root logger let numba's compiler
-    # write about 400 lines into a single `kudio -v pitch`
+    # kudio's loggers only: DEBUG on the root logger is that of every package
+    # a command imports
     logger = logging.getLogger("kudio")
     if _HANDLER not in logger.handlers:
         logger.addHandler(_HANDLER)
@@ -346,9 +347,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             with layout_known():                 # a command reads files
                 return _run(args)
-        # the tuple is built when something is raised, not before the command
-        # runs, so a command that never touches librosa does not import it
-        except _refusals() as e:
+        except (KudioError, ValueError, OSError) as e:
             if args.verbose:
                 raise
             print(f"kudio {args.command}: {e}", file=sys.stderr)
@@ -364,20 +363,6 @@ def _replace_what_stdout_cannot_write() -> None:
     encoding = (getattr(sys.stdout, 'encoding', None) or '').lower().replace('-', '')
     if not encoding.startswith('utf8') and hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(errors='replace')
-
-
-def _refusals() -> tuple:
-    """What main() reports as one line rather than a traceback. librosa's own
-    refusals are not ValueErrors, and a corrupt file reaching one printed a
-    traceback with the exit code of a finding. A LibrosaError can only have
-    been raised by a librosa that is already imported, so it is looked up
-    there rather than imported."""
-    from kudio.exceptions import KudioError
-    refusals = (KudioError, ValueError, OSError)
-    librosa_errors = sys.modules.get('librosa.util.exceptions')
-    if librosa_errors is not None:
-        refusals += (librosa_errors.LibrosaError,)
-    return refusals
 
 
 def _show_warning(message, category, filename, lineno, file=None, line=None):
@@ -463,7 +448,10 @@ def _run(args) -> int:
 
     elif args.command == "report":
         y, sr = kudio.file_load(args.file, sr=None, mono=True)
-        report = kudio.audio_report(y, sr)
+        with warnings.catch_warnings():
+            # the report lists the samples that are not finite itself, first
+            warnings.filterwarnings("ignore", message=r"audio_report\(\): \d+ of the")
+            report = kudio.audio_report(y, sr)
         print(report)
         problems = report.problems()
         if not problems:
@@ -683,7 +671,7 @@ def _run(args) -> int:
             kwargs['fmin'] = args.fmin
         if args.fmax is not None:
             kwargs['fmax'] = args.fmax
-        if args.hop:
+        if args.hop is not None:
             kwargs['hop_length'] = args.hop
         track = kudio.f0(y, sr, **kwargs)
         print(track)

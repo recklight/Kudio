@@ -15,16 +15,15 @@ import struct
 import time
 import warnings
 from dataclasses import dataclass
-from multiprocessing import Pool
 from pathlib import Path, PurePath
 from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import soundfile as sf
 
-from kudio import _optional
+from kudio._numbers import flag, within
 from kudio._progress import tqdm
-from kudio._samples import as_float, channels_last, layout_known, refuse_64_bit
+from kudio._samples import as_float, channels_last, layout_known, real_samples
 from kudio.core._policy import warn
 from kudio.exceptions import AudioIOError, DependencyError
 
@@ -54,6 +53,7 @@ def check_path(path: PathLike, exist_ok: bool = False, sep: str = '') -> str:
     """Return ``path`` if it is free (or ``exist_ok``), otherwise an incremented
     variant, e.g. ``runs/exp`` -> ``runs/exp2``, ``runs/exp3`` ...
     """
+    exist_ok = flag(exist_ok, 'exist_ok', 'check_path', ValueError)
     path = Path(path)
     if exist_ok or not path.exists():
         return str(path)
@@ -127,6 +127,7 @@ def check_file(file_dir: PathLike, rename: bool = True, sep: str = '') -> str:
     taken as a folder even before it exists: ``Path`` drops the trailing
     slash, so ``"newdir/"`` would otherwise come back as ``newdir.wav``.
     """
+    rename = flag(rename, 'rename', 'check_file', ValueError)
     spelled = str(file_dir)
     file_dir = Path(file_dir)
     if file_dir.is_dir() or spelled.endswith(('/', '\\')):
@@ -157,9 +158,15 @@ def check_input(input: Any) -> Tuple[List[Path], List[Any]]:
     collects the same files on Windows as on Linux, where a plain
     ``rglob("*.wav")`` would not. A ``.txt`` list is read as UTF-8 (a BOM is
     fine), and relative paths in it resolve against the working directory.
+
+    :raises ValueError: for an array, whose truth numpy will not say; the names
+        in one go as a list.
     """
     right_list: List[Path] = []
     wrong_list: List[Any] = []
+    if isinstance(input, np.ndarray):
+        raise ValueError(f"this takes a path, or a list of them, and got an array of shape "
+                         f"{input.shape}; for the names in one, pass it as a list")
     if isinstance(input, (list, tuple)):
         for item in input:
             r, w = check_input(item)
@@ -334,7 +341,7 @@ def _reason(error: BaseException, path: PathLike) -> str:
 # What libsndfile leaves -- AAC in m4a, mp4, 3gp or on its own, WebM, AMR, WMA,
 # ALAC -- goes through audioread, which runs ffmpeg or, on a Mac, Core Audio. It
 # is imported here and not at the top: a machine that reads WAV needs neither,
-# and librosa 1.0 no longer brings it along.
+# and neither comes with kudio.
 
 def _decoders(refused: str) -> list:
     """What audioread can decode with on this machine."""
@@ -351,7 +358,8 @@ def _decoders(refused: str) -> list:
     except ImportError as e:
         if isinstance(e, ModuleNotFoundError) and e.name == 'audioread':
             raise _Unread(f"{refused}. Such a file is decoded with audioread and ffmpeg, "
-                          f"and audioread is not installed: pip install audioread") from e
+                          f"and audioread is not installed. Install it with: "
+                          f"pip install \"kudio[compressed]\"") from e
         raise _Unread(f"{refused}. Such a file is decoded with audioread, which cannot be "
                       f"imported: {e}") from e
     raise _Unread(f"{refused}. Such a file is decoded with ffmpeg, and audioread found "
@@ -558,8 +566,8 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
               ) -> Tuple[np.ndarray, int]:
     """Load a wave file; returns ``(waveform float32, sample_rate)``.
 
-    ``sr=None`` keeps the file's native sample rate. Another *sr* resamples,
-    which takes librosa; a file already at *sr* comes back as it is.
+    ``sr=None`` keeps the file's native sample rate. Another *sr* resamples, as
+    :func:`resample` does; a file already at *sr* comes back as it is.
 
     The file is read with soundfile. What soundfile does not read -- m4a, mp4,
     aac, webm, 3gp, amr -- is decoded to 16 bits with audioread and ffmpeg,
@@ -581,6 +589,7 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
         it cannot be read, or it holds NaN or inf and would have to be
         resampled.
     """
+    mono = flag(mono, 'mono', 'file_load', ValueError)
     sr = _check_rate(sr, optional=True)
     try:
         y, rate = _read_native(wav_dir, rewind=sr is None)
@@ -601,11 +610,17 @@ def file_load(wav_dir: PathLike, sr: Optional[int] = None, mono: bool = True
             y = resample(y, rate, sr)
         return np.ascontiguousarray(y, dtype=np.float32), sr
     except DependencyError:
-        # a missing librosa is not a file that cannot be read
+        # a missing soxr is not a file that cannot be read
         raise
     except Exception as e:
         raise AudioIOError(f"Could not load audio file: {wav_dir} "
                            f"({_reason(e, wav_dir)})") from e
+
+
+#: what *res_type* can name: soxr's five settings, and scipy's Fourier and
+#: polyphase resamplers
+_RES_TYPES = ('soxr_vhq', 'soxr_hq', 'soxr_mq', 'soxr_lq', 'soxr_qq',
+              'fft', 'scipy', 'polyphase')
 
 
 def resample(y: np.ndarray, orig_sr: float, target_sr: float,
@@ -626,24 +641,40 @@ def resample(y: np.ndarray, orig_sr: float, target_sr: float,
     :param orig_sr: the rate *y* is at. It need not be whole, unlike a file's:
         22254.5 Hz is a rate an array can be at.
     :param target_sr: the rate to take it to, the same.
+    :param res_type: ``'soxr_hq'`` and the other settings of soxr, ``soxr_vhq``,
+        ``soxr_mq``, ``soxr_lq`` and ``soxr_qq``, from the longest filter to the
+        shortest; or scipy's: ``'polyphase'``, for whole rates, is
+        :func:`scipy.signal.resample_poly`, and ``'fft'``, also called
+        ``'scipy'``, is :func:`scipy.signal.resample`, which takes the clip for
+        one period of a signal that repeats.
     :raises ValueError: for a rate that is not a positive number, 64-bit
-        integers, or an array that is channels first.
+        integers, an array that is channels first, samples that are not finite,
+        or a *res_type* there is not.
     """
     orig_sr = _check_rate(orig_sr, 'orig_sr', whole=False)
     target_sr = _check_rate(target_sr, 'target_sr', whole=False)
-    y = channels_last(refuse_64_bit(y, 'resample'), 'resample')
+    if not isinstance(res_type, str) or res_type not in _RES_TYPES:
+        raise ValueError(f"resample(): res_type has to be one of {', '.join(_RES_TYPES)}, "
+                         f"got {res_type!r}")
+    if res_type == 'polyphase' and not (isinstance(orig_sr, int) and isinstance(target_sr, int)):
+        raise ValueError(f"resample(): res_type='polyphase' takes whole rates, got {orig_sr} "
+                         f"and {target_sr}")
+    y = channels_last(real_samples(y, 'resample'), 'resample', clip=False)
+    # frames of no channel are as much no clip as a number: (0, 2) is a clip of none
+    if y.ndim not in (1, 2) or (y.ndim == 2 and len(y) > 1 and not y.shape[1]):
+        raise ValueError(f"resample(): expected (frames,) or (frames, channels), got shape "
+                         f"{y.shape}")
     if orig_sr == target_sr or y.size == 0:
         return y
-    if y.ndim > 2:
-        raise ValueError(f"expected (frames,) or (frames, channels), got shape {y.shape}")
-    librosa = _optional.librosa()
     limits = np.iinfo(y.dtype) if np.issubdtype(y.dtype, np.integer) else None
     middle = (int(limits.max) + 1) / 2 if limits is not None and limits.min == 0 else 0
-    x = y.astype(np.float64) - middle if middle else y
-    # librosa resamples its last axis by default, which on a channels-last
-    # array is the channel axis: a (16000, 2) clip came back (16000, 1)
-    out = librosa.resample(x.astype(np.float32), orig_sr=orig_sr,
-                           target_sr=target_sr, res_type=res_type, axis=0)
+    with np.errstate(over='ignore'):                    # counted below
+        x = (y.astype(np.float64) - middle if middle else y).astype(np.float32)
+    bad = _count_non_finite(x)
+    if bad:
+        raise ValueError(f"resample(): {bad} of {x.size} sample(s) are not finite in float32, "
+                         f"which it works in (NaN, inf or past 3.4e38); repair the clip first")
+    out = _at_rate(x, orig_sr, target_sr, res_type)
     if limits is None:
         return out.astype(y.dtype, copy=False)
     # in float64: the largest int32 is not a float32, and 2**31 cast back to
@@ -652,10 +683,48 @@ def resample(y: np.ndarray, orig_sr: float, target_sr: float,
                    limits.min, limits.max).astype(y.dtype)
 
 
+def _soxr():
+    """The soxr module, or DependencyError saying why there is none.
+
+    It comes with kudio. Where it has no wheel -- Windows on ARM, Alpine -- and
+    was not built, or was built for another numpy, everything that resamples
+    nothing works without it.
+    """
+    try:
+        import soxr
+    except ImportError as e:
+        missing = isinstance(e, ModuleNotFoundError) and e.name == 'soxr'
+        raise DependencyError('soxr', failed=None if missing else str(e)) from e
+    return soxr
+
+
 def _resampled_length(n: int, orig_sr: float, target_sr: float) -> int:
-    """How many frames :func:`resample` makes of *n*. librosa pads or cuts what
-    the resampler gives to this."""
-    return n if orig_sr == target_sr else int(np.ceil(n * (float(target_sr) / orig_sr)))
+    """How many frames :func:`resample` makes of *n*: ``n * target_sr / orig_sr``,
+    up to a whole number."""
+    if float(orig_sr).is_integer() and float(target_sr).is_integer():
+        # in whole numbers: 147 * (48000 / 44100) is 160.00000000000003, and a
+        # second of 44.1 kHz would come out as 48001 samples
+        return -(-n * int(target_sr) // int(orig_sr))
+    return int(np.ceil(n * (float(target_sr) / orig_sr)))
+
+
+def _at_rate(x: np.ndarray, orig_sr: float, target_sr: float, res_type: str) -> np.ndarray:
+    """*x*, floating point and ``(frames,)`` or ``(frames, channels)``, at
+    *target_sr*, in the same type."""
+    n = _resampled_length(len(x), orig_sr, target_sr)
+    if res_type == 'polyphase':
+        from scipy.signal import resample_poly
+        common = math.gcd(orig_sr, target_sr)
+        out = resample_poly(x, target_sr // common, orig_sr // common, axis=0)
+    elif res_type in ('fft', 'scipy'):
+        from scipy.signal import resample as resample_fft
+        out = resample_fft(x, n, axis=0)
+    else:
+        out = _soxr().resample(np.ascontiguousarray(x), orig_sr, target_sr, quality=res_type)
+    # soxr rounds the length, and of one or two samples may give back none
+    if len(out) < n:
+        out = np.pad(out, [(0, n - len(out))] + [(0, 0)] * (out.ndim - 1))
+    return np.asarray(out[:n], dtype=x.dtype)
 
 
 @dataclass(frozen=True)
@@ -707,21 +776,28 @@ def audio_info(source: Union[PathLike, np.ndarray], sr: Optional[int] = None,
     A WAV that ends before its header says is described as the shorter
     recording it holds, with a warning. That takes no samples either.
 
-    An array needs its *sr* passed in — a waveform does not carry one — and is
-    read **channels last**, matching :func:`file_load`. A row ``(1, n)`` is one
-    channel.
+    An array, or a list of samples, needs its *sr* passed in — a waveform does
+    not carry one — and is read **channels last**, matching :func:`file_load`. A
+    row ``(1, n)`` is one channel.
 
     :raises ValueError: for an array without *sr*, or with one that is not a
         positive whole rate, and for an array that is channels first or holds
         64-bit integers.
+    :raises TypeError: for None.
     :raises AudioIOError: when there is no such file, it is a folder or empty,
         or its header cannot be read.
     """
-    if isinstance(source, np.ndarray):
+    peak = flag(peak, 'peak', 'audio_info', ValueError)
+    if source is None:
+        raise TypeError("audio_info() takes a path or an array of samples, got None")
+    if not isinstance(source, (str, os.PathLike)):        # samples, or a number of them
         if sr is None:
             raise ValueError("audio_info(array) needs sr=")
         sr = _check_rate(sr)
-        y = channels_last(refuse_64_bit(source, 'audio_info'), 'audio_info')
+        y = channels_last(real_samples(source, 'audio_info'), 'audio_info')
+        if y.ndim not in (1, 2):
+            raise ValueError(f"audio_info() takes (frames,) or (frames, channels), got shape "
+                             f"{y.shape}")
         frames = int(y.shape[0]) if y.size else 0
         channels = 1 if y.ndim == 1 else int(y.shape[1])
         top: Optional[float] = None
@@ -836,15 +912,24 @@ def load_waves(wave: Any, use_pool: bool = False, std_len: bool = False, core_: 
     Returns a list of ``(np.ndarray, int)``. With ``std_len=True`` returns
     ``(waves_2d, sr, min_len)`` where every waveform is truncated to the
     shortest length (all files must share one sample rate).
+
+    *use_pool* reads more than 300 files in *core_* processes, 31 at most on
+    Windows before Python 3.13.
+
+    :raises AudioIOError: when one of the processes of *use_pool* dies, besides
+        what :func:`file_load` raises.
     """
+    use_pool = flag(use_pool, 'use_pool', 'load_waves', ValueError)
+    std_len = flag(std_len, 'std_len', 'load_waves', ValueError)
     waves, skipped = check_input(wave)
     for item in skipped:
         log.warning("Skipped, not an existing .wav file: %s", item)
     if std_len and not waves:
         raise AudioIOError(f"no audio files found in {wave!r}")
     if use_pool and len(waves) > 300:
-        with Pool(core_) as pool:
-            result = list(tqdm(pool.imap(file_load, map(str, waves)),
+        from kudio._workers import Workers
+        with Workers(core_, 'load_waves()', AudioIOError) as pool:
+            result = list(tqdm(pool.imap(file_load, [str(w) for w in waves]),
                                total=len(waves), desc="[kudio] Loading audios (pool)"))
     else:
         result = load_wave(waves)
@@ -859,6 +944,19 @@ def load_waves(wave: Any, use_pool: bool = False, std_len: bool = False, core_: 
         return w2d, srs.pop(), min_len
 
     return result
+
+
+def _check_subtype(subtype: Any, where: str) -> str:
+    """*subtype*, unless a WAV file has no such. soundfile's names, in any case."""
+    import soundfile as sf
+    try:
+        known = isinstance(subtype, str) and sf.check_format('WAV', subtype)
+    except (TypeError, ValueError):
+        known = False
+    if not known:
+        raise ValueError(f"{where}(): subtype is one of what a WAV file holds, "
+                         f"{', '.join(sorted(sf.available_subtypes('WAV')))}; got {subtype!r}")
+    return subtype
 
 
 def _is_fixed_point(subtype: str) -> bool:
@@ -1003,7 +1101,7 @@ def save_wave(path: PathLike, wave: np.ndarray, sr: int,
     """
     sr = _check_rate(sr)
     d_sample = _check_rate(d_sample, 'd_sample', optional=True)
-    wave = channels_last(refuse_64_bit(wave, 'save_wave'), 'save_wave')
+    wave = channels_last(real_samples(wave, 'save_wave'), 'save_wave', clip=False)
     if wave.ndim not in (1, 2) or (wave.ndim == 2 and not 1 <= wave.shape[1] <= 1024):
         raise ValueError(f"save_wave() writes (frames,) or (frames, channels) with 1 to "
                          f"1024 channels, got shape {wave.shape}")
@@ -1078,11 +1176,14 @@ def copy_waves(path: PathLike, wave_: Any) -> List[Path]:
     :func:`check_input` accepts -- a file, a folder, a ``.txt`` list, or a list
     of those. Files land flat in *path*; a name already taken there gets a free
     one (:func:`check_file`), so two talkers' ``sx133.wav`` both arrive.
+
+    :raises ValueError: when *path* is a file, or is called ``.wav`` and is no
+        folder: the two arguments the other way round.
     """
     path = Path(path)
-    if path.suffix:
-        log.warning("Destination is not a directory: %s", path)
-        return []
+    if path.is_file() or (path.suffix.lower() == '.wav' and not path.is_dir()):
+        raise ValueError(f"copy_waves(): the folder to copy to comes first, and {path} is "
+                         f"{'a file' if path.is_file() else 'no folder'}")
     path.mkdir(exist_ok=True, parents=True)
 
     files, skipped = check_input(wave_)
@@ -1143,16 +1244,25 @@ def convert_folder(src: Any, dst: PathLike, *,
     :param progress: optional ``callback(done, total, path)``.
     :param on_error: ``'collect'`` (default) records the failure and carries on;
         ``'raise'`` stops at the first one. A missing package
-        (:class:`~kudio.exceptions.DependencyError`, librosa for *sr* or
-        *trim_db*) is raised either way: it would fail every file the same way.
+        (:class:`~kudio.exceptions.DependencyError`, soxr for *sr*) is raised
+        either way: it would fail every file the same way.
     :param root: the folder the output layout is measured from. Every input
         has to be inside it.
     :raises ValueError: before the first file is read, for an *sr* that is not
-        a positive whole rate, for *peak* and *lufs* together, or for an
-        unknown *on_error*. Met file by file it would fail every file the same
-        way.
+        a positive whole rate, a *subtype* a WAV file does not hold, a *trim_db*
+        or *peak* that is not a finite number above 0, a *lufs* that is not a
+        finite number, *peak* and *lufs* together, or an unknown *on_error*. Met
+        file by file it would fail every file the same way.
     """
+    mono = flag(mono, 'mono', 'convert_folder', ValueError)
+    overwrite = flag(overwrite, 'overwrite', 'convert_folder', ValueError)
     sr = _check_rate(sr, optional=True)
+    _check_subtype(subtype, 'convert_folder')
+    for name, value, span in (('trim_db', trim_db, dict(above=0, of=' of dB')),
+                              ('peak', peak, dict(above=0)),
+                              ('lufs', lufs, dict(of=' of LUFS'))):
+        if value is not None:
+            within(value, name, 'convert_folder', ValueError, **span)
     if peak is not None and lufs is not None:
         raise ValueError("pass peak= or lufs=, not both")
     if on_error not in ('collect', 'raise'):

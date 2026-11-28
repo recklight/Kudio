@@ -151,7 +151,6 @@ def test_the_output_that_fails_is_named(folder):
 @pytest.mark.parametrize("clean_sr", [16000, 22050])
 def test_the_packets_are_those_of_the_file_that_is_written(folder, clean_sr, target_sr):
     """As long as that is at the rate it is written at."""
-    pytest.importorskip("librosa")
     _put(folder.clean, _tone(30001, clean_sr), clean_sr)
     out, sr = folder.out / "a_x_0dB.wav", target_sr or clean_sr
     # 7.3 ms is a whole number of samples at none of them
@@ -212,7 +211,6 @@ def test_half_of_the_packets_can_always_be_lost_in_runs():
                                           (16000, 44100), (48000, 11025), (22050, 7),
                                           (16000, 16000), (384000, 8000)])
 def test_the_length_of_a_resampled_clip_is_known(orig, target):
-    pytest.importorskip("librosa")
     for n in [*range(1, 40), 999, 1000, 1001, 4410]:
         assert len(kudio.resample(np.zeros(n, np.float32), orig, target)) \
             == _resampled_length(n, orig, target)
@@ -295,12 +293,9 @@ def test_extra_mode_looks_at_all_of_it_before_it_mixes_any(folder, monkeypatch):
         folder.build().syn_extra_mode(folder.root / "n", (5,), seed=0, is_pool=False)
     (folder.root / "c" / "bad.wav").unlink()
 
-    def missing():
-        raise kudio.DependencyError('librosa')
-
-    monkeypatch.setattr(kudio._optional, "librosa", missing)
+    monkeypatch.setitem(sys.modules, 'soxr', None)
     _put(folder.clean, _tone(3200, 8000), 8000)
-    with folder.refused(kudio.DependencyError, match="librosa"):
+    with folder.refused(kudio.DependencyError, match="soxr"):
         folder.build().syn_extra_mode(folder.root / "n", (5,), seed=0, is_pool=False)
 
 
@@ -316,7 +311,6 @@ def test_an_input_that_is_gone_empties_nothing(folder, attribute):
 
 def test_a_clip_that_one_sample_is_left_of_empties_nothing(folder):
     """0.15 s at 1 Hz is one sample."""
-    pytest.importorskip("librosa")
     syx = folder.build()
     with folder.refused(kudio.SynthesisError, match="a single sample long at 1 Hz"):
         syx.syn(seed=0, target_sr=1)
@@ -398,7 +392,6 @@ def test_a_rate_the_subtype_is_not_written_at_empties_nothing(folder, monkeypatc
             raise sf.LibsndfileError(25)
         return real(path, wave, sr, **kwargs)
 
-    pytest.importorskip("librosa")
     _put(folder.root / "c" / "b.wav", _tone(2000, 8000), 8000)
     real = sf.write
     monkeypatch.setattr(sf, "write", write)
@@ -411,7 +404,6 @@ def test_a_rate_the_subtype_is_not_written_at_empties_nothing(folder, monkeypatc
 
 
 def test_a_rate_no_header_holds_empties_nothing(folder):
-    pytest.importorskip("librosa")
     with folder.refused(kudio.AudioIOError, match="Could not write audio file"):
         folder.build().syn(seed=0, target_sr=10 ** 12)
 
@@ -622,10 +614,10 @@ def test_a_link_in_the_folder_is_deleted_and_not_what_it_points_to(folder):
 def test_a_pool_that_does_not_start_empties_nothing(folder, monkeypatch):
     """A daemon may not have children, and a script without its ``__main__``
     never hears from them."""
-    def pool(n):
+    def workers(*args):
         raise AssertionError("daemonic processes are not allowed to have children")
 
-    monkeypatch.setattr(synth, "Pool", pool)
+    monkeypatch.setattr(synth, "Workers", workers)
     syx = folder.build(snr_ratio=[0.5 * k for k in range(210)])     # it takes 200
     with folder.refused(AssertionError):
         syx.syn(mode='inc', seed=0, is_pool=True)
@@ -752,7 +744,6 @@ def _case(k, pool):
 
 @pytest.mark.parametrize("block", range(8))
 def test_no_call_that_raises_touches_the_folder(pool, tmp_path, block):
-    pytest.importorskip("librosa")
     raised = ran = 0
     for k in range(block, CASES, 8):
         extra, case, (clean, noise, background) = _case(k, pool)

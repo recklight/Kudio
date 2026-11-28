@@ -98,7 +98,7 @@ file name reads as the start of the suffix, and a room adds `_rt300ms`.
 
     - the header and the length of every input it reads;
     - every room at the rate of its file, `target_sr=`, the SNRs, the seed, and
-      librosa if a file has to be resampled;
+      soxr if a file has to be resampled;
     - the link at every rate and, if it loses more than half of its packets in
       runs, the packets of every output, by its own length and seed;
     - a sample written at every rate and one under the longest names, in a

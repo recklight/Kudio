@@ -172,3 +172,46 @@ def test_samples_under_no_window_cannot_be_rebuilt(sine, hop):
     with pytest.raises(FeatureError, match=f"with hop_length={hop} some samples are under no part"):
         stft.synthesise(stft.analyse(sine), length=len(sine))
     assert len(stft.forward(sine)) == stft.n_frames(len(sine)), "a feature need not be invertible"
+
+
+@pytest.mark.parametrize("length", [-1, 2.5, float('nan'), True, '100'], ids=repr)
+def test_a_length_to_rebuild_is_a_number_of_samples(sine, length):
+    from kudio.exceptions import FeatureError
+    stft = STFT(sr=SR, n_fft=512, hop_length=128, window='hann')
+    with pytest.raises(FeatureError) as caught:
+        stft.synthesise(stft.analyse(sine), length=length)
+    assert str(caught.value) == (f"STFT.synthesise(): length is a whole number of samples, 0 or "
+                                 f"more, got {length!r}")
+
+
+def test_no_samples_are_no_samples(sine):
+    """0 was taken for a length that was not given, and the clip came back."""
+    stft = STFT(sr=SR, n_fft=512, hop_length=128, window='hann')
+    spec = stft.analyse(sine)
+    assert stft.synthesise(spec, length=0).shape == (0,)
+    assert np.array_equal(stft.synthesise(spec, length=np.float64(100)),
+                          stft.synthesise(spec, length=100))
+    assert len(stft.synthesise(spec)) == 128 * (len(spec) - 1)
+
+
+def test_a_spectrum_with_nan_in_it_is_not_inverted(sine):
+    """One NaN is every sample of the frames it is in, and the next thing to
+    hear of it is whoever writes the file."""
+    from kudio.exceptions import FeatureError
+    stft = STFT(sr=SR, n_fft=512, hop_length=128, window='hann')
+    spec = stft.analyse(sine)
+    spec[7, 3] = np.nan
+    with pytest.raises(FeatureError) as caught:
+        stft.synthesise(spec)
+    assert str(caught.value) == ("STFT.synthesise() got 1 value(s) that are not finite (NaN or "
+                                 "inf)")
+
+
+def test_the_window_can_be_anything_the_transform_takes(sine):
+    """By name with its parameter, or as a Kaiser beta: both are what
+    scipy.signal.get_window takes, and to_dict writes them as they are."""
+    for window in (('kaiser', 8.6), 8.6, 'blackmanharris'):
+        stft = STFT(sr=SR, n_fft=512, hop_length=128, window=window)
+        back = stft.synthesise(stft.analyse(sine), length=len(sine))
+        assert np.max(np.abs(back - sine)[:-128]) < 1e-6
+        assert STFT.from_dict(stft.to_dict()) == stft

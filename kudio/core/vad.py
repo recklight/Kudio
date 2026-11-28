@@ -37,6 +37,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from kudio._numbers import count, flag, real, within
 from kudio._samples import channels_last, one_channel
 from kudio.core._framing import convolve_same, frame_view
 from kudio.core._policy import sample_rate
@@ -133,13 +134,16 @@ def vad(y: np.ndarray, sr: int, *,
     single frame (under 40 ms by default), which is its own floor.
 
     :param threshold_db: how far above the estimated noise floor a frame must
-        sit. Lower it for a very quiet talker, raise it for a noisy room.
+        sit. Lower it for a very quiet talker, raise it for a noisy room. ``-inf``
+        lets every frame through on its level, and ``inf`` none.
     :param flatness_max: spectral flatness above which a loud frame is judged
         to be noise rather than voice. Raise it towards 1.0 to disable that
         test — useful for non-speech audio, where "harmonic" means nothing.
+        ``inf`` disables it as well, and ``-inf`` judges every frame noise.
     :param min_speech: segments shorter than this are dropped (a click, a door).
     :param min_silence: gaps shorter than this do not split a segment; a stop
-        consonant is a real silence in the middle of a word.
+        consonant is a real silence in the middle of a word. ``inf`` splits at
+        no gap: the speech is one segment from the first frame to the last.
     :param pad: seconds added to each end, so the cut misses the consonant.
     :param band: ``(low, high)`` in Hz to judge the frames on, band-passed to
         it. In a recording made at 192 kHz a floor above the speech band can
@@ -150,12 +154,21 @@ def vad(y: np.ndarray, sr: int, *,
         nothing in the clip looks like speech.
 
     :raises FeatureError: on non-mono audio, samples that are not finite, a
-        rate that is not a positive number, or a *band* that is not ``low <
-        high`` with *low* under Nyquist. A clip with NaN or inf in it is
+        rate that is not a positive number, a setting that is not a number, a
+        duration below 0, or a *band* that is not ``low < high`` with *low*
+        under Nyquist. A clip with NaN or inf in it is
         refused, as :func:`kudio.f0` and :func:`kudio.spectral_enhance` refuse
         it, rather than judged with those frames left out.
     """
     sr = sample_rate(sr, 'vad', FeatureError)
+    threshold_db = within(threshold_db, 'threshold_db', 'vad', FeatureError, of=' of dB', inf=True)
+    flatness_max = within(flatness_max, 'flatness_max', 'vad', FeatureError, inf=True)
+    min_speech = within(min_speech, 'min_speech', 'vad', FeatureError, low=0, of=' of seconds')
+    min_silence = within(min_silence, 'min_silence', 'vad', FeatureError, low=0,
+                         of=' of seconds', inf=True)
+    pad = within(pad, 'pad', 'vad', FeatureError, low=0, of=' of seconds')
+    frame = within(frame, 'frame', 'vad', FeatureError, above=0, of=' of seconds')
+    hop = within(hop, 'hop', 'vad', FeatureError, above=0, of=' of seconds')
     y = one_channel(y, 'vad', FeatureError)
     y = np.ascontiguousarray(np.asarray(y, dtype=np.float64).squeeze())
     if y.ndim != 1:
@@ -171,8 +184,11 @@ def vad(y: np.ndarray, sr: int, *,
 
     keep = None
     if band is not None:
-        low, high = (float(v) for v in band)
-        if not 0.0 <= low < high or low >= sr / 2.0:
+        try:
+            low, high = (real(v) for v in band)
+        except (TypeError, ValueError):                    # not two, or not any
+            low = high = None
+        if low is None or high is None or not 0.0 <= low < high or low >= sr / 2.0:
             raise FeatureError(f"vad() needs a band with 0 <= low < high and low under "
                                f"{sr / 2.0:g} Hz, got {band}")
         from kudio.effects.filters import bandpass, highpass, lowpass
@@ -217,7 +233,7 @@ def vad(y: np.ndarray, sr: int, *,
     core = active & (_flatness(frames, keep) < flatness_max)
     # a hissy frame joins only if it is next to one of those. Zero-crossing
     # rate cannot tell an /s/ from a burst of white noise -- position can.
-    reach = max(1, int(round(FRICATIVE_REACH / hop)))
+    reach = int(min(max(1, round(FRICATIVE_REACH / hop)), n_frames))
     near_core = convolve_same(core.astype(np.float64), np.ones(2 * reach + 1)) > 0
     speech = core | (active & (_zcr(frames) > ZCR_MIN) & near_core)
 
@@ -298,20 +314,20 @@ def vad_frames(y: np.ndarray, sr: int, *, hop_length: int = 256,
 
     Other keyword arguments go to :func:`vad`.
     """
-    if hop_length < 1 or n_fft < 1:
-        raise FeatureError(f"hop_length and n_fft must be >= 1, got "
-                           f"{hop_length} and {n_fft}")
+    center = flag(center, 'center', 'vad_frames', FeatureError)
+    hop_length = count(hop_length, 'hop_length', 'vad_frames', FeatureError, ' of samples')
+    n_fft = count(n_fft, 'n_fft', 'vad_frames', FeatureError, ' of samples')
     sr = sample_rate(sr, 'vad_frames', FeatureError)
     spans = vad(y, sr, pad=pad, **kwargs)
     n = np.asarray(y).size                     # vad takes one channel, whichever way up
     if center:
         # the count librosa gives after padding n_fft // 2 each side, which is
         # one frame short of 1 + n // hop for an odd n_fft
-        count = 1 + (n + 2 * (n_fft // 2) - n_fft) // hop_length
-        centres = np.arange(count) * hop_length
+        n_frames = 1 + (n + 2 * (n_fft // 2) - n_fft) // hop_length
+        centres = np.arange(n_frames) * hop_length
     else:
-        count = 1 + (n - n_fft) // hop_length if n >= n_fft else 0
-        centres = np.arange(count) * hop_length + n_fft / 2
+        n_frames = 1 + (n - n_fft) // hop_length if n >= n_fft else 0
+        centres = np.arange(n_frames) * hop_length + n_fft / 2
     seconds = centres / float(sr)
     speech = np.zeros(len(centres), dtype=bool)
     for start, end in spans:

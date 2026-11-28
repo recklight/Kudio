@@ -258,7 +258,7 @@ took 4.4 s with PESQ and STOI, 1.3 s with STOI alone and 1.0 s with neither. A r
 output cannot be scored against the reference, comes back as a row with
 `error` set, its floor and loudness NaN and its scores `None`, so filter those
 out before sorting, as above. The clock starts after a warm-up run, so the first method
-is not charged for librosa's JIT compilation.
+is not charged for the imports it is the first to need.
 
 `delta_snr_db` is the output's SNR minus the untouched input's, both against
 the reference: the number that answers "did this help". It is plain SNR, so a

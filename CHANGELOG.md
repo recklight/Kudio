@@ -4,6 +4,418 @@ All notable changes to **Kudio** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+kudio no longer needs librosa. Resampling, the short-time transform and its
+inverse, mel bands and MFCC, cutting at silence, pYIN, the time stretch and the
+plots are kudio's own, on numpy, scipy and soxr, and give librosa's numbers to
+the bit wherever the arithmetic is the same. Where a result moves, it is listed
+first. A clip, a setting and a flag are read the same way in every function, and
+work shared out among processes no longer waits for ever on one that died.
+
+### Changed — results that move
+
+- `f0` on Python 3.12 and later. librosa 1.0, which pip installs there, leaves
+  out of pYIN's search every move less likely than one in ten thousand, and `f0`
+  had that search. kudio searches all of them, as librosa 0.11 did on Python
+  3.11 and earlier, so every Python now gives what 3.11 gave. At the default hop
+  of 10 ms 4 of 528 hard signals are voiced otherwise, a sweep at 22.05 and at
+  48 kHz in float32 and in float64, in 1 and 3 frames. With a longer hop it
+  happens more often. Of a minute of a voice with pauses in it, 16 kHz and 65 to
+  400 Hz over white noise 60 or 40 dB under the voice, 1.0's search voiced no
+  frame otherwise up to a hop of 30 ms, 1 of 1501 at 40 ms, 5 of 1334 at 45, 267
+  of 1201 at 50, 63 of 1001 at 60 and 21 or 20 of 858 at 70
+  (tools/validation/against_librosa.py).
+- From a rate of the 11025 Hz family (11.025 to 176.4 kHz) to 12, 24, 48, 96 or
+  192 kHz a clip has one sample less for most of the lengths that come out
+  whole: a second of 44.1 kHz is 48000 samples at 48 kHz, and was 48001, the
+  last one zero, or with `res_type='fft'` the whole second drawn out by it. The
+  length is `ceil(n * target_sr / orig_sr)` worked out in whole numbers; in
+  floating point the product comes out a hair over a whole number for those 25
+  pairs. The other 157 pairs of the 14 usual rates are as they were, and so is a
+  rate that is not whole.
+- `time_stretch` and `pitch_shift` give other samples: two seconds of a voice
+  stretched six ways, by up to 0.47 % of the peak against librosa 0.11 and 4.3
+  parts in a million against 1.0, and at the end by up to 0.8 % and 1.1 %. The
+  algorithm is librosa's, a phase vocoder in frames of 2048, and two things
+  about it are not:
+  - The phases are kept in float64, so a long clip keeps its pitch to the end.
+    librosa 0.11, which Python 3.11 and earlier got, kept those of float32 audio
+    in float32 and rounded the frequency of every bin, more coarsely as the clip
+    went on. 3001.7 Hz at 48 kHz stretched by 1.25 came out 0.03 cents sharp
+    after ten seconds and 1.5 cents flat after five minutes, 187.3 Hz 1.3 cents
+    sharp and 20640 Hz 0.9; of the 3001.7 Hz tone 64 dB then lay between it and
+    what was left, and 4 dB in the seconds in which its frequency stepped. It is
+    117 dB throughout now, and no cent off. float64 audio was kept in float64
+    before too.
+  - Past the last frame the magnitudes are held and the phases turn on as they
+    last did. librosa 0.11 faded the end of a clip that was speeded up (a voice
+    1.1 dB down over its last 50 ms at 1.25, noise 0.9 dB), and 1.0 drew the
+    magnitudes on and let the phases stand.
+
+  The length is what it was, `round(n / rate)`.
+- `f0` calls a frame unvoiced where fewer than two periods of `fmin` are in the
+  clip, 493 samples at 16 kHz, and warns, giving the lowest pitch that can be
+  told. Ten samples of anything were 65 Hz, voiced.
+- `res_type` of `resample` takes `soxr_vhq`, `soxr_hq`, `soxr_mq`, `soxr_lq`,
+  `soxr_qq`, `fft`, `scipy` and `polyphase`; any other name is a `ValueError`
+  that lists them, looked at whether or not there is anything to resample. The
+  other names librosa knows took resampy or samplerate, which kudio does not
+  install, and ended in a `ModuleNotFoundError`; so did a misspelt one.
+- `audio_report` of a clip with NaN or inf in it says how many in a warning and
+  measures it as before; code that runs with warnings as errors gets one there.
+  `kudio report` leaves the warning out, since the report lists them first.
+- `loudness_over_time` and `loudness_range` refuse a clip with NaN or inf in it,
+  as the other measurements of a clip do. They gave a curve with a `max` of -inf
+  and a `range_lu` of 0, the readings of silence. `rt60` refuses a response that
+  is all zeros, which gave C50, C80 and DRR of +inf.
+- The plots of `kudio.util.visual` raise `FeatureError`, a `ValueError`, where
+  they raised librosa's `ParameterError`, which is not one; see Changed for what
+  they draw.
+- On Python 3.11 and earlier librosa 0.11 brought audioread, which reads m4a,
+  aac and webm with ffmpeg. It takes `pip install "kudio[compressed]"` there too
+  now, as it took audioread on 3.12 and later. Until then such a file is an
+  `AudioIOError` that says what to install.
+- `signature()` has no librosa under `pkg`, so a signature made with this
+  release is not the one 4.3.0 made, which carries another kudio version anyway.
+
+### Changed
+
+- kudio installs without librosa and what came with it: numba, llvmlite,
+  scikit-learn, joblib, pooch and others. The core is numpy, scipy, soundfile,
+  soxr, PyYAML, tqdm and PyWavelets, 11 packages and 156 MB on Python 3.13 where
+  it was 30 and 317 MB, and 10 and 198 MB on 3.9 where it was 29 and 323. numpy
+  has no ceiling; the one there was is numba's. `import kudio` takes as long as
+  it did, 0.25 s on Python 3.9 and 0.33 on 3.13; the first `f0` takes 0.19 s
+  where it took 1.35, and the first `resample` 8 ms where it took 1.18 s,
+  numba's cache warm (0.23 s against 1.29 and 9 ms against 0.54 s on 3.13).
+- `resample`, and with it `file_load(sr=...)`, `save_wave(d_sample=...)`,
+  `convert_folder(sr=...)`, `Synthesizer`, `score_dataset(sr=...)`, `telephone`
+  and DNSMOS's input, resample with soxr itself. The samples are the same to the
+  bit: 1097 calls at 13 pairs of rates, eight resamplers, twelve sample types
+  and eight kinds of file, against 4.3.0 on librosa 0.11 and on 1.0.1.
+  `signature()` names soxr under `pkg` where a file or DNSMOS's input was
+  resampled.
+- soxr that is there and will not import, one built for another numpy say, is a
+  `DependencyError` that says what it failed on, before `Synthesizer` empties a
+  folder.
+- `resample` refuses samples that are not finite, and an array of no or three
+  dimensions, with a `ValueError` that says how many or which shape. Both were
+  librosa's `ParameterError`, which is neither a `ValueError` nor a
+  `KudioError`.
+- A measure asked for at a rate it is not defined at says to use
+  `kudio.resample(y, sr, 16000)`; it named scipy's `resample_poly` beside it,
+  for machines without librosa.
+- The short-time transform and its inverse are kudio's own:
+  `waveform_to_spectrogram`, `spectrogram_to_waveform` and the functions on
+  files, `STFT`, `denoise_wav2spec` and `denoise_spec2wav`, `wave_slicing`,
+  `spectral_enhance`, `compare_enhancers` and `enhance_folder`. They are
+  librosa's to the bit, 1062 transforms and 1644 inverses over 16 and 15
+  geometries against librosa 0.11 and 1.0.1, and of the 1224 calls 4.3.0
+  answered 1202 are answered the same; the other 22 are among the fixes below.
+  The first call no longer loads numba: 0.41 s instead of 1.2 on Python 3.9,
+  0.64 instead of 1.1 on 3.13. Ten minutes at 48 kHz are turned back from their
+  spectrogram in 964 MB at the peak instead of 1718, and enhanced in 3091
+  instead of 3595.
+- Samples that are not finite, and sizes that are not a whole number of 1 or
+  more, are refused by these functions by name, with a `FeatureError`. A NaN was
+  librosa's `ParameterError`, and to `denoise_wav2spec` a "silent clip"; a bad
+  size was whatever numpy, scipy or librosa made of it, and `win_length=0` a
+  spectrogram of silence. 512.0 is 512.
+- A clip shorter than a frame is transformed with a warning that names the
+  function and points at the line that called it. It was librosa's warning.
+- `StreamEnhancer.process` refuses a block with NaN or inf in it and stays as it
+  was. One NaN got into the noise estimate, and every block after it was NaN
+  until `reset()`. `NoiseTracker.update` and `DecisionDirected.update` take
+  their frame as it comes: checking it there made a frame of `StreamEnhancer`
+  and of `spectral_enhance` 8 % slower, and the two refuse what they are not to
+  be given before it reaches them.
+- Mel bands, MFCC and silence are kudio's own too: `melspectrogram`, `mfcc`,
+  `mfcc_from_files`, `SpectrogramStream(n_mels=...)`, `trim_silence`,
+  `split_on_silence`, `convert_folder(trim_db=...)` and `kudio trim`. They are
+  librosa's to the bit: 5880 sets of filters, 912 spectrograms and cepstra and
+  2100 clips cut two ways, against librosa 0.11 and 1.0.1. Ten minutes at 48 kHz
+  are trimmed in 0.11 s and 258 MB at the peak, 147 of them there before, where
+  it took 1.9 s and 851 MB.
+- A mel band with no FFT bin in it is counted in a warning that names the
+  function and points at the line that called it, with what to do about it, and
+  says so of an `fmax` above half the rate. It was librosa's warning, which did
+  not count, and left out a lowest band that starts at 0 Hz.
+- `SpectrogramStream` with a hop longer than its frame gives the same columns
+  whatever blocks the audio comes in: the samples between two columns were
+  skipped only as far as they had arrived. A block with NaN or inf in it is
+  refused, and the window stays as it was.
+- Pitch is kudio's own: `f0` and `kudio pitch`. The numbers are those of
+  `librosa.pyin` to the bit, 0.11's and 1.0's when 1.0 is asked for its whole
+  search (`transition_min_prob=None`): 528 hard signals, and 1243 more over
+  hops, frames, ranges, rates and lengths. Five minutes at 48 kHz take 3.5 s and
+  186 MB at the peak, 92 of them there before, where they took 39 s and 1430 MB
+  with librosa 0.11 on Python 3.9 (3.1 s and 196 MB against 8.2 s and 1422 MB
+  with 1.0.1 on 3.13). A minute at 16 kHz is 0.82 s, and the first call has no
+  compiling to wait for.
+- `f0` warns about a hop over 24 ms: from there the longer the hop the more of
+  the noise in a pause comes back voiced, since pYIN tells voicing by how little
+  a pitch moves from a frame to the next. Of the noise in a pause, at 65 to 400
+  Hz, 3.2 frames in 100 come back voiced at 24 ms, 5.6 at 25 and more than 40 at
+  50.
+- `f0` takes a rate that is not whole as it is; 16000.9 was read as 16000. A hop
+  in which a pitch could cross the whole range, and `center=False` with a clip
+  shorter than a frame, are a `FeatureError` that says so. They were
+  `librosa.ParameterError`, "Target size (315) must be at least input size
+  (321)". The track of an empty clip is float64 like every other; its arrays
+  were float32.
+- `time_stretch` and `pitch_shift` are kudio's own; what they give is under
+  Changed — results that move. A clip under 512 samples can be stretched and
+  shifted: with librosa 1.0 it came back all NaN from `time_stretch` and was
+  refused by `pitch_shift` as "Audio buffer is not finite everywhere". Under
+  2048 there is a warning, since what is worked on is mostly the zeros around
+  it. float16 and big-endian floats are taken, and an empty clip comes back
+  empty; `time_stretch` made 512 samples of one at 0.5. A rate of 1 and 0
+  semitones are a copy. Five minutes at 48 kHz are stretched by 1.25 in 1.7 s
+  and 211 MB at the peak, 92 of them there before, where it took 3.6 s and 874
+  MB (librosa 0.11, Python 3.9; 1.7 s and 222 MB against 3.0 s and 1550 MB with
+  1.0.1 on 3.13).
+- `reverb` and `add_noise_snr` of an empty clip are an empty clip. They were
+  numpy's "zero-size array to reduction operation".
+- The plots of `kudio.util.visual` need matplotlib and nothing else, and show
+  what they did, with these differences:
+  - A waveform of more than 10000 samples is drawn as strokes from the lowest to
+    the highest of every few samples, where it was a band as high above zero as
+    below: an offset or a lopsided wave is seen for what it is. Zooming in comes
+    to the samples, as before.
+  - Every axis of time goes from 0 to the end of the clip, so the panels of a
+    figure line up.
+  - The curves of `plot_3_features`, `plot_4_features`, `basic_analyze`,
+    `plot_zcr`, `plot_spectral_centroid` and `plot_spectral_rolloff` stand at
+    the times of their frames. They were spread over the clip's whole seconds:
+    of 1.3 s, over 1 s, and the axis ended there too. A clip under a second was
+    shown from -0.05 to 0.05 s, with every curve on 0.
+  - A mel band stands at its own frequency. `librosa.display` put the lowest of
+    40 bands at 0 Hz and the highest at half the rate, where neither has
+    anything.
+  - Ticks of time are right to the place they are written to: 1.05 s was written
+    1.1, and ten seconds before the start 0:50.
+  - What is no sound is refused before a figure is made, and so leaves none
+    open: NaN, inf and a file without a sample are a `FeatureError` naming the
+    plot.
+  - `plot_spectral_centroid`, `plot_spectral_rolloff` and `plot_zcr` take one
+    channel as a list, a row, a column or integers, read on their type's full
+    scale. Integers and a list were refused, `plot_zcr` apart, which took
+    integers for plain numbers; a row of 8000 samples was drawn as 16 lines of
+    one point, a column as one point. Two channels are refused.
+- Work shared out among processes, `map_waves(workers=n)`,
+  `load_waves(use_pool=True)`, `score_dataset(jobs=n)` and
+  `Synthesizer.syn(is_pool=True)`, goes through a pool of kudio's own. A worker
+  that dies, killed for want of memory say, is an error that names the items it
+  had and its exit code, in about a second; `multiprocessing.Pool` started
+  another in its place and waited for the dead one's answer for ever. What comes
+  back, its order, the BLAS threads of each worker and the progress bar are as
+  they were. `concurrent.futures` hung 6 times in 6 on Python 3.9 and 3.10 with
+  items of 1 MB or more, so it is not that. On Windows before Python 3.13 the
+  pool holds 31 processes at most, since waiting on more than 63 handles is a
+  `ValueError` there and each process is two, so `map_waves(workers=70)` runs
+  in 31. `multiprocessing.Pool` had the same limit: with 70 workers on Python
+  3.9 a thread of its own raised that `ValueError`, and `map_waves` worked
+  through its items and did not come back: 200 items took a second, and the
+  call was still waiting 150 seconds later.
+- A clip is read the same way everywhere: masked samples, complex numbers,
+  booleans, text and rows of different lengths are refused by name, by the
+  effects and edits too, which read the numbers under a mask and the real part
+  of a complex one. A clip is `(frames,)` or `(frames, channels)`: a number that
+  is in no array, three axes or more and frames of no channel are refused.
+  `(0,)` and `(0, channels)` are a clip of none, as they were. 16-bit samples in
+  an int32 or uint32 array, which read 96 dB down, are said to be with a warning
+  that names the level and int16.
+- A setting is a number in its range, or refused by the function it was given
+  to, naming it: the thresholds and spans of `vad`, `tonal_lines`,
+  `voiced_segments` and `LoudnessCurve.spans_*`, the room of `rir`, `align`'s
+  bounds, the fades and joins, the filters' order and cutoffs, `random_gain`'s
+  range, `spec_augment`'s masks, the companders' bits, the noise estimators'
+  `noise_kwargs`, the seeds, `lsd`'s frame, `frame_windows`, `stack_context` and
+  `ContextFrames`. The seed of `Synthesizer.syn` is kept to its last digit, and
+  3.0 is 3, as it was. `None` is the default, and 0 is not, where the
+  documentation gives 0 no meaning: `f0(hop_length=0)` and `kudio pitch --hop
+  0`, `rir(seconds=0)`, `desired_length=0`, `desired_samples=0` and
+  `SpectrogramStream(n_mels=False)` are refused and say "None for the default".
+  The 0 of the hop of `spectral_enhance`, `compare_enhancers` and
+  `StreamEnhancer`, `SpectrogramStream(n_mels=0)` and `pitch_shift(n_steps=0)`
+  is kept.
+- A flag is True or False, numpy's too, or a whole number that is 0 or 1;
+  anything else is refused by the function it was given to, naming it. `'no'`, 2
+  and NaN were True. `dnsmos`'s `polyfit` and `personalized`, `signature`'s
+  `aligned`, `cut` and `resampled`, `score_dataset(align=)`, `cer` and
+  `char_errors`'s `spaces`, `c_primary(minimum=)`, `der` and
+  `diarization_errors`'s `skip_overlap` and `mcd(match_gain=)` take True and
+  False only, as they did.
+- `convert_folder` checks its `subtype`, `trim_db`, `peak`, `lufs` and flags,
+  and `enhance_folder` its `subtype`, frame, hop and flags, before the first
+  file: each failed once a file, and the output folder was made for them.
+- `copy_waves` raises when the folder to copy to is a file or ends in `.wav`,
+  the two arguments the other way round; a folder with a dot in its name is a
+  folder.
+- A rate that is not whole is kept: `rt60`, `find_delay`, `audio_report`,
+  `loudness_over_time`, `SpectrogramStream` and `StreamEnhancer` gave 16000.9
+  back as 16000.
+- `wave_separate` gives the columns of a `(frames, channels)` array, and refuses
+  another number of channels than it holds, or interleaved samples that are no
+  whole number of frames. It gave every second frame, and
+  `AudioDataManager.add_new_file(ch=1)` kept a stereo array as one channel.
+- `features2matrix` refuses anything but matrices of one width: two vectors of 5
+  became a matrix of 2 rows with 10 labels. `wave_slicing` takes one channel,
+  `(n, 1)` among them, and refuses two, a clip shorter than a frame and a bad
+  size by name.
+- `mfcc_from_files` refuses a negative length, which cut samples off the end of
+  each file, files that give different numbers of frames, by name, and no files
+  at all. A negative `desired_length` of `waveform_to_spectrogram` is refused;
+  it cut samples off the end. `STFT.synthesise(length=0)` gives no samples,
+  where 0 was read as no length given, and a negative or fractional length and a
+  spectrum with NaN in it are refused.
+
+### Changed — input that is refused
+
+What these took and what it came to. Those that raised before and only say it in
+kudio's own words now are not listed.
+
+- `hop_length=None` of `waveform_to_spectrogram`, `spectrogram_to_waveform` and
+  the functions on files was a quarter of the window, 128 of 512, where the
+  default is 256; of `melspectrogram` a quarter of the frame, where the default
+  is 512. `win_length=0` was a window of nothing and a spectrogram of silence,
+  -31.3 throughout.
+- `n_mels=0` and `n_frames=0` of `melspectrogram` gave an empty array; `power`
+  of NaN or below 0 and `fmax` of NaN, 0 or below 0 gave numbers of no meaning;
+  `SpectrogramStream` took '64' for 64, 2.5 for 2 and NaN for a range.
+- Booleans and complex samples went into most of these as numbers, the imaginary
+  part dropped.
+- `time_stretch(rate=True)` was 1, and inf no samples at all;
+  `pitch_shift(n_steps='2')` was 2 and True 1. `n_steps` goes to 120, ten
+  octaves, either way.
+- NaN, inf, True and text for the settings of `gain`, `normalize`,
+  `normalize_db`, `add_noise_snr` and `reverb`. NaN made an int16 clip all zeros
+  and a float one all NaN. A `delay_ms` of 0 or less was an echo a sample later.
+- One NaN or inf in a clip to `normalize`, `normalize_db`, `reverb` or
+  `add_noise_snr` spread over all of it: with an inf in it the rest of a clip
+  came back normalised to 0. `gain` keeps it to its sample, and refuses to make
+  an integer of it.
+- `f0`: a `hop_length` of 2.5 was 2, of True 1 and of '160' 160; a
+  `frame_length` of 2048.5 was 2048; `fmin=True` was 1 Hz; `hop_length=0` was 10
+  ms.
+- `vad`: `threshold_db`, `flatness_max` or `min_speech` of NaN (no speech, a
+  `speech_ratio` of 0.0, and "no speech detected" from `kudio vad --threshold-db
+  nan`), `min_silence='1'` (taken), `pad=-0.1` (0), `frame=-1` (a frame of 16
+  samples) and `hop=-1` (a hop of one sample); `vad_frames(hop_length=2.5)`
+  (frames that line up with nothing).
+- `tonal_lines`: `min_prominence_db` of NaN, a `resolution_hz` the rate cannot
+  give, 1000 at 16 kHz, and so too few samples for a line (no lines, as of a
+  clip that has none), and `max_lines=-1` (all but one). A clip of 60 samples
+  still answers with no lines, and says it is too short.
+- `PitchTrack.voiced_segments`, `LoudnessCurve.spans_below` and `spans_above`
+  with a NaN (`[]`).
+- `rir(drr_db=nan)` (all NaN) and `rir(seconds=0)` (the default length).
+- One NaN or inf: to `apply_rir`, in the clip or the room (all NaN); to `rt60`
+  (a DRR of +inf); to `schroeder_curve` (NaN up to it); to `find_delay` ("leads
+  by 15999 samples", correlation 0); to `remove_dc`, the filters and
+  `wavelet_low_pass_filter` (all NaN); to `trad_enhance` (NaN from it on); to
+  `mu_law` (inf was 1.0), `a_law` (NaN) and `bit_depth` (-inf was -1.0); to
+  `spectrogram_to_waveform`'s spectrogram (NaN at 16640 of 32000 samples) and
+  `denoise_spec2wav` (all NaN). A log power of -inf is no power and is taken.
+- Complex numbers, whose real part was used: `rt60`, `find_delay`, `loudness`,
+  `true_peak`, `mu_law`, `spectral_enhance`, `save_wave` (written),
+  `estimate_noise_psd` (taken for power), `spectrogram_to_waveform`,
+  `stack_context`, `frame_windows`, `Standardizer.fit` and `spec_augment`
+  (masked with the real part of their mean). `find_delay(None, y)` was an
+  answer.
+- Masked arrays, whose samples under the mask were used: `loudness`,
+  `audio_report` (the peak under the mask), and the effects and edits,
+  `highpass`, `gain`, `trim_silence` and the rest.
+- A number that is in no array: `gain`, `random_gain`, `normalize` and
+  `normalize_db` (a number back), `mu_law`, `a_law`, `bit_depth`, `dropouts` and
+  `apply_channel` (one sample), `vad` and `vad_split` (`[]`), `vad_frames`,
+  `find_delay` (no delay, correlation 0), `tonal_lines`, `audio_report` and
+  `SpectrogramStream.push` (no columns).
+- Three axes: `gain`, `random_gain`, `normalize` and `normalize_db` (the array,
+  scaled), `reverse` and `remove_dc` (along the first axis). Frames of no
+  channel: `gain`, `random_gain`, `normalize`, `normalize_db`, the fades, the
+  filters, `reverse`, `remove_dc` and `resample` (the empty array back),
+  `audio_info` (0 channels), `speech_ratio` (0.0) and `true_peak` (-inf).
+- `true_peak(oversample=2.9)` (2), `lsd(n_fft=512.5)` (512),
+  `highpass(cutoff='80')` (80) and `normalize_lufs(lufs=nan)` (all NaN).
+- `channel_spec`: `band='no'` and `band=(300, 3400)` (both the telephone band);
+  `band` is True, False, None, 0 or 1.
+- `spec_augment(n_freq_masks=-1)` (no masks); `random_gain(db_range=(1.0,))` (+1
+  dB every time).
+- `noise_kwargs`: `bias=-1` of `'minimum'` (the clip back as it was), `ad=5` and
+  `ass=nan` of `'mcra'`, `window=-1` and `n_frames=-3` (answers).
+- `desired_length=0` (all of it) and `SpectrogramStream(n_mels=False)` (a linear
+  axis).
+- `stack_context(context=True)` and
+  `waveform_to_spectrogram(forward_backward=True)` (a frame each side);
+  `forward_backward=False` is no context, as it was.
+- Objects, text and bytes to `stack_context`, `ContextFrames`, `frame_windows`
+  and `Standardizer` (the numbers they hold, or what the text read as).
+- `estimate_noise_psd` of power below 0 (every bin 1e-12), a spectrogram in dB
+  among them (the noise estimate of its numbers).
+- `audio_info` of a 3-D array (4 channels of 4 frames).
+- `Synthesizer.syn`: `seed=1.5` and `seed='1'` (1), `p_silence` of 2 or NaN (no
+  output was noise alone) and `rdn_choice_num=-3` (as not given).
+- A flag that is neither True nor False, nor 0 or 1: `'no'`, `'False'`, 2, -1,
+  NaN, 1.0, None and `[True]` were each True, or False for None, wherever one
+  was taken: `highpass(zero_phase='no')`, `f0(center=2)`, `apply_rir(trim=nan)`,
+  `audio_info(peak='no')`, `lsd(match_gain='no')`, `srmr(fast='no')` and 45
+  more.
+- `convert_folder` with a `subtype` a WAV file does not hold, a `trim_db` or
+  `peak` that is no number above 0, or a `lufs` that is no number, and
+  `enhance_folder` with such a `subtype` (one failure a file, and the folder
+  made).
+
+### Added
+
+- The extra `compressed`, in `all` too: audioread, for what soundfile does not
+  read. ffmpeg is installed by itself.
+- `mel_band_hz(n_mels, sr, *, fmin=0.0, fmax=None)`: the frequency each mel band
+  of `melspectrogram`, `mfcc` or `SpectrogramStream` is centred on, to label an
+  axis with. The feet of the lowest and the highest band are not among them;
+  `librosa.mel_frequencies` gives those too, and is asked for `n_mels + 2`.
+- tools/validation/against_librosa.py, which compares kudio with librosa
+  wherever kudio follows it, and prints a table.
+
+### Fixed
+
+- `dropouts`, `apply_channel` and `Synthesizer(channel=...)` with a `burst` of
+  1e19 packets or more never came back on numpy 1.24, which draws the lowest
+  integer there is for a number no integer holds. Later numpy draws the highest.
+- `Standardizer.transform` and `inverse` of frames of another width are refused
+  (one column was spread over 257, a number came back as 257); `fit` of no rows,
+  of NaN or inf and of complex numbers is refused (fitted, with means of NaN or
+  of the real part).
+- `wave_encode` of float audio at full scale 1 (all zeros), of NaN (0), of
+  floats past 2 and of 64-bit integers past 16 bits (wrapped round). 16-bit
+  numbers in a 32- or 64-bit integer array are their own bytes, and what is
+  between 1 and 2 is held at full scale with a warning.
+- `Synthesizer.syn(is_silence=True, p_silence=1.0)` writes every output as noise
+  alone (none); 0.99 wrote all of them.
+- `KudioConfig.load_config` of an empty file is the defaults, with a warning
+  (`{}`).
+- `denoise_spec2wav` of a clip of one frame ((257,) against (257, 1), 257 frames
+  of sound) and of a spectrogram and phase that do not go together (numpy's
+  broadcast error).
+- `kudio room --rt60 inf` is one line and exit 2 (a traceback and exit 1);
+  `kudio align --max-seconds inf` is no bound (a traceback); `kudio compare
+  --reference` of a file of one sample is the length rule's one line and exit 2
+  (a `TypeError` and its traceback).
+- `trim_silence` of samples whose square float32 does not hold, 1e30, says so
+  (all of it silence, an empty clip).
+- `compare_enhancers` of one sample (a `TypeError`) and of `noises=[]` (an
+  `IndexError`).
+- `stack_context` of no frames is `(0, dim * (2 * context + 1))`, as
+  `ContextFrames` gives (numpy's error).
+- `audio_info` takes a list of samples (a `TypeError` of pathlib's).
+- `plot_PSD` and `plot_power_spectral_density` of NaN or of no samples are a
+  `FeatureError` (empty axes); `WaveVisualizer(subplots=None)` makes as many
+  rows as there are files (no axes, an `AttributeError`), and more files than
+  rows are refused.
+- `AudioDataManager.set_params` takes 1 or 2 channels (6 was 1, and a 6-channel
+  file was saved as one channel six times as long).
+
 ## [4.3.0] - 2026-11-25
 
 ### Changed

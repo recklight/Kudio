@@ -55,7 +55,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from kudio._samples import channels_last, refuse_64_bit
+from kudio._numbers import within
+from kudio._samples import channels_last, finite, real_samples
 from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
@@ -144,19 +145,20 @@ class Alignment:
 def _mono(name: str, y: np.ndarray) -> np.ndarray:
     # the numbers as they are: neither the lag nor a normalised correlation
     # depends on the scale
-    y = channels_last(refuse_64_bit(y, name, FeatureError), name, FeatureError)
+    y = channels_last(real_samples(y, name, FeatureError), name, FeatureError)
     if y.ndim > 1 and y.shape[1:] != (1,):
         raise FeatureError(
             f"{name}() takes mono audio, got shape {y.shape}. Mix down first "
             f"(y.mean(axis=1)) -- which channel led is a question of its own.")
-    return y.astype(np.float64, copy=False).reshape(-1)
+    return finite(y.astype(np.float64, copy=False).reshape(-1), name, FeatureError)
 
 
 def find_delay(ref: np.ndarray, deg: np.ndarray, sr: int, *,
                max_seconds: Optional[float] = None) -> Alignment:
     """Measure how far *deg* sits after *ref*, to the nearest sample.
 
-    :param max_seconds: bound the search to this much delay either way.
+    :param max_seconds: bound the search to this much delay either way; None
+        and ``inf`` do not, and search every lag the two overlap at.
         Worth setting when you know the answer is small: an unbounded search
         over a long file can find a better-correlating match half a minute
         away in something as repetitive as speech, and be perfectly right
@@ -185,9 +187,9 @@ def find_delay(ref: np.ndarray, deg: np.ndarray, sr: int, *,
     lags = correlation_lags(len(b), len(a), mode="full")
 
     if max_seconds is not None:
-        limit = int(round(max_seconds * sr))
-        if limit < 0:
-            raise FeatureError(f"max_seconds must be >= 0, got {max_seconds}")
+        limit = within(max_seconds, 'max_seconds', 'find_delay', FeatureError, low=0,
+                       of=' of seconds', inf=True) * sr
+        limit = round(min(limit, float(len(lags))))
         keep = np.abs(lags) <= limit
         if not keep.any():                     # limit smaller than one sample
             keep = lags == 0
@@ -203,7 +205,7 @@ def find_delay(ref: np.ndarray, deg: np.ndarray, sr: int, *,
     left, right = left[:n], right[:n]
     energy = float(np.sqrt(np.dot(left, left) * np.dot(right, right)))
     correlation = float(np.dot(left, right) / energy) if energy > 0 else 0.0
-    return Alignment(delay=delay, correlation=correlation, sr=int(sr),
+    return Alignment(delay=delay, correlation=correlation, sr=sr,
                      overlap=int(n))
 
 
@@ -226,9 +228,9 @@ def align(ref: np.ndarray, deg: np.ndarray, sr: int, *,
     >>> kudio.si_sdr(a, b)                                 # doctest: +SKIP
     18.4
     """
+    min_correlation = MIN_CORRELATION if min_correlation is None else within(
+        min_correlation, 'min_correlation', 'align', FeatureError)
     found = find_delay(ref, deg, sr, max_seconds=max_seconds)
-    if min_correlation is None:
-        min_correlation = MIN_CORRELATION
     if not found.confident(min_correlation):
         raise FeatureError(
             f"these do not look like the same recording: best correlation "

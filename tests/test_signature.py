@@ -53,7 +53,7 @@ def _function(name):
 def versions(monkeypatch):
     """Fixed back-end versions, so a signature can be written out in full."""
     known = {'pesq': '0.0.4', 'pystoi': '0.4.1', 'mir_eval': '0.8.2',
-             'onnxruntime': '1.19.2', 'librosa': '0.11.0', 'soxr': '1.1.0'}
+             'onnxruntime': '1.19.2', 'soxr': '1.1.0'}
     monkeypatch.setattr(module, '_installed', lambda package: known[package])
 
 
@@ -552,14 +552,14 @@ def test_each_back_end_is_named_and_the_list_is_sorted(versions):
     assert pkg(['csig']) == {'pesq': '0.0.4'}
     assert pkg({'dnsmos_p808': {'session': object()}}) == {'onnxruntime': '1.19.2'}
     assert pkg({'dnsmos_p808': {'session': object()}}, 48000) == \
-        {'librosa': '0.11.0', 'onnxruntime': '1.19.2', 'soxr': '1.1.0'}
+        {'onnxruntime': '1.19.2', 'soxr': '1.1.0'}
     for names in (['snr', 'lsd', 'mcd', 'srmr', 'eer'], ['wada_snr', 'loudness']):
         assert pkg(names) is None
     every = pkg({**_every_metric(), 'dnsmos': {'session': object()},
                  'dnsmos_p808': {'session': object()}})
     assert list(every) == ['mir_eval', 'onnxruntime', 'pesq', 'pystoi']
     resampled = pkg({'stoi': {}, 'sdr': {}, 'dnsmos': {'session': object()}}, 48000)
-    assert list(resampled) == ['librosa', 'mir_eval', 'onnxruntime', 'pystoi', 'soxr']
+    assert list(resampled) == ['mir_eval', 'onnxruntime', 'pystoi', 'soxr']
 
 
 def test_settings_are_written_to_the_last_digit(versions):
@@ -636,7 +636,7 @@ def test_field_names_and_metric_names_do_not_collide():
 
 def test_a_package_is_named_with_its_installed_version_or_missing(monkeypatch):
     from importlib import metadata
-    for package in ('pesq', 'pystoi', 'mir_eval', 'librosa', 'soxr'):
+    for package in ('pesq', 'pystoi', 'mir_eval', 'soxr'):
         try:
             want = metadata.version(package)
         except metadata.PackageNotFoundError:
@@ -657,11 +657,11 @@ def test_a_package_is_named_with_its_installed_version_or_missing(monkeypatch):
         assert module._installed('onnxruntime') == '1.20.0', dist
 
 
-def test_dnsmos_names_the_packages_that_resample_its_input(versions):
+def test_dnsmos_names_the_package_that_resamples_its_input(versions):
     at = {sr: parse_signature(signature({'dnsmos': {'session': object()}}, sr))['pkg']
           for sr in (16000, 48000)}
     assert at[16000] == {'onnxruntime': '1.19.2'}
-    assert at[48000] == {'librosa': '0.11.0', 'onnxruntime': '1.19.2', 'soxr': '1.1.0'}
+    assert at[48000] == {'onnxruntime': '1.19.2', 'soxr': '1.1.0'}
 
 
 def _sha8(data):
@@ -986,11 +986,11 @@ def test_cut_says_how_the_pairs_of_the_whole_run_were_treated():
         signature(['snr'], SR, cut='yes')
 
 
-def test_resampled_names_the_resampler_and_the_packages_behind_it():
+def test_resampled_names_the_resampler_and_the_package_behind_it():
     fields = parse_signature(signature(['snr'], SR, resampled=True))
     assert list(fields)[:4] == ['kudio', 'sr', 'resample', 'pair']
     assert fields['resample'] == 'soxr_hq'
-    assert set(fields['pkg']) == {'librosa', 'soxr'}
+    assert set(fields['pkg']) == {'soxr'}
     assert 'resample' not in parse_signature(signature(['snr'], SR))
     assert parse_signature(signature(['wer'], SR, resampled=True))['sr'] == str(SR)
     with pytest.raises(ValueError, match=r"resampled needs sr"):

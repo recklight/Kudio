@@ -88,6 +88,7 @@ def test_import_is_lightweight():
             "assert 'matplotlib' not in sys.modules, 'matplotlib leaked'; "
             "assert 'pandas' not in sys.modules, 'pandas leaked'; "
             "assert 'librosa' not in sys.modules, 'librosa leaked'; "
+            "assert 'soxr' not in sys.modules, 'soxr leaked'; "
             "assert 'scipy.signal' not in sys.modules, 'scipy.signal leaked'; "
             "assert 'pywt' not in sys.modules, 'pywt leaked'; "
             "assert 'tqdm' not in sys.modules, 'tqdm leaked'")
@@ -134,10 +135,75 @@ def test_every_install_command_for_an_extra_quotes_it():
     assert not bare, bare
 
 
-@pytest.mark.parametrize("args", [('librosa',), ('pesq', 'pesq')])
+def _imports(*folder):
+    """``{package: files}`` of every import under a folder of the project, read from the
+    source: one inside a function no test reaches counts too."""
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    found = {}
+    for path in sorted(root.joinpath(*folder).rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and not node.level:
+                names = [node.module]
+            elif (isinstance(node, ast.Call) and node.args
+                  and getattr(node.func, 'attr', getattr(node.func, 'id', ''))
+                  in ('import_module', '__import__', 'find_spec')):
+                names = [getattr(node.args[0], 'value', None) or '']
+            for name in names:
+                found.setdefault(str(name).split('.')[0], set()).add(path.name)
+    return found
+
+
+#: what kudio imports and by which name pip knows it, and for what: None is always
+DECLARED = {
+    'numpy': ('numpy', None), 'scipy': ('scipy', None), 'soundfile': ('soundfile', None),
+    'soxr': ('soxr', None), 'yaml': ('PyYAML', None), 'tqdm': ('tqdm', None),
+    'pywt': ('PyWavelets', None), 'pyaudio': ('PyAudio', 'audio'),
+    'sounddevice': ('sounddevice', 'audio'), 'mir_eval': ('mir_eval', 'eval'),
+    'pystoi': ('pystoi', 'eval'), 'pesq': ('pesq', 'pesq'),
+    'onnxruntime': ('onnxruntime', 'dnsmos'), 'matplotlib': ('matplotlib', 'viz'),
+    'pandas': ('pandas', 'data'), 'openpyxl': ('openpyxl', 'data'),
+    'audioread': ('audioread', 'compressed'),
+}
+
+
+def test_kudio_imports_what_it_declares_and_declares_what_it_imports():
+    """A package that is there because another one brought it goes when that one
+    goes."""
+    import sys
+
+    if not hasattr(sys, 'stdlib_module_names'):
+        pytest.skip("which modules are Python's own is known from 3.10 on")
+    found = set(_imports("kudio")) - set(sys.stdlib_module_names) - {'kudio', ''}
+    assert found <= set(DECLARED)
+    assert set(DECLARED) - found <= {'openpyxl'}                       # pandas' writer
+    name = re.compile(r'[A-Za-z][\w-]*')
+    core = {name.match(spec).group() for spec in re.findall(r'"([^"]+)"', _core_dependencies())}
+    assert core == {pip for pip, extra in DECLARED.values() if extra is None}
+    extras = _extras()
+    for pip, extra in DECLARED.values():
+        if extra is not None:
+            assert pip in {name.match(spec).group() for spec in extras[extra]}, (pip, extra)
+
+
+@pytest.mark.parametrize("folder", [("kudio",), ("tools", "docs")], ids="/".join)
+def test_librosa_is_not_needed(folder):
+    """Nor anything that came with it. Not by kudio, and not by the figures of the
+    documentation, for which make_figures.py asks for the [viz] extra alone."""
+    found = _imports(*folder)
+    assert len(found) > 5
+    assert not {'librosa', 'numba', 'llvmlite', 'sklearn', 'joblib', 'resampy', 'samplerate',
+                'pooch', 'lazy_loader', 'msgpack', 'decorator'} & set(found)
+
+
+@pytest.mark.parametrize("args", [('soxr',), ('pesq', 'pesq')])
 def test_a_dependency_error_crosses_a_process_boundary_intact(args):
     """A pool worker hands its exception back pickled, and the first call to
-    librosa can happen in a Synthesizer worker."""
+    soxr can happen in a Synthesizer worker."""
     import pickle
 
     from kudio.exceptions import DependencyError
@@ -198,22 +264,6 @@ def _requirement(name):
     raise AssertionError(f"{name} is not a core dependency any more")
 
 
-def _notes_on(spec):
-    """The comment lines that belong to requirement *spec*.
-
-    A pin and the reason for it drift apart silently, so the reason has to be
-    checkable: that means knowing which comment goes with which line. The ones
-    directly above it, plus anything after the # on its own line.
-    """
-    lines = _core_dependencies().splitlines()
-    index = next(i for i, line in enumerate(lines) if spec in line)
-    notes = [lines[index].partition('#')[2]]
-    while index > 0 and lines[index - 1].lstrip().startswith('#'):
-        index -= 1
-        notes.append(lines[index])
-    return '\n'.join(notes)
-
-
 def _extras():
     """``{extra: [requirement, ...]}`` from [project.optional-dependencies]."""
     section = re.search(r'^\[project\.optional-dependencies\]\n(.*?)(?=^\[)',
@@ -246,24 +296,65 @@ def _installed_extras(run):
     return found
 
 
-def test_numpy_is_capped_where_numba_caps_it():
-    """librosa drags numba in, and numba's own numpy bound is the real ceiling.
+def test_no_core_dependency_has_a_ceiling():
+    """A cap set too low is a flat resolver failure for anyone who needs the newer
+    release, and a quiet downgrade for everyone else. The one kudio had, on numpy,
+    was numba's."""
+    for spec in re.findall(r'"([^"]+)"', _core_dependencies()):
+        assert re.fullmatch(r'[A-Za-z]+>=[\d.]+', spec), spec
+    assert _requirement('numpy') == 'numpy>=1.24'
 
-    numpy 2.5 needs 3.12, so a cap set too low does nothing on 3.9-3.11 and
-    then bites on 3.12 and 3.13: a flat resolver failure for anyone who needs
-    the newer numpy, and a quiet downgrade for everyone else.
-    """
-    spec = _requirement('numpy')
-    assert '<2.6' in spec, spec
-    assert '>=1.24' in spec, spec              # scipy/librosa floor, not numba's
 
-    # And the reason has to move with the pin: a comment naming a version
-    # other than the one in force sends the next reader the wrong way.
-    ceiling = re.search(r'<(\d+\.\d+)', spec).group(1)
-    notes = _notes_on(spec)
-    assert ceiling in notes, (
-        f"the numpy pin stops at {ceiling} but its comment does not say so:\n"
-        f"{notes}")
+def test_the_extra_for_compressed_files_is_one_that_imports():
+    """audioread 3.0.1 installs on Python 3.13 and does not import there: aifc is gone."""
+    extras = _extras()
+    assert extras['compressed'] == ["audioread>=3.0", "audioread>=3.1; python_version >= '3.13'"]
+    assert 'compressed' in extras['all'][0]
+    steps = _workflow()['jobs']['compressed']['steps']
+    assert any('compressed' in _installed_extras(step.get('run', '')) for step in steps)
+
+
+def test_librosa_is_there_to_be_measured_against_and_for_nothing_else():
+    extras = _extras()
+    assert 'librosa>=0.11' in extras['check']
+    for name, specs in extras.items():
+        assert name == 'check' or not any('librosa' in spec for spec in specs), name
+
+
+def test_the_oldest_leg_runs_on_the_floors():
+    """Each of them, or a floor is a claim nothing in the project tries."""
+    runs = '\n'.join(step.get('run', '') for step in _workflow()['jobs']['oldest']['steps'])
+    pinned = dict(re.findall(r'"([A-Za-z0-9]+)==([\d.]+)', runs))
+    extras = _extras()
+    for spec in (re.findall(r'"([^"]+)"', _core_dependencies())
+                 + extras['viz'] + extras['data']):
+        name, floor = re.fullmatch(r'([A-Za-z0-9]+)>=([\d.]+)', spec).groups()
+        assert pinned[name].rstrip('.') == floor, (spec, pinned.get(name))
+    assert 'pytest' in runs
+
+
+def test_a_release_waits_for_every_job_that_runs_the_suite():
+    jobs = _workflow()['jobs']
+    for name, job in jobs.items():
+        needs = job.get('needs', [])
+        for other in [needs] if isinstance(needs, str) else needs:
+            assert other in jobs, f"{name} needs {other}, which is no job"
+    suites = {name for name, job in jobs.items()
+              if any('pytest' in step.get('run', '') for step in job.get('steps', []))}
+    assert suites == set(jobs['publish']['needs']) == {'test', 'oldest', 'librosa', 'backends',
+                                                       'compressed'}
+
+
+def test_kudio_is_compared_with_both_librosas():
+    """0.11 is what Python 3.11 and earlier get, 1.0 what 3.12 and later do. Where there
+    is no librosa the comparison skips, so the job has to say it needs one."""
+    job = _workflow()['jobs']['librosa']
+    legs = job['strategy']['matrix']['include']
+    assert {leg['librosa'] for leg in legs} == {'0.11', '1.0'}
+    assert any(leg['os'].startswith('windows') for leg in legs)
+    assert job['env']['KUDIO_REQUIRE_LIBROSA'] == '${{ matrix.librosa }}'
+    # Windows' own shell goes by the last line of a step alone
+    assert job['defaults']['run']['shell'] == 'bash' and job['env']['PYTHONUTF8'] == '1'
 
 
 def test_published_urls_name_a_branch_that_exists():

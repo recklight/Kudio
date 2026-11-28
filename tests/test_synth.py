@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import pathlib
 import re
+import sys
 import warnings
 from pathlib import Path
 
@@ -1253,7 +1254,7 @@ def test_several_rooms_can_come_from_anything_that_gives_them(tmp_path):
     assert syx.rt60Ratio == [0.2, pytest.approx(0.3)]
 
 
-# -- librosa, asked for before anything is deleted -----------------------------
+# -- soxr, asked for before anything is deleted --------------------------------
 
 def _inputs(tmp_path, clean_sr=16000, noise_sr=16000):
     for name, sr in (("clean", clean_sr), ("noise", noise_sr)):
@@ -1264,10 +1265,9 @@ def _inputs(tmp_path, clean_sr=16000, noise_sr=16000):
 
 
 @pytest.fixture
-def no_librosa(monkeypatch):
-    def missing():
-        raise kudio.DependencyError('librosa')
-    monkeypatch.setattr(kudio._optional, "librosa", missing)
+def no_soxr(monkeypatch):
+    """As where it has no wheel and was not built."""
+    monkeypatch.setitem(sys.modules, 'soxr', None)
 
 
 @pytest.mark.parametrize("clean_sr, noise_sr, built, called", [
@@ -1276,14 +1276,14 @@ def no_librosa(monkeypatch):
     (16000, 16000, {'channel': 'telephone'}, {}),
     (16000, 8000, {'rt60': 0.3}, {'target_sr': 8000}),
 ], ids=["a noise at another rate", "another target_sr", "a telephone", "a room"])
-def test_a_run_that_has_to_resample_asks_for_librosa_first(tmp_path, no_librosa, clean_sr,
-                                                           noise_sr, built, called):
+def test_a_run_that_has_to_resample_asks_for_soxr_first(tmp_path, no_soxr, clean_sr,
+                                                        noise_sr, built, called):
     clean, noise = _inputs(tmp_path, clean_sr, noise_sr)
     out = tmp_path / "out"
     out.mkdir()
     (out / "keep.txt").write_text("from an earlier run")
     syx = Synthesizer(clean, noise, out_path=str(out), snr_ratio=0, **built)
-    with pytest.raises(kudio.DependencyError, match="librosa"):
+    with pytest.raises(kudio.DependencyError, match="soxr"):
         syx.syn(seed=0, **called)
     assert [p.name for p in out.iterdir()] == ["keep.txt"]
     assert syx.seed is None
@@ -1292,18 +1292,18 @@ def test_a_run_that_has_to_resample_asks_for_librosa_first(tmp_path, no_librosa,
 @pytest.mark.parametrize("built, called", [
     ({}, {}), ({}, {'target_sr': 16000}), ({'rt60': 0.3, 'channel': 'voip'}, {})],
     ids=["as they are", "the rate they are at", "a room and a link"])
-def test_a_run_that_resamples_nothing_needs_no_librosa(tmp_path, no_librosa, built, called):
+def test_a_run_that_resamples_nothing_needs_no_soxr(tmp_path, no_soxr, built, called):
     syx = Synthesizer(*_inputs(tmp_path), out_path=str(tmp_path / "out"), snr_ratio=0, **built)
     out, *_ = syx.syn(seed=0, **called)[0]
     assert kudio.audio_info(out).sr == 16000
 
 
-def test_extra_mode_asks_for_librosa_first_too(tmp_path, no_librosa):
+def test_extra_mode_asks_for_soxr_first_too(tmp_path, no_soxr):
     clean, noise = _inputs(tmp_path, 16000, 8000)
     out = tmp_path / "out"
     out.mkdir()
     (out / "keep.txt").write_text("from an earlier run")
     syx = Synthesizer(clean, noise, out_path=str(out), snr_ratio=0)
-    with pytest.raises(kudio.DependencyError, match="librosa"):
+    with pytest.raises(kudio.DependencyError, match="soxr"):
         syx.syn_extra_mode(noise, (5,), seed=0, is_pool=False)
     assert [p.name for p in out.iterdir()] == ["keep.txt"]

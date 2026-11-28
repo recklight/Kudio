@@ -18,7 +18,8 @@ from typing import Sequence, Tuple, Union
 
 import numpy as np
 
-from kudio._samples import channels_last, refuse_64_bit, to_float
+from kudio._numbers import count, flag, real
+from kudio._samples import channels_last, finite, real_samples, to_float
 from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
@@ -32,21 +33,21 @@ def _check_cutoff(cutoff: Union[float, Sequence[float]], sr: int,
     nyquist = sr / 2.0
     if btype in ('bandpass', 'bandstop'):
         try:
-            low, high = (float(c) for c in cutoff)  # type: ignore[misc]
+            low, high = (real(c) for c in cutoff)  # type: ignore[misc]
         except (TypeError, ValueError):
             raise FeatureError(
                 f"{btype} needs two cutoffs, got {cutoff!r}") from None
-        if not 0.0 < low < high < nyquist:
+        if low is None or high is None or not 0.0 < low < high < nyquist:
             raise FeatureError(
                 f"{btype} needs 0 < low < high < Nyquist ({nyquist:.1f} Hz), "
-                f"got {low} and {high}")
+                f"got {cutoff!r}")
         return low, high
 
-    value = float(cutoff)  # type: ignore[arg-type]
-    if not 0.0 < value < nyquist:
+    value = real(cutoff)
+    if value is None or not 0.0 < value < nyquist:
         raise FeatureError(
             f"cutoff must be between 0 and Nyquist ({nyquist:.1f} Hz) for "
-            f"sr={sr}, got {value}")
+            f"sr={sr}, got {cutoff!r}")
     return value
 
 
@@ -66,10 +67,10 @@ def band_filter(y: np.ndarray, sr: int, cutoff: Union[float, Sequence[float]],
     near-full-scale int16 square wave through a 2 kHz low-pass had 1194
     samples wrap round to the other sign.
     """
+    zero_phase = flag(zero_phase, 'zero_phase', 'band_filter', FeatureError)
     if btype not in _BTYPES:
         raise FeatureError(f"btype must be one of {_BTYPES}, got {btype!r}")
-    if order < 1:
-        raise FeatureError(f"order must be >= 1, got {order}")
+    order = count(order, 'order', btype, FeatureError)
 
     sr = sample_rate(sr, btype, FeatureError)
     wn = _check_cutoff(cutoff, sr, btype)
@@ -79,6 +80,7 @@ def band_filter(y: np.ndarray, sr: int, cutoff: Union[float, Sequence[float]],
     x, back = to_float(y, btype, FeatureError)
     if y.size == 0:
         return y.copy()
+    finite(np.asarray(x), btype, FeatureError)             # one NaN is all that follows it
 
     # here and not with the module, which `import kudio` loads: scipy.signal
     # takes twice as long to import as the rest of kudio together
@@ -106,6 +108,7 @@ def highpass(y: np.ndarray, sr: int, cutoff: float = 80.0, order: int = 4,
 
     >>> clean = kudio.highpass(y, sr, cutoff=80)
     """
+    zero_phase = flag(zero_phase, 'zero_phase', 'highpass', FeatureError)
     return band_filter(y, sr, cutoff, 'highpass', order, zero_phase)
 
 
@@ -118,16 +121,18 @@ def lowpass(y: np.ndarray, sr: int, cutoff: float = 8000.0, order: int = 4,
     back unchanged (a copy). That is also what the 8 kHz default does to audio
     at 16 kHz and below.
     """
+    zero_phase = flag(zero_phase, 'zero_phase', 'lowpass', FeatureError)
     sr = sample_rate(sr, 'lowpass', FeatureError)
-    if not isinstance(cutoff, (tuple, list)) and cutoff >= sr / 2.0:
-        return channels_last(refuse_64_bit(y, 'lowpass', FeatureError),
-                             'lowpass', FeatureError).copy()
+    if real(cutoff) is not None and real(cutoff) >= sr / 2.0:
+        return finite(channels_last(real_samples(y, 'lowpass', FeatureError),
+                                    'lowpass', FeatureError), 'lowpass', FeatureError).copy()
     return band_filter(y, sr, cutoff, 'lowpass', order, zero_phase)
 
 
 def bandpass(y: np.ndarray, sr: int, low: float = 300.0, high: float = 3400.0,
              order: int = 4, zero_phase: bool = True) -> np.ndarray:
     """Keep only ``low..high`` Hz. The default is the telephone band."""
+    zero_phase = flag(zero_phase, 'zero_phase', 'bandpass', FeatureError)
     return band_filter(y, sr, (low, high), 'bandpass', order, zero_phase)
 
 
@@ -135,4 +140,5 @@ def bandstop(y: np.ndarray, sr: int, low: float = 45.0, high: float = 55.0,
              order: int = 4, zero_phase: bool = True) -> np.ndarray:
     """Remove ``low..high`` Hz. The default straddles 50 Hz mains hum; use
     ``(55, 65)`` where the mains run at 60."""
+    zero_phase = flag(zero_phase, 'zero_phase', 'bandstop', FeatureError)
     return band_filter(y, sr, (low, high), 'bandstop', order, zero_phase)

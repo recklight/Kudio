@@ -359,7 +359,8 @@ ITU-R BS.1770-4 量測響度；[檢查錄音](inspection.md)用一段含一聲�
 
 [`pitch_shift`][kudio.effects.augment.pitch_shift] 把音高移動 `n_steps` 個半音，
 長度不變；[`time_stretch`][kudio.effects.augment.time_stretch] 依 `rate` 改變
-長度（大於 1 是變快），音高不變。兩者都來自 librosa。拿一秒鐘、
+長度（大於 1 是變快），音高不變。兩者用的都是 librosa 的相位聲碼器，相位以 float64
+累加，長的片段音高才不會漂掉。拿一秒鐘、
 [`f0`][kudio.core.pitch.f0] 量出來是 200.5 Hz 的 200 Hz 諧波音來試，
 `n_steps=2` 會在同樣的 16000 個樣本裡得到 225.0 Hz，和升兩個半音的值差不到 0.01 Hz，
 `rate=1.25` 則得到 12800 個樣本，音高仍是 200.5 Hz。

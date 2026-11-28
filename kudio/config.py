@@ -17,6 +17,7 @@ from typing import Any, Optional
 import numpy as np
 import yaml
 
+from kudio._numbers import flag
 from kudio import _textfile
 from kudio._textfile import plain
 
@@ -218,6 +219,7 @@ class KudioConfig(Dict):
         :raises ValueError: for a value YAML has no plain form for. A config
             already at *file* is left as it was.
         """
+        exist_ok = flag(exist_ok, 'exist_ok', 'KudioConfig.write_config', ValueError)
         if Path(file).exists() and not exist_ok:
             log.warning("Config exists, not overwritten: %s", file)
             return False
@@ -249,7 +251,12 @@ class KudioConfig(Dict):
         def _load(f_: Path):
             log.info("Load config -> %s", f_.absolute())
             with open(str(f_.absolute()), encoding="utf-8") as f:
-                return yaml.safe_load(f)
+                found = yaml.safe_load(f)
+            if found is None:
+                warnings.warn(f"{str(f_)!r} is empty; using the defaults", UserWarning,
+                              stacklevel=3)
+                return cls.default_config()
+            return found
 
         _file = Path(cfg_dir)
         if _file.is_file():

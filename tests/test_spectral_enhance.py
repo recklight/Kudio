@@ -282,7 +282,8 @@ def test_compare_reports_a_failure_instead_of_dying(noisy_and_clean, monkeypatch
 
 
 def test_compare_times_every_method_fairly(noisy_and_clean):
-    """Whichever ran first used to absorb librosa's JIT — in a timing table."""
+    """Whichever runs first would absorb the imports all of them need — in a
+    timing table."""
     noisy, _ = noisy_and_clean
     results = kudio.compare_enhancers(noisy, SR, ['wiener', 'logmmse', 'wiener'],
                                       metrics=False)

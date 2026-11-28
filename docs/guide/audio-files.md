@@ -108,8 +108,8 @@ print(y8.shape, y8.dtype, sr8)                    # (28000,) float32 8000
 ```
 
 With the default `sr=None`, [`file_load`][kudio.core.io.file_load] keeps the
-file's own rate. Asked for another, it resamples with librosa's `soxr_hq`
-resampler; a file that is at that rate already comes back as it is. Either way
+file's own rate. Asked for another, it resamples with soxr at its high quality,
+`soxr_hq`; a file that is at that rate already comes back as it is. Either way
 the file is read with soundfile, which opens whatever the installed libsndfile
 opens. `soundfile.available_formats()` lists it, and with soundfile 0.14 that
 includes WAV, FLAC, OGG, MP3, AIFF and NIST SPHERE. m4a, aac and webm are not
@@ -154,16 +154,14 @@ m4a, mp4, aac, webm, 3gp, amr and wma are decoded with
 [ffmpeg](https://ffmpeg.org/) wherever kudio reads a file: in `file_load`,
 `audio_info`, [`play_audio`][kudio.core.stream.play_audio], the
 [`Synthesizer`][kudio.core.synth.Synthesizer] and the command line. Neither
-comes with kudio. ffmpeg has to be on the PATH, and audioread is one package:
+comes with a plain install. ffmpeg has to be on the PATH, and audioread is the
+`compressed` extra:
 
 ```bash
-pip install audioread
+pip install "kudio[compressed]"
 ```
 
-librosa 0.10 and 0.11 install audioread themselves, so on Python 3.11 and
-older it is there already. librosa 1.0, which pip picks on Python 3.12 and
-later, does not. Without one of the two, the `AudioIOError` says which one is
-missing.
+Without one of the two, the `AudioIOError` says which one is missing.
 
 The samples come back as 16 bits hold them, and an encoder pads the last of its
 blocks. 2 s of sound came back as 2.043 s from a bare AAC stream, as 2.020 s

@@ -421,14 +421,16 @@ def test_a_corrupt_clip_is_not_measured_as_silence():
 
 
 def test_the_curve_and_its_range_do_not_read_a_corrupt_clip_as_silence():
+    """They are refused, as the other measurements of a clip are; a curve of it was
+    nan from the NaN on, and its range nan."""
     sr = 16000
     y = _speech_like(sr).copy()
     y[100] = np.nan
-    with pytest.warns(UserWarning, match="not finite"):
-        curve = kudio.loudness_over_time(y, sr, window=kudio.MOMENTARY)
-    assert "unmeasurable" in str(curve)
-    with pytest.warns(UserWarning, match="not finite"):
-        assert np.isnan(kudio.loudness_range(np.tile(y, 3), sr))
+    with pytest.raises(kudio.FeatureError, match=r"^loudness_over_time\(\) got 1 sample\(s\) "
+                                                 r"that are not finite"):
+        kudio.loudness_over_time(y, sr, window=kudio.MOMENTARY)
+    with pytest.raises(kudio.FeatureError, match=r"^loudness_range\(\) got 3 sample\(s\)"):
+        kudio.loudness_range(np.tile(y, 3), sr)
     with pytest.warns(UserWarning):
         with pytest.raises(kudio.FeatureError, match="clip with samples"):
             kudio.match_loudness(y, _speech_like(sr), sr)

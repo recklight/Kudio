@@ -2,26 +2,24 @@
 """Plotting helpers: waveforms, spectrograms, training histories."""
 from __future__ import annotations
 
-import importlib
 import logging
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from kudio import _optional
+from kudio.core.feature import _clip
 from kudio.core.io import copy_waves, file_load
-from kudio.exceptions import DependencyError
+from kudio.exceptions import DependencyError, FeatureError
 
 # Every helper in here draws something, so matplotlib is needed to import the
-# module at all rather than only to call it. librosa is left to the helpers
-# that draw with it, so a missing librosa is reported as librosa and not as
-# the [viz] extra, which does not install it.
+# module at all rather than only to call it.
 try:
     import matplotlib.pyplot as plt
 except ImportError as _e:  # pragma: no cover - exercised only without [viz]
     raise DependencyError('matplotlib', extra='viz') from _e
+
+from kudio.util import _draw  # noqa: E402
 
 __all__ = [
     'Common',
@@ -32,12 +30,19 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
-def _librosa() -> ModuleType:
-    """librosa with its display module loaded, which needs the matplotlib
-    imported above."""
-    librosa = _optional.librosa()
-    importlib.import_module('librosa.display')
-    return librosa
+def _drawable(y, name: str) -> np.ndarray:
+    """*y* as the one channel a plot is of, or a FeatureError: finite, and a sample
+    at the least."""
+    y = _clip(y, name)
+    if not len(y):
+        raise FeatureError(f"{name}(): the clip has no samples")
+    return y
+
+
+def _audio(file, name: str) -> Tuple[np.ndarray, int]:
+    """A file's :func:`_drawable` samples, and their rate."""
+    y, sr = file_load(file)
+    return _drawable(y, name), sr
 
 
 def history_plot(history: Any, metrics: str = 'loss',
@@ -136,27 +141,19 @@ class Common:
                          sub_mfe_fq: int = 48000) -> None:
         """Waveform + two mel spectrograms (full band vs. ``sub_mfe_fq``)."""
         f = Path(f)
-        librosa = _librosa()
-        y, sr = file_load(f)
+        y, sr = _audio(f, 'plot_stft_w_2mfe')
 
         plt.figure(figsize=(12, 10), dpi=200)
 
-        plt.subplot(311)
+        ax = plt.subplot(311)
         plt.title(f.stem)
-        librosa.display.waveshow(y, sr=sr)
+        _draw.waveform(ax, y, sr)
 
-        plt.subplot(312)
-        plt.title(f'Mel Spectrogram {sr}Hz n:{n_mels}')
-        mel_spect = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=n_mels)
-        librosa.display.specshow(librosa.power_to_db(mel_spect, ref=np.max),
-                                 sr=sr, x_axis='time', y_axis='mel', fmax=sr // 2)
-
-        plt.subplot(313)
-        plt.title(f'Mel Spectrogram {sub_mfe_fq}Hz n:{n_mels}')
-        mel_spect = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=n_mels,
-                                                   fmax=sub_mfe_fq)
-        librosa.display.specshow(librosa.power_to_db(mel_spect, ref=np.max),
-                                 sr=sr, x_axis='time', y_axis='mel', fmax=sub_mfe_fq)
+        for place, hertz, fmax in ((312, sr, sr / 2), (313, sub_mfe_fq, sub_mfe_fq)):
+            ax = plt.subplot(place)
+            plt.title(f'Mel Spectrogram {hertz}Hz n:{n_mels}')
+            bands = _draw.mel_level(y, sr, n_mels, fmax, 'plot_stft_w_2mfe')
+            _draw.mel_spectrogram(ax, bands, sr, fmax, len(y) / sr)
 
         plt.tight_layout()
         plt.show()
@@ -174,30 +171,32 @@ class WaveVisualizer(Common):
         self.wave_length = 0
         if subplots is not None:
             self.row_len = subplots
-            self.fig, self.ax = plt.subplots(self.row_len, 2, figsize=(11, 8))
+            self.fig, self.ax = plt.subplots(self.row_len, 2, figsize=(11, 8), squeeze=False)
         else:
-            self.fig = self.plt.figure(figsize=fig_size, dpi=dpi)
+            # as many rows as there are files, when there are
+            self.fig, self.ax = self.plt.figure(figsize=fig_size, dpi=dpi), None
         self.plt.subplots_adjust(wspace=0.3, hspace=0.3)
 
     def plot(self, wave_list: Sequence, title: Optional[Sequence[str]] = None) -> None:
-        librosa = _librosa()
         self.wave_length = len(wave_list)
+        if self.row_len is None and self.wave_length:
+            self.fig.clear()
+            self.ax = self.fig.subplots(self.wave_length, 2, squeeze=False)
+        elif self.row_len is not None and self.wave_length > self.row_len:
+            raise ValueError(f"WaveVisualizer.plot(): {self.wave_length} files do not go into "
+                             f"{self.row_len} row(s); make it with subplots={self.wave_length}")
         log.info("Plotting %d wave(s)", self.wave_length)
         if title is None or len(title) != self.wave_length:
             title = [Path(w).stem for w in wave_list]
 
         for ind, (w, t) in enumerate(zip(wave_list, title)):
+            y, sr = _audio(w, 'WaveVisualizer.plot')
             self.ax[ind][0].set_title(str(t))
-            y, sr = file_load(w)
-            librosa.display.waveshow(y, sr=sr, ax=self.ax[ind][0])
+            _draw.waveform(self.ax[ind][0], y, sr)
 
             self.ax[ind][1].set_title(str(t))
-            DA = librosa.amplitude_to_db(
-                np.abs(librosa.stft(y, n_fft=512, hop_length=256, win_length=512,
-                                    window='hamming')), ref=np.max)
-            librosa.display.specshow(DA, sr=sr, hop_length=256,
-                                     x_axis='time', y_axis='linear',
-                                     cmap='jet', ax=self.ax[ind][1])
+            db = _draw.level(y, 512, 256, 'hamming', who='WaveVisualizer.plot')
+            _draw.linear_spectrogram(self.ax[ind][1], db, sr, 256, len(y) / sr, cmap='jet')
         self.multi_hide_xlabel()
         self.fig.tight_layout()
 
@@ -235,26 +234,22 @@ def _figure_path(save_dir, file, kind: str) -> Path:
 def basic_analyze(file, show: bool = False, save_dir=None) -> None:
     """Waveform / STFT / zero-crossing-rate overview of a file, saved as
     ``<stem>_overview.png`` in the folder *save_dir* when one is given."""
-    librosa = _librosa()
-    x, sr = file_load(file)
+    x, sr = _audio(file, 'basic_analyze')
 
     plt.figure(figsize=(10, 8), dpi=200)
-    plt.subplot(311)
+    ax = plt.subplot(311)
     plt.title(Path(file).stem)
-    librosa.display.waveshow(x, sr=sr)
+    _draw.waveform(ax, x, sr)
 
-    X = librosa.stft(x)
-    Xdb = librosa.amplitude_to_db(abs(X))
-    plt.subplot(312)
+    ax = plt.subplot(312)
     plt.title('STFT')
-    librosa.display.specshow(Xdb, sr=sr, x_axis='time', y_axis='hz', cmap='jet')
+    _draw.linear_spectrogram(ax, _draw.level(x, ref=1.0, who='basic_analyze'), sr, _draw.HOP,
+                             len(x) / sr, cmap='jet')
 
-    plt.subplot(313)
-    plt.title('ZCR')
-    zcrs = librosa.feature.zero_crossing_rate(x + 0.0001)
-    time2 = np.linspace(0, int(len(x) / sr), len(zcrs[0]))
-    plt.plot(time2, zcrs[0])
-    plt.axis([0, int(len(x) / sr), 0, max(zcrs[0])])
+    ax = plt.subplot(313)
+    plot_zcr(ax, x, sr, color=None)
+    ax.set_xlim(0, len(x) / sr)
+    ax.set_ylim(bottom=0)
 
     plt.tight_layout()
 
@@ -268,18 +263,17 @@ def basic_analyze(file, show: bool = False, save_dir=None) -> None:
 def plot_4_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> None:
     """Waveform + spectral centroid/rolloff/ZCR and power spectral density,
     saved as ``<stem>_4_features.png`` in the folder *save_dir*."""
-    librosa = _librosa()
-    x, sr = file_load(file)
+    x, sr = _audio(file, 'plot_4_features')
 
     fig, ax = plt.subplots(2, 1, figsize=(10, 10), dpi=dpi)
 
-    librosa.display.waveshow(x, sr=sr, alpha=0.4, ax=ax[0], label='waveform')
+    _draw.waveform(ax[0], x, sr, alpha=0.4, label='waveform')
     plot_spectral_centroid(ax[0], x, sr, color='r', label='spectral_centroid')
     plot_spectral_rolloff(ax[0], x, sr, color='b', label='spectral_rolloff')
     plot_zcr(ax[0], x, sr, color='g', label='zcr')
     plot_power_spectral_density(ax[1], x, sr)
 
-    ax[0].set_xlim(0, int(len(x) / sr))
+    ax[0].set_xlim(0, len(x) / sr)
     ax[0].grid(which='major', axis='both')
     ax[0].set_title('spectral centroid & spectral rolloff & zcr')
 
@@ -294,17 +288,16 @@ def plot_4_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> 
 def plot_3_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> None:
     """Waveform + spectral centroid/rolloff/ZCR, saved as
     ``<stem>_3_features.png`` in the folder *save_dir*."""
-    librosa = _librosa()
-    x, sr = file_load(file)
+    x, sr = _audio(file, 'plot_3_features')
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
 
-    librosa.display.waveshow(x, sr=sr, alpha=0.4, ax=ax, label='waveform')
+    _draw.waveform(ax, x, sr, alpha=0.4, label='waveform')
     plot_spectral_centroid(ax, x, sr, color='r', label='spectral_centroid')
     plot_spectral_rolloff(ax, x, sr, color='b', label='spectral_rolloff')
     plot_zcr(ax, x, sr, color='g', label='zcr')
 
-    ax.set_xlim(0, int(len(x) / sr))
+    ax.set_xlim(0, len(x) / sr)
     ax.grid(which='major', axis='both')
     ax.set_title('spectral centroid & spectral rolloff & zcr')
 
@@ -319,7 +312,7 @@ def plot_3_features(file, show: bool = False, save_dir=None, dpi: int = 200) -> 
 def plot_PSD(file, show: bool = False, save_dir=None, dpi: int = 200) -> None:
     """Power spectral density of a file, saved as ``<stem>_psd.png`` in the
     folder *save_dir*."""
-    x, sr = file_load(file)
+    x, sr = _audio(file, 'plot_PSD')
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
     plot_power_spectral_density(ax, x, sr)
@@ -342,18 +335,16 @@ def normalize(x, axis: int = 0):
 
 
 def plot_spectral_centroid(ax, y, sr, color='r', label=None) -> None:
-    spectral_centroids = _librosa().feature.spectral_centroid(y=y, sr=sr)[0]
-    t = np.linspace(0, int(len(y) / sr), len(spectral_centroids))
-    ax.plot(t, normalize(spectral_centroids), color=color, label=label)
+    values = _draw.centroid(_drawable(y, 'plot_spectral_centroid'), sr, 'plot_spectral_centroid')
+    ax.plot(_draw.frame_times(len(values), sr), normalize(values), color=color, label=label)
     ax.set_title('Spectral Centroid')
     if label is not None:
         ax.legend()
 
 
 def plot_spectral_rolloff(ax, y, sr, color='r', label=None) -> None:
-    spectral_rolloff = _librosa().feature.spectral_rolloff(y=y, sr=sr)[0]
-    t = np.linspace(0, int(len(y) / sr), len(spectral_rolloff))
-    ax.plot(t, normalize(spectral_rolloff), color=color, label=label)
+    values = _draw.rolloff(_drawable(y, 'plot_spectral_rolloff'), sr, 'plot_spectral_rolloff')
+    ax.plot(_draw.frame_times(len(values), sr), normalize(values), color=color, label=label)
     ax.set_title('Spectral Rolloff')
     if label is not None:
         ax.legend()
@@ -361,7 +352,7 @@ def plot_spectral_rolloff(ax, y, sr, color='r', label=None) -> None:
 
 def plot_power_spectral_density(ax, y, sr, color='b', label=None) -> None:
     from scipy.signal import welch
-    freqs, psd = welch(y, sr, nfft=1024)
+    freqs, psd = welch(_drawable(y, 'plot_power_spectral_density'), sr, nfft=1024)
     ax.semilogx(freqs, psd, color=color, label=label)
     ax.set_title('Power Spectral Density')
     ax.set_xlabel('Frequency[Hz]')
@@ -372,9 +363,9 @@ def plot_power_spectral_density(ax, y, sr, color='b', label=None) -> None:
 
 
 def plot_zcr(ax, y, sr, color='r', label=None) -> None:
+    # a silence of zeros and least bits is on one side
+    values = _draw.crossings(_drawable(y, 'plot_zcr') + 0.0001)
     ax.set_title('ZCR')
-    zcrs = _librosa().feature.zero_crossing_rate(y + 0.0001)
-    time2 = np.linspace(0, int(len(y) / sr), len(zcrs[0]))
-    ax.plot(time2, zcrs[0], color=color, label=label)
+    ax.plot(_draw.frame_times(len(values), sr), values, color=color, label=label)
     if label is not None:
         ax.legend()

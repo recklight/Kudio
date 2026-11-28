@@ -55,11 +55,11 @@ pip install kudio
 pip install "kudio[eval,viz]"    # extras go in brackets, by name
 ```
 
-The core install brings numpy, scipy, librosa, soundfile, PyYAML, tqdm and
+The core install brings numpy, scipy, soundfile, soxr, PyYAML, tqdm and
 PyWavelets, and runs on Python 3.9 or newer. The extras are `[viz]` for
 plotting, `[eval]` for STOI, ESTOI and SDR, `[pesq]` for PESQ, `[dnsmos]` for
-DNSMOS, `[data]` for dataframe and Excel export, and `[audio]` for recording
-and playback. `[all]` installs every one of them except `[pesq]`, which
+DNSMOS, `[data]` for dataframe and Excel export, `[audio]` for recording
+and playback, and `[compressed]` for m4a, aac and webm. `[all]` installs every one of them except `[pesq]`, which
 compiles C code. [Getting started](getting-started.md) lists what each extra
 brings in.
 

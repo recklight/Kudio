@@ -87,6 +87,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from kudio._numbers import flag
 from kudio.core._policy import faint, sample_rate, scored_nan, signal
 
 __all__ = ['srmr']
@@ -197,9 +198,8 @@ def srmr(y: np.ndarray, sr: int, *, fast: bool = False, norm: bool = False,
 
     :param y: mono speech, float or integer; integer audio is read on its
         type's full scale, though the score does not depend on the level.
-    :param sr: 8000 or 16000. Resample anything else first:
-        :func:`kudio.resample`, or ``scipy.signal.resample_poly(y, 16000,
-        sr)`` where librosa is not installed.
+    :param sr: 8000 or 16000. Resample anything else first, with
+        :func:`kudio.resample`.
     :param fast: build the envelopes from a short-time spectrum instead of
         filtering, as the toolbox's fast mode does: each channel's envelope is
         its filter's magnitude response applied to the magnitude spectrum of
@@ -243,13 +243,15 @@ def srmr(y: np.ndarray, sr: int, *, fast: bool = False, norm: bool = False,
         would still score such a clip, from windows that are all partly zero
         padding.
     """
+    fast = flag(fast, 'fast', 'srmr', ValueError)
+    norm = flag(norm, 'norm', 'srmr', ValueError)
+    drop_silence = flag(drop_silence, 'drop_silence', 'srmr', ValueError)
     sr = sample_rate(sr, 'srmr')
     if sr not in _RATES:
         raise ValueError(f"srmr(): defined at 8 and 16 kHz only, not {sr} Hz: its "
                          f"23 bands run from 125 Hz to half the rate, so at "
                          f"another rate it measures something else. Resample "
-                         f"first, with kudio.resample or, without librosa, "
-                         f"scipy.signal.resample_poly(y, 16000, {sr})")
+                         f"first, with kudio.resample(y, {sr}, 16000)")
     y = signal(y, 'y', 'srmr')
     faint('srmr', [('y', y)])
     rate = _FAST_RATE if fast else float(sr)

@@ -24,8 +24,8 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from kudio import _optional
 from kudio._numbers import whole
+from kudio.core import _spectral
 from kudio.core._framing import overlapped
 from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
@@ -75,8 +75,9 @@ class STFT:
     def n_frames(self, n_samples: int) -> int:
         """Frames a waveform of *n_samples* will produce (centred STFT).
 
-        librosa pads ``n_fft // 2`` on each side, so an odd *n_fft* gives one
-        frame fewer than ``n // hop + 1`` whenever *n* is a multiple of the hop.
+        There are ``n_fft // 2`` zeros on each side of it, so an odd *n_fft* gives
+        one frame fewer than ``n // hop + 1`` whenever *n* is a multiple of the
+        hop.
         """
         padded = int(n_samples) + 2 * (self.n_fft // 2)
         return 1 + (padded - self.n_fft) // self.hop_length
@@ -113,13 +114,17 @@ class STFT:
         wrong for anything that has to reconstruct the signal. Enhancement
         multiplies the complex spectrum by a real gain and inverts it, so it
         needs the phase kept — see :func:`kudio.spectral_enhance`.
+
+        :raises FeatureError: for anything but a mono waveform of finite samples.
         """
-        from kudio.core.feature import _mono
-        librosa = _optional.librosa()
-        spec = librosa.stft(np.asarray(_mono(y, "STFT.analyse"), dtype=np.float32),
-                            n_fft=self.n_fft, hop_length=self.hop_length,
-                            win_length=self.win_length, window=self.window)
-        return spec.T                              # (frames, bins), as kudio speaks
+        return self._analyse(y, "STFT.analyse")
+
+    def _analyse(self, y: np.ndarray, where: str) -> np.ndarray:
+        """:meth:`analyse`, under the name of the function it is done for."""
+        from kudio.core.feature import _clip
+        y = np.asarray(_clip(y, where), dtype=np.float32)
+        return _spectral.stft(y, self.n_fft, self.hop_length, self.win_length, self.window,
+                              where).T                # (frames, bins), as kudio speaks
 
     def synthesise(self, spec: np.ndarray,
                    length: Optional[int] = None) -> np.ndarray:
@@ -130,8 +135,9 @@ class STFT:
         training target needs.
 
         :raises FeatureError: for anything but a complex ``(frames, bins)`` of
-            at least one frame, and for a geometry whose hop steps over samples
-            no window covers.
+            at least one frame and finite values, for a geometry whose hop steps
+            over samples no window covers, and for a *length* that is not a whole
+            number of samples.
         """
         spec = np.asarray(spec)
         if spec.ndim != 2 or spec.shape[1] != self.n_bins or not len(spec):
@@ -146,19 +152,24 @@ class STFT:
                                f"samples are under no part of a {self.win_length}-sample "
                                f"{self.window!r} window, so nothing is left to rebuild "
                                f"them from")
-        librosa = _optional.librosa()
-        out = librosa.istft(spec.T, hop_length=self.hop_length,
-                            win_length=self.win_length, window=self.window,
-                            n_fft=self.n_fft, length=length)
+        if length is not None:
+            samples = whole(length)
+            if samples is None or samples < 0:
+                raise FeatureError(f"STFT.synthesise(): length is a whole number of samples, 0 "
+                                   f"or more, got {length!r}")
+            length = samples
+        bad = int(np.count_nonzero(~np.isfinite(spec)))
+        if bad:
+            raise FeatureError(f"STFT.synthesise() got {bad} value(s) that are not finite (NaN "
+                               f"or inf)")
+        out = _spectral.istft(spec.T, self.n_fft, self.hop_length, self.win_length, self.window,
+                              length, "STFT.synthesise")
         return np.asarray(out, dtype=np.float32)
 
     def _window_energy(self) -> np.ndarray:
-        """The window squared, centred in the frame as librosa centres it."""
-        energy = np.zeros(self.n_fft)
-        start = (self.n_fft - self.win_length) // 2
-        energy[start:start + self.win_length] = _optional.librosa().filters.get_window(
-            self.window, self.win_length, fftbins=True) ** 2
-        return energy
+        """The window squared, centred in the frame."""
+        return _spectral._centred(
+            _spectral.window(self.window, self.win_length, "STFT") ** 2, self.n_fft)
 
     def _overlap(self) -> np.ndarray:
         """The window energy over a sample in the middle of a clip, which the

@@ -36,7 +36,8 @@ pySIIB 的範例錄音都沒有收進版本庫。
 | `audio_report` 的 `clipped_samples`、`full_scale_samples` | 沒有可比對的實作；1000 個平滑波峰、409 個削掉的正弦波、一段過載的人聲 | 沒有平滑波峰被算到；推到 1.01 倍以上的正弦波，平台全部完整算到 |
 | `audio_report` 的 `sample_step`、`grid_bits` | 沒有可比對的實作；7 種已知格點和 4 段沒有格點的 | 0 |
 
-下面各節是細節，最後兩節說明怎麼執行這些腳本，以及輸入規則和不載入 librosa 的匯入
+下面各節是細節。[kudio 和 librosa](#kudio-and-librosa) 說明 kudio 在哪些地方照著
+librosa 做、跟得多近；最後兩節說明怎麼執行這些腳本，以及輸入規則和不載入選用套件的匯入
 是怎麼測試的。
 
 ## Hu 與 Loizou 的指標和綜合指標 {#hu-and-loizous-measures-and-the-composite}
@@ -793,6 +794,76 @@ pySIIB 的範例錄音都沒有收進版本庫。
 是 mir_eval 的 BSS Eval。kudio 把兩者裁到共同的長度再傳下去，所以它們的數字就是這些
 套件的數字。
 
+## kudio 和 librosa {#kudio-and-librosa}
+
+重新取樣、短時傅立葉轉換與反轉換、梅爾濾波器、梅爾頻譜與 MFCC、靜音切割、pYIN 和時間
+伸縮，都照著 librosa[^librosa] 的做法，由 kudio 自己在 numpy、scipy 和 soxr 上計算。
+這些慣例，從音框怎麼補邊到梅爾濾波器怎麼縮放，都是 librosa 的，這要謝謝它的作者們；
+librosa 以 ISC 授權釋出。演算法則引用它們最初發表的地方：反轉換是 Griffin 和 Lim 的
+最小平方估計[^gl84]，梅爾刻度是 Slaney 的[^s98]，倒頻譜是 Davis 和 Mermelstein 的[^dm80]，
+音高追蹤是建立在 YIN[^yin] 上的 pYIN[^pyin]，時間伸縮是相位聲碼器[^fg66][^ld99]。
+
+`tools/validation/against_librosa.py` 用 `tests/test_against_librosa.py` 的案例、同樣的
+種子，比對 kudio 和 librosa：
+
+| 對照 | 案例數 | 最大差異 |
+|---|---|---|
+| `librosa.resample` 和 `librosa.load(sr=...)`：13 組取樣率、8 種重新取樣器、1、2、6 聲道、12 種樣本型別、5 種記憶體排列、6 種檔案 | 1626 | 0 |
+| `librosa.stft`：16 種音框與位移、8 種窗、float16、float32 和 float64，從一個樣本到 5001 個 | 1062 | 0 |
+| `librosa.istft`：15 種音框與位移、3 種窗、1 到 40 個音框、complex64 和 complex128 | 1644 | 0 |
+| 建在這兩者上的頻譜圖函式 | 128 | 0 |
+| `librosa.filters.mel`：7 種取樣率、6 種音框、1 到 256 個頻帶、4 種最低和 5 種最高頻率 | 5880 | 0 |
+| `librosa.mel_frequencies` | 30 | 0 |
+| `librosa.feature.mfcc` 和 `librosa.feature.melspectrogram`：8 種片段、2 種精度、3 種取樣率 | 720 和 192 | 0 |
+| `librosa.effects.trim` 和 `librosa.effects.split`：25 個片段、2 種精度、6 種門檻、7 種音框 | 各 2100 | 0 |
+| `librosa.pyin` 的完整搜尋：528 種困難訊號，另外 1243 個涵蓋各種位移、音框、範圍、取樣率和長度 | 1771 | 0 |
+| `librosa.effects.time_stretch`：8、16、44.1 kHz 的兩秒人聲、6 種倍率，結尾不算 | 18 | 對 0.11 是峰值的 0.47 %，對 1.0 是百萬分之 4.3 |
+
+差異 0 指逐位元相同：形狀、型別和每個位元都一樣，NaN 也在同樣的位置。有三件事不同，
+都是刻意的。
+
+重新取樣後的長度。librosa 用浮點數算 `ceil(n * target_sr / orig_sr)`，從 11025 Hz 這一族
+的取樣率轉到 12、24、48、96 或 192 kHz 時，乘積會比整數多一點點：44.1 kHz 的一秒在
+48 kHz 是 48001 個樣本，最後一個是零。kudio 用整數算。8 到 192 kHz 之間 14 種取樣率的
+182 組裡，受影響的就是這 25 組，在它們 300 個剛好是整數的長度中佔 275 個。上表比
+樣本時，把 librosa 多出來的那一個拿掉。
+
+pYIN 的搜尋。librosa 1.0 的搜尋會略過機率低於萬分之一的每一個轉移
+（`transition_min_prob=1e-4`），除非傳入 `None`。kudio 每一個都搜尋，和 librosa 0.11
+一樣，所以上表比的是 1.0 的完整搜尋。
+它的預設在 528 種困難訊號中有 4 種的有聲判斷不同，都是 60 到 800 Hz 的掃頻，
+在 22.05 和 48 kHz、float32 和 float64 各一：22.05 kHz 是 142 幀裡的第 111 幀，
+48 kHz 是 146 幀裡的第 116、117 和 121 幀；兩邊都說有聲的幀，音高完全相同。
+位移越長，有聲判斷不同的音框就越多。一分鐘有停頓的人聲，16 kHz、65 到 400 Hz，
+白雜訊在人聲之下 60 或 40 dB：
+
+| 位移（ms） | 5 | 10 | 15 | 20 | 25 | 30 | 40 | 45 | 50 | 60 | 70 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 雜訊底低 60 dB | 0/12001 | 0/6001 | 0/4001 | 0/3001 | 0/2401 | 0/2001 | 1/1501 | 5/1334 | 267/1201 | 63/1001 | 21/858 |
+| 雜訊底低 40 dB | 0/12001 | 0/6001 | 0/4001 | 0/3001 | 0/2401 | 0/2001 | 1/1501 | 5/1334 | 267/1201 | 63/1001 | 20/858 |
+
+時間伸縮本來就不打算和 librosa 一樣。kudio 的相位以 float64 累加，librosa 0.11 則把
+float32 音訊的相位留在 float32；過了片段最後一個音框之後，kudio 保持振幅、相位照最後的
+速度繼續轉，0.11 會讓結尾淡出，1.0 則把振幅延伸下去、相位停住。所以在結尾，人聲和 0.11
+最多差峰值的 0.8 %，和 1.0 差 1.1 %。相位造成的差別，在長的片段裡看得出來：48 kHz、
+float32 的純音拉長之後，每秒用頻率不固定的最佳正弦波去量，每一格寫的是結尾時離原本的音
+差幾音分，以及它在結尾和最差的那一秒留下多少（SINAD）：
+
+| 純音，拉長為 1.25 倍 | librosa 0.11.0 | librosa 1.0.1 | kudio |
+|---|---|---|---|
+| 187.3 Hz, 10 s | -0.032 音分; 98.1 / 58.5 dB | 0.000 音分; 99.0 / 93.8 dB | 0.000 音分; 99.1 / 93.8 dB |
+| 3001.7 Hz, 10 s | +0.033 音分; 70.3 / 29.1 dB | 0.000 音分; 121.4 / 113.5 dB | 0.000 音分; 140.5 / 139.3 dB |
+| 187.3 Hz, 300 s | +1.314 音分; 75.1 / 20.1 dB | 0.000 音分; 93.1 / 91.6 dB | 0.000 音分; 93.1 / 91.6 dB |
+| 3001.7 Hz, 300 s | -1.514 音分; 64.4 / 3.9 dB | 0.000 音分; 97.7 / 97.6 dB | 0.000 音分; 117.7 / 117.7 dB |
+| 20640 Hz, 300 s | +0.868 音分; 43.0 / -4.3 dB | 0.000 音分; 68.3 / 68.1 dB | 0.000 音分; 130.6 / 129.4 dB |
+
+librosa 1.0.1 的音高也不會漂，但長的片段裡，它在高頻純音旁邊留下的越來越多：五分鐘後的
+20640 Hz 是 68.3 dB，kudio 是 130.6 dB。
+
+不加 `--all` 時，音高只比九分之一的案例，也就是測試取的那些；`--long` 再加上 60 秒和
+300 秒的純音。這裡的數字來自 Python 3.9.13 上
+的 librosa 0.11.0，以及 Python 3.13.9 上的 librosa 1.0.1。
+
 ## 執行這些腳本 {#running-the-scripts}
 
 在 checkout 的最上層執行：
@@ -825,8 +896,9 @@ python tools/validation/quality.py
 | `f0eval.py` | F0 指標 | mir_eval | 2 s |
 | `separation.py` | `pit_si_sdr`、`si_sdr_improvement`、`bss_eval` | torchmetrics、mir_eval | 70 s；較新的 numpy 上 3 分鐘 |
 | `stats.py [--repetitions N]` | `bootstrap_ci`、`paired_ci`、`rate_ci`、`paired_rate_ci`、`permutation_test`、`holm` | scipy | 85 s；`--repetitions 500` 時 30 s |
-| `band_limit.py` | `audio_report` 的頻寬上限 | soxr，安裝 librosa 時就會裝 | 2 分鐘 |
+| `band_limit.py` | `audio_report` 的頻寬上限 | 不需要 | 2 分鐘 |
 | `report_checks.py` | `tonal_lines`，以及 `audio_report` 的削波計數和樣本格點 | 不需要 | 2 分鐘 |
+| `against_librosa.py [--all] [--long]` | 重新取樣、短時傅立葉轉換與反轉換、梅爾頻帶與 MFCC、靜音切割、`f0`、`time_stretch` | librosa | librosa 0.11 約 1 分鐘、1.0 約 1.5 分鐘；加 `--all --long` 是 6 和 4.5 分鐘 |
 
 這一頁的數字來自五個環境：
 
@@ -848,7 +920,7 @@ python tools/validation/quality.py
 
 時間是在一台桌上型電腦的 CPU 上量的。
 
-## 輸入規則和不載入 librosa 的匯入 {#the-input-rule-and-the-import-without-librosa}
+## 輸入規則和不載入選用套件的匯入 {#the-input-rule-and-the-import-without-optional-packages}
 
 `tests/test_metric_policy.py` 把[輸入規則](guide/metrics.md#input-a-metric-cannot-score)
 寫成兩份案例清單。每個格式不對的案例，例如指標沒有定義的取樣率、兩個聲道、NaN 樣本，
@@ -872,18 +944,23 @@ PCM、uint8 和 float32 必須照常評分且沒有警告；複數、布林、�
 和 mir_eval 時，滿刻度 1e160 倍的 STOI、ESTOI 和 SDR，必須得到 nan 和一則說這一對
 太大聲的警告。
 
-`tests/test_lightweight.py` 啟動一個新的 Python，在匯入 kudio 之前，先把 librosa、pesq、
-pystoi、mir_eval、pandas、matplotlib、onnxruntime、PyAudio 和 sounddevice 在
-`sys.modules` 裡設成 `None`，讓匯入其中任何一個都像缺少套件那樣失敗。在那個行程裡，
-每個指標模組都必須能匯入；每個不需要選用套件的指標，在所有警告都當成錯誤的情況下，
-都必須給出有限的數字；`score` 必須能跑每個不需要套件的名稱；檔案必須能以它本身的取樣率
-讀進來；每個建立在 librosa 上的功能，包括重新取樣，都必須引發寫出 librosa 的
-`DependencyError`；`kudio report` 必須能跑；而且到最後
-librosa 仍然沒有被載入。接著測試在自己的行程裡、librosa 已經載入的情況下，再算一次
-其中幾個指標，數字必須相同。`tests/test_package.py` 檢查 `import kudio` 不會載入
-matplotlib、pandas、librosa、scipy.signal、PyWavelets 和 tqdm 中的任何一個。另一個
-測試在真正的 numba 前面放一個無法匯入的 numba，這時 `kudio.f0` 必須引發帶有 numba
-訊息的 `DependencyError`，`kudio pitch` 必須以 2 結束且不印出 traceback。
+`tests/test_lightweight.py` 啟動一個新的 Python，在匯入 kudio 之前，先把每個選用套件，
+audioread、pesq、pystoi、mir_eval、pandas、openpyxl、matplotlib、onnxruntime、PyAudio、
+sounddevice 和 pyloudnorm，以及 librosa 和它帶來的 numba、scikit-learn 等等（做對照的
+測試可能已經載入了它們），在 `sys.modules` 裡設成 `None`，讓匯入其中任何一個都像缺少套件
+那樣失敗。在那個行程裡，所有警告都當成錯誤：`import kudio` 不能載入其中任何一個，除了
+畫圖（它會說要裝 `viz`）之外每個模組都必須能匯入；每個不需要選用套件的指標都必須給出有限的
+數字，`score` 必須能跑每個不需要套件的名稱。檔案必須能以它本身的取樣率讀進來，每一種重新
+取樣都只能需要 soxr；頻譜圖、梅爾頻帶、倒頻譜、靜音切割、音高和時間伸縮都必須給出數字，
+連 soxr 也擋掉時還是同一個數字。`kudio report`、`kudio pitch` 和 `kudio convert` 必須能跑，
+到最後被擋的套件一個都不能被載入。接著測試在自己的行程裡、那些套件都已經載入的情況下，再算
+一次其中幾個指標，數字必須相同。擋掉 soxr 時，除了 scipy 的方法，重新取樣必須引發
+`DependencyError`，說要安裝它；不需要重新取樣的，必須和有 soxr 時給的一樣。另一個測試在
+真正的 soxr 前面放一個匯入會失敗的 soxr：以別的取樣率讀檔必須是帶著 soxr 自己訊息的
+`DependencyError`，以檔案本身的取樣率則照樣讀得進來，`kudio convert --rate` 以 2 結束。
+`tests/test_package.py` 檢查 `import kudio` 不會載入 matplotlib、pandas、librosa、soxr、
+scipy.signal、PyWavelets 和 tqdm 中的任何一個，也檢查 kudio 和產生文件圖片的程式都沒有
+匯入 librosa 或 numba。
 
 [^hl08]: Y. Hu and P. C. Loizou, "Evaluation of objective quality measures for speech enhancement", IEEE Trans. Audio, Speech, Lang. Process. 16(1), pp. 229-238, 2008, doi:10.1109/TASL.2007.911054.
 [^hl06]: Y. Hu and P. C. Loizou, "Evaluation of objective measures for speech enhancement", Proc. Interspeech 2006, doi:10.21437/Interspeech.2006-84.
@@ -926,3 +1003,11 @@ matplotlib、pandas、librosa、scipy.signal、PyWavelets 和 tqdm 中的任何�
 [^vkh18a]: S. Van Kuyk, W. B. Kleijn and R. C. Hendriks, "An instrumental intelligibility metric based on information theory", IEEE Signal Process. Lett. 25(1), pp. 115-119, 2018, doi:10.1109/LSP.2017.2774250.
 [^vkh18b]: S. Van Kuyk, W. B. Kleijn and R. C. Hendriks, "An evaluation of intrusive instrumental intelligibility metrics", IEEE/ACM Trans. Audio, Speech, Lang. Process. 26(11), pp. 2153-2166, 2018, doi:10.1109/TASLP.2018.2856374.
 [^ksg04]: A. Kraskov, H. Stögbauer and P. Grassberger, "Estimating mutual information", Phys. Rev. E 69(6), 066138, 2004, doi:10.1103/PhysRevE.69.066138.
+[^librosa]: B. McFee, C. Raffel, D. Liang, D. P. W. Ellis, M. McVicar, E. Battenberg and O. Nieto, "librosa: Audio and music signal analysis in Python", Proc. 14th Python in Science Conference (SciPy 2015), pp. 18-24, doi:10.25080/Majora-7b98e3ed-003. Code: <https://github.com/librosa/librosa>, under the ISC licence.
+[^gl84]: D. W. Griffin and J. S. Lim, "Signal estimation from modified short-time Fourier transform", IEEE Trans. Acoust., Speech, Signal Process. 32(2), pp. 236-243, 1984, doi:10.1109/TASSP.1984.1164317.
+[^s98]: M. Slaney, "Auditory Toolbox, version 2", Technical Report 1998-010, Interval Research Corporation, 1998.
+[^dm80]: S. B. Davis and P. Mermelstein, "Comparison of parametric representations for monosyllabic word recognition in continuously spoken sentences", IEEE Trans. Acoust., Speech, Signal Process. 28(4), pp. 357-366, 1980, doi:10.1109/TASSP.1980.1163420.
+[^yin]: A. de Cheveigné and H. Kawahara, "YIN, a fundamental frequency estimator for speech and music", J. Acoust. Soc. Am. 111(4), pp. 1917-1930, 2002, doi:10.1121/1.1458024.
+[^pyin]: M. Mauch and S. Dixon, "pYIN: A fundamental frequency estimator using probabilistic threshold distributions", Proc. ICASSP 2014, pp. 659-663, doi:10.1109/ICASSP.2014.6853678.
+[^fg66]: J. L. Flanagan and R. M. Golden, "Phase vocoder", Bell System Technical Journal 45(9), pp. 1493-1509, 1966, doi:10.1002/j.1538-7305.1966.tb01706.x.
+[^ld99]: J. Laroche and M. Dolson, "Improved phase vocoder time-scale modification of audio", IEEE Trans. Speech Audio Process. 7(3), pp. 323-332, 1999, doi:10.1109/89.759041.

@@ -79,7 +79,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from kudio._samples import as_float, one_channel
+from kudio._numbers import count, flag, real, within
+from kudio._samples import as_float, finite, one_channel
 from kudio.core._framing import convolve_same
 from kudio.core._policy import sample_rate
 from kudio.core.io import ConvertResult, PathLike
@@ -251,7 +252,14 @@ class NoiseTracker:
     streamable = True
 
     def update(self, power: np.ndarray) -> np.ndarray:
-        """One frame in, that frame's noise PSD out."""
+        """One frame in, that frame's noise PSD out.
+
+        The frame is taken as it comes: real, finite power of 0 or more, which is
+        what :func:`spectral_enhance` and :class:`StreamEnhancer` hand it after
+        refusing anything else. Checking it here as well made a frame of either 8 %
+        slower. A NaN given straight to it stays in the estimate until
+        :meth:`reset`.
+        """
         raise NotImplementedError
 
     @staticmethod
@@ -378,16 +386,25 @@ def _check_noise(method: str, kwargs: dict) -> None:
             f"Choose from {', '.join(sorted(NOISE_ESTIMATORS))}")
     if method == 'quantile':
         _check_noise_kwargs(method, kwargs)
-        q = float(kwargs.get('quantile', 0.15))
-        if not 0.0 < q < 1.0:
-            raise FeatureError(f"quantile must be between 0 and 1, got {q}")
+        q = kwargs.get('quantile', 0.15)
+        if real(q) is None or not 0.0 < real(q) < 1.0:
+            raise FeatureError(f"quantile must be between 0 and 1, got {q!r}")
     else:
         _check_noise_kwargs(method, kwargs, _TRACKERS[method])
 
 
+#: what the estimators' settings can be. Past it the estimate is none, and what is
+#: subtracted nothing: a bias of -1 gave the clip back as it was
+_NOISE_COUNTS = ('window', 'n_frames')
+_NOISE_RANGES = {'ass': dict(low=0, high=1), 'ad': dict(low=0, high=1),
+                 'ap': dict(low=0, high=1), 'smoothing': dict(low=0, high=1),
+                 'delta': dict(above=0), 'bias': dict(above=0)}
+
+
 def _check_noise_kwargs(method: str, kwargs: dict, cls=None) -> None:
     """Refuse a noise_kwargs key the estimator does not take, by its public
-    name: a bare TypeError used to name the private class behind it."""
+    name: a bare TypeError used to name the private class behind it. And a
+    value that is none."""
     import inspect
     takes = (['quantile'] if cls is None else
              [p for p in inspect.signature(cls.__init__).parameters if p != 'self'])
@@ -396,6 +413,12 @@ def _check_noise_kwargs(method: str, kwargs: dict, cls=None) -> None:
         raise FeatureError(
             f"noise estimator {method!r} does not take "
             f"{', '.join(sorted(unknown))}. It takes: {', '.join(takes)}")
+    for name, value in kwargs.items():
+        if name in _NOISE_COUNTS:
+            count(value, name, f"noise estimator {method!r}", FeatureError, ' of frames')
+        elif name in _NOISE_RANGES:
+            within(value, name, f"noise estimator {method!r}", FeatureError,
+                   **_NOISE_RANGES[name])
 
 
 def estimate_noise_psd(power: np.ndarray, method: str = 'mcra',
@@ -405,8 +428,20 @@ def estimate_noise_psd(power: np.ndarray, method: str = 'mcra',
     See :data:`NOISE_ESTIMATORS` for what each one assumes. It is as large a
     lever as the gain rule, because a gain rule can only be as good as the
     noise it is told about.
+
+    :raises FeatureError: for anything but real, finite power of 0 or more in
+        two dimensions, an unknown method and a setting it does not take or that
+        is out of its range.
     """
     _check_noise(method, kwargs)
+    power = finite(np.asarray(power), 'estimate_noise_psd', FeatureError)
+    if power.ndim != 2 or not power.size:
+        raise FeatureError(f"estimate_noise_psd() takes a power spectrogram (frames, bins), got "
+                           f"shape {power.shape}")
+    below = int(np.count_nonzero(power < 0))
+    if below:
+        raise FeatureError(f"estimate_noise_psd(): {below} of the powers are below 0, and a "
+                           f"power, |X|**2, never is; a spectrogram in dB is no power")
     power = np.maximum(np.asarray(power, dtype=np.float64), _EPS)
     if method == 'quantile':
         q = float(kwargs.get('quantile', 0.15))
@@ -440,6 +475,8 @@ class DecisionDirected:
         self._previous = None             # |A(k, l-1)|^2, the fed-back estimate
 
     def update(self, power: np.ndarray, noise: np.ndarray) -> np.ndarray:
+        """This frame's gains, from its power and the noise in it, both taken as
+        they come, as :meth:`NoiseTracker.update` takes its frame."""
         gamma = np.minimum(power / noise, _GAMMA_MAX)
         instant = np.maximum(gamma - 1.0, 0.0)
         if self._previous is None:
@@ -634,7 +671,7 @@ def spectral_enhance(y: np.ndarray, sr: int, method: str = 'logmmse', *,
     :param method: see :data:`METHODS`; each entry lists its own parameters.
     :param noise: see :data:`NOISE_ESTIMATORS`. The estimator matters at least
         as much as the gain rule.
-    :param hop_length: samples between frames, ``n_fft // 4`` when not given.
+    :param hop_length: samples between frames, ``n_fft // 4`` when not given or 0.
         Half of *n_fft* suits every usual window. Where frames overlap less,
         what the gain leaves at the edge of one is divided by next to nothing,
         so a hop that lets the overlapping windows fall under 9% of their peak
@@ -650,6 +687,7 @@ def spectral_enhance(y: np.ndarray, sr: int, method: str = 'logmmse', *,
             f"unknown method {method!r}. Choose from "
             f"{', '.join(sorted(METHODS))}")
     sr = sample_rate(sr, 'spectral_enhance', FeatureError)
+    n_fft = count(n_fft, 'n_fft', 'spectral_enhance', FeatureError, ' of samples')
 
     y = one_channel(y, 'spectral_enhance', FeatureError)
     y = np.ascontiguousarray(np.asarray(y, dtype=np.float32).squeeze())
@@ -661,7 +699,6 @@ def spectral_enhance(y: np.ndarray, sr: int, method: str = 'logmmse', *,
             f"clip is shorter than one {n_fft}-sample frame ({y.size} samples); "
             f"pass a smaller n_fft")
     if not np.all(np.isfinite(y)):
-        # librosa's own refusal names neither the function nor the fix
         raise FeatureError(
             f"spectral_enhance() got {int(np.count_nonzero(~np.isfinite(y)))} "
             f"sample(s) that are not finite (NaN or inf); repair the clip first")
@@ -679,7 +716,7 @@ def spectral_enhance(y: np.ndarray, sr: int, method: str = 'logmmse', *,
     from kudio.core.stft import STFT
     stft = STFT(sr=sr, n_fft=n_fft, hop_length=hop_length, window=window)
     _check_overlap(stft._overlap(), n_fft, hop_length, 'spectral_enhance')
-    spec = stft.analyse(y)                                  # (frames, bins)
+    spec = stft._analyse(y, 'spectral_enhance')             # (frames, bins)
     power = np.maximum(np.abs(spec) ** 2, _EPS)
     noise_psd = estimate_noise_psd(power, noise, **(noise_kwargs or {}))
 
@@ -758,7 +795,10 @@ def _check_ranges(method: str, settings: dict) -> None:
     of +10 dB used to clip every gain to 1 and hand the input back as its own
     "enhanced" version, with nothing said."""
     for param in METHODS[method].params:
-        value = float(settings[param.name])
+        value = real(settings[param.name])
+        if value is None:
+            raise FeatureError(f"{method}: {param.name} has to be a finite number, got "
+                               f"{settings[param.name]!r}")
         if not param.low <= value <= param.high:
             raise FeatureError(
                 f"{method}: {param.name}={value:g} is outside "
@@ -895,12 +935,14 @@ def compare_enhancers(y: np.ndarray, sr: int,
         given method does not accept is dropped for that method, so one call
         can hold the framing still across all of them.
     :raises FeatureError: on an unknown method or estimator, on passing
-        ``noise=`` and ``noises=`` together, or on a clip with NaN or inf in it.
+        ``noise=`` and ``noises=`` together or ``noises=[]``, or on a clip with
+        NaN or inf in it.
     :raises ValueError: when *reference* and *y* differ in length by more
         than :data:`~kudio.core.evaluator.MAX_LENGTH_MISMATCH` allows. That
         pair is the baseline every `delta_snr_db` is taken from, so it stops
         the comparison instead of failing one row.
     """
+    metrics = flag(metrics, 'metrics', 'compare_enhancers', FeatureError)
     entries = [_as_enhancer(m) for m in
                (methods if methods is not None else list(METHODS))]
     names = [e for e in entries if isinstance(e, str)]
@@ -914,6 +956,8 @@ def compare_enhancers(y: np.ndarray, sr: int,
     unknown = [n for n in estimators if n not in NOISE_ESTIMATORS]
     if unknown:
         raise FeatureError(f"unknown noise estimator(s): {', '.join(unknown)}")
+    if not estimators:
+        raise FeatureError("compare_enhancers(): noises is empty; leave it out for 'mcra'")
 
     taken = {'n_fft', 'hop_length', 'window', 'noise_kwargs'}
     for name in names:
@@ -927,7 +971,8 @@ def compare_enhancers(y: np.ndarray, sr: int,
         raise FeatureError(f"no method here takes {', '.join(sorted(stray))}")
 
     sr = sample_rate(sr, 'compare_enhancers', FeatureError)
-    y = np.asarray(one_channel(y, 'compare_enhancers', FeatureError), dtype=np.float32)
+    y = np.atleast_1d(np.asarray(one_channel(y, 'compare_enhancers', FeatureError),
+                                 dtype=np.float32))
     if not np.all(np.isfinite(y)):
         # every run would fail on it, one line each, and the table would
         # still come back as if something had been compared
@@ -938,10 +983,11 @@ def compare_enhancers(y: np.ndarray, sr: int,
                                    pesq_scale)
                 if reference is not None else None)
 
-    # Warm up before timing anything. librosa's STFT is JIT-compiled and scipy's
-    # Bessel/exponential-integral functions import lazily, so whichever run
-    # went first was charged ~3 s of one-time cost -- in a table whose entire
-    # purpose is comparing runs against each other.
+    # Warm up before timing anything. scipy's FFT, windows, Bessel and
+    # exponential-integral functions are imported by the first run that uses
+    # them, which was charged 0.4 s for it on Python 3.9 and 1 s on 3.13, where
+    # the run itself takes 0.02 s a second -- in a table whose entire purpose is
+    # comparing runs against each other.
     _warm_up(y, sr, names, estimators[0])
 
     results: List[EnhanceResult] = []
@@ -1057,25 +1103,29 @@ def enhance_folder(src: Any, dst: PathLike,
         help" rather than "run it".
     :param on_error: ``'collect'`` (default) records a file that fails and
         carries on; ``'raise'`` stops at the first one. A missing package
-        (:class:`~kudio.exceptions.DependencyError`; the named methods need
-        librosa) is raised either way: it would fail every file the same way.
+        (:class:`~kudio.exceptions.DependencyError`, soxr for *sr*) is raised
+        either way: it would fail every file the same way.
     :param params: method parameters, defaulted from ``METHODS[method]``. A
         callable takes none — it was configured before it got here.
 
     :returns: an :class:`EnhanceFolderResult`.
     :raises FeatureError: before the first file is read, for an unknown
         method or noise estimator, a parameter or *noise_kwargs* key it does
-        not take, or a value outside its range. Met file by file, each of
+        not take, a value outside its range, or a frame and a hop that cannot
+        be put together again. Met file by file, each of
         these would fail every file the same way.
     :raises ValueError: before the first file as well, for an *sr* that is not
-        a positive whole rate.
+        a positive whole rate and a *subtype* a WAV file does not hold.
     """
-    from kudio.core.io import WAVE_SUFFIX, _check_rate, check_file, check_input, \
-        file_load, save_wave
+    overwrite = flag(overwrite, 'overwrite', 'enhance_folder', FeatureError)
+    report = flag(report, 'report', 'enhance_folder', FeatureError)
+    from kudio.core.io import WAVE_SUFFIX, _check_rate, _check_subtype, check_file, \
+        check_input, file_load, save_wave
     from kudio.core.report import audio_report
     from kudio.exceptions import AudioIOError, DependencyError
 
     sr = _check_rate(sr, optional=True)
+    _check_subtype(subtype, 'enhance_folder')
     entry = _as_enhancer(method)
     if on_error not in ('collect', 'raise'):
         raise FeatureError(f"on_error must be 'collect' or 'raise', got {on_error!r}")
@@ -1099,8 +1149,14 @@ def enhance_folder(src: Any, dst: PathLike,
         settings.update(params)
         _check_ranges(entry, settings)
         # the estimator's name and keys too: noise='mcar' came back as
-        # "0/2 written, 2 failed", the same refusal once per file
+        # "0/2 written, 2 failed", the same refusal once per file; and so did a
+        # hop the frames cannot be put together from
         _check_noise(noise, noise_kwargs or {})
+        from kudio.core.stft import STFT
+        size = count(n_fft, 'n_fft', 'enhance_folder', FeatureError, ' of samples')
+        step = hop_length or size // 4
+        _check_overlap(STFT(sr=sr or 16000, n_fft=size, hop_length=step,
+                            window=window)._overlap(), size, step, 'enhance_folder')
 
         def run(y, rate):
             return spectral_enhance(y, rate, entry, noise=noise, n_fft=n_fft,
@@ -1148,7 +1204,7 @@ def enhance_folder(src: Any, dst: PathLike,
 
 
 def _warm_up(y: np.ndarray, sr: int, names: Sequence[str], noise: str) -> None:
-    """Pay every one-time import and JIT cost before the clock starts."""
+    """Pay for every import there is before the clock starts."""
     sample = y[:min(len(y), int(sr))] if len(y) else y
     if sample.size < 512:
         return
@@ -1191,9 +1247,9 @@ def _reference_metrics(reference, degraded, sr, metrics,
     from kudio.core._policy import checked
     from kudio.core.evaluator import _cut, _sides, si_sdr as _si_sdr, snr as _snr
 
-    ref = np.asarray(as_float(reference, 'compare_enhancers', FeatureError),
-                     dtype=np.float32).squeeze()
-    deg = np.asarray(as_float(degraded), dtype=np.float32).squeeze()
+    ref = np.atleast_1d(np.asarray(as_float(reference, 'compare_enhancers', FeatureError),
+                                   dtype=np.float32).squeeze())
+    deg = np.atleast_1d(np.asarray(as_float(degraded), dtype=np.float32).squeeze())
     if min(len(ref), len(deg)) == 0:
         return (None, None, None, None)
     has_pesq = has_stoi = False

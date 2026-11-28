@@ -484,6 +484,23 @@ def test_losing_most_of_it_in_short_runs_is_refused_rather_than_fudged():
         kudio.dropouts(long_speech(1.0), SR, loss=0.8, burst=1, seed=0)
 
 
+def test_a_run_longer_than_an_integer_holds_is_all_that_is_lost():
+    """numpy 1.24 drew the lowest integer there is for one, and the packets lost were
+    never reached."""
+    from kudio.effects.channel import _run_lengths
+
+    class Overflowed:
+        asked = 0
+
+        def geometric(self, p):
+            self.asked += 1
+            assert self.asked < 5, "and again, and again"
+            return np.iinfo(np.int64).min
+
+    assert _run_lengths(100, 30, 1e300, Overflowed()) == [30]
+    assert _run_lengths(100, 30, 1e300, np.random.default_rng(0)) == [30]
+
+
 def test_a_burst_shorter_than_a_packet_is_refused():
     with pytest.raises(FeatureError, match="cannot be under 1"):
         kudio.dropouts(make_speech(), SR, loss=0.05, burst=0.5)

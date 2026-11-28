@@ -39,6 +39,7 @@ import numpy as np
 if TYPE_CHECKING:
     import pandas as pd
 
+from kudio._numbers import flag, whole
 from kudio._progress import tqdm
 from kudio.core._framing import frame_view
 from kudio.core._policy import (_CHECKED, checked, faint, sample_rate, scored_nan,
@@ -429,6 +430,7 @@ def lsd(ref: np.ndarray, deg: np.ndarray, sr: int, *,
         URGENT scores it, with a warning that the number then measures *ref*
         against *eps*.
     """
+    match_gain = flag(match_gain, 'match_gain', 'lsd', ValueError)
     if scale not in _LSD_SCALES:
         raise ValueError(f"lsd(): scale must be one of {tuple(_LSD_SCALES)}, "
                          f"got {scale!r}")
@@ -436,6 +438,9 @@ def lsd(ref: np.ndarray, deg: np.ndarray, sr: int, *,
     if not eps > 0:
         raise ValueError(f"lsd(): eps must be positive, got {eps}: it is what keeps "
                          f"a band deg leaves empty from dividing by zero")
+    for name, value in (('n_fft', n_fft), ('hop_length', hop_length)):
+        if value is not None and whole(value) is None:
+            raise ValueError(f"lsd(): {name} must be a whole number of samples, got {value!r}")
     n_fft = int(sr * _LSD_FRAME) if n_fft is None else int(n_fft)
     if n_fft < 2:
         raise ValueError(f"lsd(): the frames need at least 2 samples, got "

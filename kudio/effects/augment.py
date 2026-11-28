@@ -6,14 +6,15 @@ accepts a ``seed`` for reproducibility.
 """
 from __future__ import annotations
 
-import warnings
+import math
 from typing import Callable, Optional, Tuple
 
 import numpy as np
 
-from kudio import _optional
-from kudio._samples import channels_last, refuse_64_bit, to_float
-from kudio.core._policy import sample_rate
+from kudio._numbers import generator, real, whole
+from kudio._samples import channels_last, finite, real_samples, to_float
+from kudio.core._policy import sample_rate, warn
+from kudio.effects import _vocoder
 from kudio.exceptions import FeatureError
 
 __all__ = [
@@ -24,16 +25,11 @@ __all__ = [
 
 
 def _each_channel(y: np.ndarray, fn: Callable[[np.ndarray], np.ndarray]) -> np.ndarray:
-    """*fn* on a mono clip, or on every channel of a ``(frames, channels)`` one.
-
-    librosa and numpy both read the last axis as time, which on kudio's
-    channels-last layout is the channel axis: time_stretch on a stereo second
-    came back as one 16000-sample channel, with no error.
-    """
+    """*fn* on a mono clip, or on every channel of a ``(frames, channels)`` one."""
     y = np.asarray(y)
     if y.ndim == 1:
         return fn(y)
-    if y.ndim != 2:
+    if y.ndim != 2 or not y.shape[1]:
         raise FeatureError(f"expected (frames,) or (frames, channels), got shape {y.shape}")
     return np.stack([fn(y[:, c]) for c in range(y.shape[1])], axis=1)
 
@@ -43,41 +39,81 @@ def _read(y, name: str):
     return to_float(channels_last(y, name, FeatureError), name, FeatureError)
 
 
-def _quietly(fn: Callable, *args, **kwargs):
-    """librosa 1.0's time_stretch and pitch_shift hand phase_vocoder its own
-    deprecated arguments and warn about it twice a call. Nothing a caller does
-    changes that, so it is not passed on."""
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=FutureWarning,
-                                message=r".*deprecated as of 1\.0.*")
-        return fn(*args, **kwargs)
+def _vocoded(y, name: str, fn: Callable[[np.ndarray], np.ndarray]) -> np.ndarray:
+    """*fn* on every channel of *y* that has samples in it, read and put back as
+    :func:`_read` does: finite ones, and enough for a frame of the phase vocoder or
+    a warning."""
+    x, back = _read(y, name)
+    x = finite(np.asarray(x), name, FeatureError)
+    if x.ndim in (1, 2) and x.size and len(x) < _vocoder.SIZE:
+        warn(f"{name}(): the clip has {len(x)} sample(s), fewer than one frame of "
+             f"{_vocoder.SIZE}; what it works on is mostly the zeros around it")
+    out = _each_channel(x, lambda c: fn(c) if len(c) else c)
+    if not np.isfinite(out).all():
+        raise FeatureError(f"{name}(): the samples go as high as {np.max(np.abs(x)):.3g}, and "
+                           f"what comes of them goes past what {out.dtype} holds")
+    return back(out)
 
 
 def time_stretch(y: np.ndarray, rate: float) -> np.ndarray:
     """Speed up (``rate>1``) or slow down (``rate<1``) without changing pitch.
 
+    A phase vocoder, in frames of 2048 samples. *n* samples come back as
+    ``round(n / rate)``, the nearest whole number. Tones keep their frequency;
+    a click is smeared over a frame, and noise comes back about 3 dB down.
+
     A ``(frames, channels)`` array is stretched channel by channel, and
     integer audio comes back in its own type, as :func:`gain` does it.
+
+    :raises FeatureError: for a *rate* that is not a finite number above 0, and
+        for samples that are not finite.
     """
-    if rate <= 0:
-        raise ValueError(f"rate must be > 0, got {rate}")
-    effects = _optional.librosa().effects
-    x, back = _read(y, 'time_stretch')
-    return back(_each_channel(
-        x, lambda c: _quietly(effects.time_stretch, c, rate=rate)))
+    number = real(rate)
+    if number is None or number <= 0:
+        raise FeatureError(f"time_stretch(): rate has to be a finite number above 0, got {rate!r}")
+
+    def stretch(c):
+        if number == 1:
+            return c
+        length = len(c) / number
+        if not math.isfinite(length):
+            raise FeatureError(f"time_stretch(): {len(c)} sample(s) at a rate of {number:g} are "
+                               f"more than there can be")
+        return _vocoder.stretch(c, number, round(length))
+
+    return _vocoded(y, 'time_stretch', stretch)
 
 
 def pitch_shift(y: np.ndarray, sr: int, n_steps: float) -> np.ndarray:
-    """Shift pitch by *n_steps* semitones without changing duration.
+    """Shift pitch by *n_steps* semitones without changing duration: the clip
+    stretched as :func:`time_stretch` does it, and resampled to its length.
 
     A ``(frames, channels)`` array is shifted channel by channel, and integer
     audio comes back in its own type, as :func:`gain` does it.
+
+    :param n_steps: up, or down below 0, and not necessarily whole: 0.5 is a
+        quarter tone. As far as 120, ten octaves.
+    :raises FeatureError: for *n_steps* that are not a number from -120 to 120, and
+        for samples that are not finite.
+    :raises ValueError: for an *sr* that is not a positive number.
     """
+    from kudio.core.io import _at_rate
+
     sr = sample_rate(sr, 'pitch_shift')
-    effects = _optional.librosa().effects
-    x, back = _read(y, 'pitch_shift')
-    return back(_each_channel(
-        x, lambda c: _quietly(effects.pitch_shift, c, sr=sr, n_steps=n_steps)))
+    steps = real(n_steps)
+    if steps is None or abs(steps) > 120:
+        raise FeatureError(f"pitch_shift(): n_steps has to be a number of semitones from -120 to "
+                           f"120, got {n_steps!r}")
+    rate = 2.0 ** (-steps / 12)
+
+    def shift(c):
+        if not steps:
+            return c
+        # up to a whole number, for the resampler to have the whole clip's worth
+        stretched = _vocoder.stretch(c, rate, math.ceil(len(c) / rate))
+        return _at_rate(stretched, sr / rate, sr, 'soxr_hq')[:len(c)]
+
+    return _vocoded(y, 'pitch_shift', shift)
 
 
 def gain(y: np.ndarray, db: float) -> np.ndarray:
@@ -86,8 +122,24 @@ def gain(y: np.ndarray, db: float) -> np.ndarray:
     Integer audio stays in its type, rounded and clipped at full scale rather
     than wrapped round, which would turn an int16 20000 at +6 dB into -25631.
     """
+    factor = _factor(db)
+    if factor is None:
+        raise FeatureError(f"gain(): db has to be a finite number of decibels, got {db!r}")
     x, back = _read(y, 'gain')
-    return back(x * (10.0 ** (db / 20.0)))
+    return back(x * factor)
+
+
+def _factor(db, per: float = 20.0) -> Optional[float]:
+    """What *db* decibels multiply an amplitude by, or at 10 *per* decade a power;
+    None for what is not a finite number of them, or makes a factor past float64."""
+    if real(db) is None:
+        return None
+    try:
+        with np.errstate(over='ignore', under='ignore'):
+            factor = 10.0 ** (db / per)
+    except OverflowError:
+        return None
+    return factor if np.isfinite(factor) else None
 
 
 def normalize(y: np.ndarray, peak: float = 0.99) -> np.ndarray:
@@ -97,11 +149,15 @@ def normalize(y: np.ndarray, peak: float = 0.99) -> np.ndarray:
     everyone writes inline and someone eventually forgets. For integer audio
     *peak* is a fraction of the type's full scale, as it is for float, and the
     result keeps the input's type.
+
+    :raises FeatureError: for a clip with NaN or inf in it. One of them was the
+        peak, and the rest of the clip NaN or 0.
     """
-    if peak <= 0:
-        raise ValueError(f"peak must be > 0, got {peak}")
+    if real(peak) is None or peak <= 0:
+        raise ValueError(f"peak must be > 0, a finite number, got {peak!r}")
     y = channels_last(y, 'normalize', FeatureError)
     x, back = _read(y, 'normalize')
+    finite(np.asarray(x), 'normalize', FeatureError)
     current = float(np.max(np.abs(x))) if x.size else 0.0
     if current == 0.0:
         return y.copy()
@@ -114,16 +170,28 @@ def normalize_db(y: np.ndarray, dbfs: float = -1.0) -> np.ndarray:
     ``normalize_db(y, -1.0)`` is ``normalize(y, 10 ** (-1 / 20))``; use
     whichever unit the rest of the pipeline speaks.
     """
-    if dbfs > 0:
-        raise ValueError(f"dbfs must be <= 0 (full scale), got {dbfs}")
-    return normalize(y, peak=10.0 ** (dbfs / 20.0))
+    factor = _factor(dbfs)
+    if factor is None or dbfs > 0:
+        raise ValueError(f"dbfs must be <= 0 (full scale), a finite number, got {dbfs!r}")
+    return normalize(y, peak=factor)
 
 
 def random_gain(y: np.ndarray, db_range: Tuple[float, float] = (-6.0, 6.0),
                 seed: Optional[int] = None) -> np.ndarray:
-    """Apply a random gain sampled uniformly from *db_range* dB."""
-    rng = np.random.default_rng(seed)
-    return gain(y, rng.uniform(*db_range))
+    """Apply a random gain sampled uniformly from *db_range* dB, lowest first.
+
+    :raises FeatureError: for a range that is not two finite numbers, lowest
+        first, and as :func:`gain` does.
+    """
+    rng = generator(seed, 'random_gain', FeatureError)
+    try:
+        low, high = (real(v) for v in db_range)
+    except (TypeError, ValueError):
+        low = high = None
+    if low is None or high is None or low > high:
+        raise FeatureError(f"random_gain(): db_range is two finite numbers of dB, lowest first, "
+                           f"got {db_range!r}")
+    return gain(y, rng.uniform(low, high))
 
 
 def add_noise_snr(y: np.ndarray, noise: np.ndarray, snr_db: float,
@@ -136,13 +204,18 @@ def add_noise_snr(y: np.ndarray, noise: np.ndarray, snr_db: float,
     :raises FeatureError: for noise with no variation in the stretch used --
         silence or a constant. Its mean is removed first, so nothing would be
         left to scale, and the result would be *y* back with no noise in it at
-        any SNR. Synthesizer refuses the same file for the same reason.
+        any SNR. Synthesizer refuses the same file for the same reason. And for
+        NaN or inf in either clip, or an *snr_db* that is not a finite number.
     """
+    ratio = _factor(snr_db, per=10)
+    if not ratio:
+        raise FeatureError(f"add_noise_snr(): snr_db has to be a finite number of decibels, got "
+                           f"{snr_db!r}")
     # the noise as the numbers it is: its mean goes and its level is set, so
     # its scale never comes into it
-    y = channels_last(refuse_64_bit(y, 'add_noise_snr', FeatureError),
+    y = channels_last(real_samples(y, 'add_noise_snr', FeatureError),
                       'add_noise_snr', FeatureError)
-    noise = channels_last(refuse_64_bit(noise, 'add_noise_snr', FeatureError),
+    noise = channels_last(real_samples(noise, 'add_noise_snr', FeatureError),
                           'add_noise_snr', FeatureError)
     y, noise = (a[:, 0] if a.ndim == 2 and a.shape[1] == 1 else a for a in (y, noise))
     if y.ndim != 1 or noise.ndim != 1:
@@ -150,7 +223,11 @@ def add_noise_snr(y: np.ndarray, noise: np.ndarray, snr_db: float,
                            f"{y.shape} and {noise.shape}")
     if not noise.size:
         raise FeatureError("noise is empty")
-    rng = np.random.default_rng(seed)
+    finite(y, 'add_noise_snr', FeatureError)
+    finite(noise, 'add_noise_snr', FeatureError)
+    if not y.size:
+        return y.copy()
+    rng = generator(seed, 'add_noise_snr', FeatureError)
     if len(noise) < len(y):
         noise = np.tile(noise, len(y) // len(noise) + 1)[:len(y)]
     elif len(noise) > len(y):
@@ -167,7 +244,7 @@ def add_noise_snr(y: np.ndarray, noise: np.ndarray, snr_db: float,
     noise = noise - np.mean(noise)
     sig_pwr = np.mean(x ** 2)
     noise_pwr = np.mean(noise ** 2) + 1e-12
-    scale = np.sqrt(sig_pwr / (noise_pwr * 10 ** (snr_db / 10)))
+    scale = np.sqrt(sig_pwr / (noise_pwr * ratio))
     return back(x + scale * noise)
 
 
@@ -178,10 +255,18 @@ def reverb(y: np.ndarray, sr: int, decay: float = 0.3,
     behaves like a room, use :func:`kudio.rir` with :func:`kudio.apply_rir`.
 
     A ``(frames, channels)`` array gets the same echoes on every channel.
+
+    :raises FeatureError: for a *decay* that is not a finite number, a *delay_ms*
+        that is not one above 0, and a clip with NaN or inf in it.
     """
     from scipy.signal import fftconvolve
 
     sr = sample_rate(sr, 'reverb', FeatureError)
+    if real(decay) is None:
+        raise FeatureError(f"reverb(): decay has to be a finite number, got {decay!r}")
+    if real(delay_ms) is None or delay_ms <= 0:
+        raise FeatureError(f"reverb(): delay_ms has to be a finite number of milliseconds above 0, "
+                           f"got {delay_ms!r}")
     delay = max(1, int(sr * delay_ms / 1000.0))
     ir_len = delay * 8
     impulse = np.zeros(ir_len, dtype=np.float32)
@@ -194,6 +279,9 @@ def reverb(y: np.ndarray, sr: int, decay: float = 0.3,
     # integer audio in float first: abs(-32768) stays -32768 in int16, so a
     # sample pinned there was missed as the peak (20000 came back, not 32768)
     x, back = _read(y, 'reverb')
+    finite(np.asarray(x), 'reverb', FeatureError)
+    if not x.size:
+        return back(x)
     wet = _each_channel(x, lambda c: fftconvolve(c, impulse)[:len(c)])
     peak = np.max(np.abs(wet)) + 1e-12
     return back(wet / peak * np.max(np.abs(x)))
@@ -216,14 +304,24 @@ def spec_augment(spec: np.ndarray, n_freq_masks: int = 1, n_time_masks: int = 1,
         spectrogram, but on kudio's log10 power it is a power of 1, louder
         than most of the cells it would hide.
     """
-    rng = np.random.default_rng(seed)
+    rng = generator(seed, 'spec_augment', FeatureError)
     out = np.array(spec, copy=True)
+    if out.dtype.kind not in 'biuf':
+        raise FeatureError(f"spec_augment() takes real numbers, got {out.dtype}")
     work = out if out.ndim == 2 else out.squeeze()
     if work.ndim != 2:
-        raise ValueError(f"spec must be 2-D after squeeze, got shape {spec.shape}")
+        raise FeatureError(f"spec must be 2-D after squeeze, got shape {np.shape(spec)}")
     n_time, n_freq = work.shape
     fill = float(np.mean(work)) if mask_value is None else mask_value
 
+    settings = dict(n_freq_masks=n_freq_masks, n_time_masks=n_time_masks,
+                    freq_mask_width=freq_mask_width, time_mask_width=time_mask_width)
+    for name, value in settings.items():
+        settings[name] = whole(value)
+        if settings[name] is None or settings[name] < 0:
+            raise FeatureError(f"spec_augment(): {name} is a whole number, 0 or more, got "
+                               f"{value!r}")
+    n_freq_masks, n_time_masks, freq_mask_width, time_mask_width = settings.values()
     for _ in range(n_freq_masks):
         w = int(rng.integers(0, min(freq_mask_width, n_freq) + 1))
         if w:
@@ -234,4 +332,4 @@ def spec_augment(spec: np.ndarray, n_freq_masks: int = 1, n_time_masks: int = 1,
         if w:
             t0 = int(rng.integers(0, n_time - w + 1))
             work[t0:t0 + w, :] = fill
-    return work.reshape(spec.shape)
+    return work.reshape(np.shape(spec))

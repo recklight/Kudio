@@ -799,7 +799,7 @@ STOI、ESTOI 和 SDR 是表格列出的例外，因為它們的套件評不了�
 `AudioEvaluate` 裡，這樣的檔案會在兩邊的平均中都被排除，而不是把平均拉低。每個需要
 參考訊號的指標，都會照[長度不同時](#when-the-lengths-differ)說的方式警告和拒絕。這條
 規則怎麼測試，寫在
-[指標的驗證方式](../validation.md#the-input-rule-and-the-import-without-librosa)。
+[指標的驗證方式](../validation.md#the-input-rule-and-the-import-without-optional-packages)。
 
 ## 整個測試集 {#a-whole-test-set}
 

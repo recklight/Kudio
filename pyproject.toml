@@ -26,17 +26,14 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dynamic = ["version"]
-# Core stays light: numpy + soundfile + librosa cover I/O and features.
-# Heavy or niche deps (plotting, dataframes, metrics, live audio) are extras.
+# Core stays light: numpy and scipy compute, soundfile reads and writes, soxr
+# resamples. Heavy or niche deps (plotting, dataframes, metrics, live audio) are
+# extras. The oldest job in ci.yml runs the suite on every floor below at once.
 dependencies = [
-    # The ceiling is numba's, not ours: librosa pulls numba in, and numba caps
-    # numpy at <2.6 from 0.67 onwards (0.66 and earlier said <2.5). Asking for
-    # a numpy above numba's own bound only hands pip an unsolvable problem, so
-    # this follows it and moves when it moves.
-    "numpy>=1.24,<2.6",
+    "numpy>=1.24",
     "scipy>=1.10",
-    "librosa>=0.10",
     "soundfile>=0.12",
+    "soxr>=0.3.2",
     "PyYAML>=6.0",
     "tqdm>=4.60",
     "PyWavelets>=1.4",
@@ -57,15 +54,19 @@ dnsmos = ["onnxruntime>=1.15"]      # DNSMOS P.835 (weights are NOT bundled --
                                     # see kudio.find_dnsmos_model)
 viz = ["matplotlib>=3.7"]                              # plotting helpers
 data = ["pandas>=2.0", "openpyxl>=3.1"]                # Excel / dataframe export
+# m4a, aac, webm and the rest of what soundfile does not read, with ffmpeg, which
+# pip does not install. audioread 3.0 imports modules that Python 3.13 has not got.
+compressed = ["audioread>=3.0", "audioread>=3.1; python_version >= '3.13'"]
 # every runtime extra except [pesq], which compiles. [check], [dev] and [docs]
 # are for working on kudio rather than using it, so they stay out too.
-all = ["kudio[audio,eval,dnsmos,viz,data]"]
+all = ["kudio[audio,eval,dnsmos,viz,data,compressed]"]
 dev = ["pytest>=7.0", "kudio[data]"]   # [data] lets the full test suite run
 # Independent implementations the suite measures itself against. Nothing in
 # kudio imports these; they are here so test_loudness can hold our own BS.1770
-# meter against someone else's. Separate from [dev] because [dev] has to stay
-# small enough to install anywhere, while CI can afford this.
-check = ["pyloudnorm>=0.1"]
+# meter against someone else's, and test_against_librosa our spectrograms, pitch
+# and time stretch against librosa's. Separate from [dev] because [dev] has to
+# stay small enough to install anywhere, while CI can afford this.
+check = ["pyloudnorm>=0.1", "librosa>=0.11"]
 # The toolchain mkdocs.yml needs. MkDocs stays below 2.0, which drops the
 # plugin system Material and mkdocstrings are built on. mkdocstrings-python 2.0
 # is a real floor: it brings the griffe that tools/docs/griffe_markdown.py hooks

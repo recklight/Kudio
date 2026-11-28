@@ -105,7 +105,7 @@ print(y8.shape, y8.dtype, sr8)                    # (28000,) float32 8000
 ```
 
 預設 `sr=None` 時，[`file_load`][kudio.core.io.file_load] 保留檔案本身
-的取樣率。指定別的取樣率，就用 librosa 的 `soxr_hq` 重新取樣器重新取樣；
+的取樣率。指定別的取樣率，就用 soxr 的高品質設定 `soxr_hq` 重新取樣；
 檔案本來就是那個取樣率，則照原樣回傳。不論哪一種，檔案都用 soundfile
 讀，已安裝的 libsndfile 開得了的都開得了；`soundfile.available_formats()`
 會列出這些格式，soundfile 0.14 包括 WAV、FLAC、OGG、MP3、AIFF 和
@@ -147,16 +147,15 @@ m4a、mp4、aac、webm、3gp、amr 和 wma 由
 [audioread](https://github.com/beetbox/audioread) 和
 [ffmpeg](https://ffmpeg.org/) 解碼，kudio 每個讀檔的地方都一樣：
 `file_load`、`audio_info`、[`play_audio`][kudio.core.stream.play_audio]、
-[`Synthesizer`][kudio.core.synth.Synthesizer] 和命令列。這兩樣都不隨
-kudio 安裝。ffmpeg 要在 PATH 上找得到，audioread 則是一個套件：
+[`Synthesizer`][kudio.core.synth.Synthesizer] 和命令列。這兩樣都不在
+一般的安裝裡。ffmpeg 要在 PATH 上找得到，audioread 則是 `compressed` 這組
+選用套件：
 
 ```bash
-pip install audioread
+pip install "kudio[compressed]"
 ```
 
-librosa 0.10 和 0.11 會自己裝 audioread，所以 Python 3.11 以下已經有了。
-Python 3.12 以上 pip 會選 librosa 1.0，它不裝。兩樣缺一，`AudioIOError`
-會寫出缺的是哪一樣。
+兩樣缺一，`AudioIOError` 會寫出缺的是哪一樣。
 
 解出來的是 16 位元的樣本，而且編碼器會把最後一個區塊補滿。2 秒的聲音，
 從 AAC 裸流讀回來是 2.043 秒，AMR 是 2.020 秒，WMA 是 1.997 秒；m4a 的

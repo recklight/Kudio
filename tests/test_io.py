@@ -171,9 +171,9 @@ def test_resample_rejects_bad_rates():
 def test_stereo_comes_back_channels_last_on_both_paths(tmp_path):
     """The two branches of file_load must not disagree about the layout.
 
-    ``sr=None`` reads through soundfile, a requested rate goes through librosa,
-    and the two libraries have opposite conventions. Picking the branch by an
-    unrelated argument must not transpose the audio.
+    ``sr=None`` reads the file, a requested rate resamples what was read, and a
+    resampler can just as well be one for (channels, frames). Picking the branch
+    by an unrelated argument must not transpose the audio.
     """
     import numpy as np
     import soundfile as sf
@@ -562,8 +562,8 @@ def _stereo(sr=16000, seconds=1.0):
 
 
 def test_resample_runs_along_the_frames_of_a_stereo_clip():
-    """librosa resamples its last axis, which on (frames, channels) is the
-    channel axis: a (16000, 2) clip used to come back (16000, 1)."""
+    """Along the last axis, where a resampler for (channels, frames) works, a
+    (16000, 2) clip comes back (16000, 1)."""
     out = kudio.resample(_stereo(), 16000, 8000)
     assert out.shape == (8000, 2)
     assert np.max(np.abs(out[:, 1])) == pytest.approx(0.25, abs=0.01), "channels kept apart"
@@ -573,10 +573,151 @@ def test_resample_rounds_integer_audio_instead_of_truncating():
     y = np.round(10000 * np.sin(2 * np.pi * 50 * np.arange(800) / 8000)).astype(np.int16)
     out = kudio.resample(y, 8000, 16000)
     assert out.dtype == np.int16
-    import librosa
-    exact = librosa.resample(y.astype(np.float32), orig_sr=8000, target_sr=16000,
-                             res_type='soxr_hq')
+    exact = kudio.resample(y.astype(np.float32), 8000, 16000)
     assert np.array_equal(out, np.round(exact).astype(np.int16))
+    assert not np.array_equal(out, exact.astype(np.int16)), "nothing here to round"
+
+
+#: what resample's res_type can name: soxr's five settings and scipy's two
+#: resamplers, one of them under two names
+RESAMPLERS = ('soxr_vhq', 'soxr_hq', 'soxr_mq', 'soxr_lq', 'soxr_qq', 'fft', 'scipy',
+              'polyphase')
+
+
+@pytest.mark.parametrize("res_type, floor_db", [
+    ('soxr_vhq', -140), ('soxr_hq', -130), ('soxr_mq', -108), ('soxr_lq', -106),
+    ('soxr_qq', -64), ('fft', -128), ('scipy', -128), ('polyphase', -57)])
+@pytest.mark.parametrize("orig_sr, target_sr", [(16000, 44100), (48000, 16000), (44100, 16000)])
+def test_a_resampled_sine_is_the_sine_at_the_other_rate(res_type, floor_db, orig_sr, target_sr):
+    """Sample for sample, with the phase it had: one sample late, a 1 kHz sine
+    differs from itself by -17 dB at 44.1 kHz and by -8 dB at 16 kHz. Away from
+    the ends, which a filter runs past."""
+    tone = {sr: (0.5 * np.sin(2 * np.pi * 1000.0 * np.arange(sr) / sr + 0.3)).astype(np.float32)
+            for sr in (orig_sr, target_sr)}
+    out = kudio.resample(tone[orig_sr], orig_sr, target_sr, res_type=res_type)
+    inside = slice(target_sr // 10, -target_sr // 10)
+    error = (out[:target_sr].astype(np.float64) - tone[target_sr])[inside]
+    assert 10 * np.log10(np.mean(error ** 2) / 0.125 + 1e-30) < floor_db
+
+
+@pytest.mark.parametrize("res_type", RESAMPLERS)
+def test_every_resampler_gives_the_length_the_rates_give(res_type):
+    for orig_sr, target_sr in ((16000, 8000), (8000, 16000), (44100, 16000), (48000, 8000)):
+        for n in (1, 2, 5, 6, 7, 441, 1000, 1001):
+            out = kudio.resample(np.ones(n, np.float32), orig_sr, target_sr, res_type=res_type)
+            assert out.shape == (-(-n * target_sr // orig_sr),), (orig_sr, target_sr, n)
+            assert out.dtype == np.float32 and np.isfinite(out).all()
+
+
+#: from a rate of the 11025 Hz family to one of the 48 kHz family, n * (b / a)
+#: in floating point comes out a hair over a whole number: 147 samples at 44.1
+#: kHz are 160.00000000000003 at 48 kHz, where they are 160
+ONE_TOO_MANY = [(a, b) for a in (11025, 22050, 44100, 88200, 176400)
+                for b in (12000, 24000, 48000, 96000, 192000)]
+NEVER = [(8000, 16000), (16000, 8000), (48000, 44100), (44100, 16000), (16000, 44100),
+         (44100, 32000), (48000, 22050), (11025, 8000), (96000, 88200), (192000, 11025)]
+
+
+@pytest.mark.parametrize("orig_sr, target_sr", ONE_TOO_MANY + NEVER)
+@pytest.mark.parametrize("res_type", ['soxr_hq', 'soxr_qq', 'fft', 'polyphase'])
+def test_a_second_is_a_second_at_the_other_rate(res_type, orig_sr, target_sr):
+    """A second of 44.1 kHz came back as 48001 samples at 48 kHz: the last one
+    zero, or with the Fourier method the whole second drawn out by it."""
+    y = (0.5 * np.sin(2 * np.pi * 1000.0 * np.arange(orig_sr) / orig_sr)).astype(np.float32)
+    out = kudio.resample(y, orig_sr, target_sr, res_type=res_type)
+    assert out.shape == (target_sr,)
+    want = 0.5 * np.sin(2 * np.pi * 1000.0 * np.arange(target_sr) / target_sr)
+    inside = slice(target_sr // 10, -target_sr // 10)
+    error_db = 10 * np.log10(np.mean((out - want)[inside] ** 2) / 0.125 + 1e-30)
+    assert error_db < {'soxr_hq': -125, 'soxr_qq': -42, 'fft': -120, 'polyphase': -55}[res_type]
+
+
+@pytest.mark.parametrize("orig_sr, target_sr", ONE_TOO_MANY + NEVER)
+def test_a_length_is_the_one_the_rates_give_for_any_number_of_samples(orig_sr, target_sr):
+    for n in list(range(2, 40)) + [146, 147, 148, 294, 441, 1470, 4410, 4411]:
+        y = np.ones((n, 2), np.float32)
+        wanted = (n * target_sr + orig_sr - 1) // orig_sr
+        assert kudio.resample(y, orig_sr, target_sr).shape == (wanted, 2), n
+        assert len(kudio.resample(y, orig_sr, target_sr, res_type='polyphase')) == wanted, n
+
+
+#: what files come at, and the rates of 48 kHz and 44.1 kHz doubled and halved
+RATES = (8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000,
+         176400, 192000, 352800, 384000)
+
+
+@pytest.mark.parametrize("orig_sr", RATES + (22254.5,))
+def test_the_length_a_clip_comes_to_is_known_before(orig_sr):
+    """What a run is checked by before anything is written, from a header alone,
+    is the length that comes out: from every rate to every other, in whole numbers
+    however they are given and in others."""
+    from kudio.core.io import _resampled_length
+    for target_sr in RATES + (22254.5,):
+        for n in (1, 2, 3, 100, 146, 147, 148, 160, 441, 999, 1000, 1001, 4410):
+            got = _resampled_length(n, orig_sr, target_sr)
+            assert isinstance(got, int)
+            for kind in (float, np.int64, np.float64):
+                if float(orig_sr).is_integer() and float(target_sr).is_integer():
+                    assert _resampled_length(n, kind(orig_sr), kind(target_sr)) == got
+            for res_type in ('soxr_hq', 'soxr_qq'):
+                out = kudio.resample(np.ones(n, np.float32), orig_sr, target_sr,
+                                     res_type=res_type)
+                assert len(out) == got, (orig_sr, target_sr, n, res_type)
+
+
+@pytest.mark.parametrize("res_type", ['kaiser_best', 'kaiser_fast', 'sinc_best', 'linear',
+                                      'soxr', 'SOXR_HQ', '', None, 3, ['soxr_hq']], ids=repr)
+@pytest.mark.parametrize("target_sr", [8000, 16000])
+def test_a_resampler_there_is_not_is_refused_by_name(sine, res_type, target_sr):
+    """At the rate the clip is at too, where nothing would have been resampled
+    and the name never looked at."""
+    with pytest.raises(ValueError) as caught:
+        kudio.resample(sine, 16000, target_sr, res_type=res_type)
+    assert str(caught.value) == (f"resample(): res_type has to be one of "
+                                 f"{', '.join(RESAMPLERS)}, got {res_type!r}")
+
+
+def test_polyphase_needs_whole_rates(sine):
+    with pytest.raises(ValueError) as caught:
+        kudio.resample(sine, 22254.5, 16000, res_type='polyphase')
+    assert str(caught.value) == ("resample(): res_type='polyphase' takes whole rates, got "
+                                 "22254.5 and 16000")
+    assert len(kudio.resample(sine, 16000.0, 8000.0, res_type='polyphase')) == 8000
+
+
+@pytest.mark.parametrize("res_type", ['soxr_hq', 'fft', 'polyphase'])
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf, 1e39])
+def test_samples_that_are_not_finite_are_not_resampled(res_type, bad):
+    """One of them becomes a whole filter length of them, or with the Fourier
+    method every sample there is. 1e39 is finite in float64 and inf in the
+    float32 the work is done in."""
+    y = np.full((1000, 2), 0.25)
+    y[10:13, 1] = bad
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")                   # the error says it all
+        with pytest.raises(ValueError) as caught:
+            kudio.resample(y, 16000, 8000, res_type=res_type)
+    assert str(caught.value) == ("resample(): 3 of 2000 sample(s) are not finite in float32, "
+                                 "which it works in (NaN, inf or past 3.4e38); repair the clip "
+                                 "first")
+
+
+@pytest.mark.parametrize("y, shape", [(np.zeros((4, 4, 4)), "(4, 4, 4)"), (0.5, "()"),
+                                      (np.float32(1), "()")], ids=repr)
+def test_what_is_neither_a_clip_nor_channels_is_not_resampled(y, shape):
+    with pytest.raises(ValueError) as caught:
+        kudio.resample(y, 16000, 8000)
+    assert str(caught.value) == (f"resample(): expected (frames,) or (frames, channels), got "
+                                 f"shape {shape}")
+
+
+def test_resampling_leaves_its_input_alone(sine):
+    for y in (sine, np.stack([sine, sine], axis=1), np.asfortranarray(np.stack([sine, sine], 1)),
+              (sine * 20000).astype(np.int16)):
+        before = y.copy()
+        for res_type in RESAMPLERS:
+            out = kudio.resample(y, 16000, 8000, res_type=res_type)
+            assert np.array_equal(y, before) and not np.shares_memory(out, y)
 
 
 def test_save_wave_resamples_a_stereo_clip_along_its_frames(tmp_path):
@@ -1197,23 +1338,11 @@ def test_an_error_without_text_is_named_by_its_type(wav_file, failing, name, err
     assert message in (f"{words}{wav_file} ({said})", f"{words}{wav_file}: {said}")
 
 
-def test_nothing_is_read_through_librosa(wav_file, monkeypatch):
-    """librosa 1.0 reads fewer formats than 0.11, so what a file holds must
-    not be up to which one is installed."""
-    import librosa
-
-    def load(*args, **kwargs):
-        raise AssertionError("librosa.load was called")
-    monkeypatch.setattr(librosa, "load", load)
-    for name, (call, _, _) in READS.items():
-        call(wav_file)
-
-
 def test_importing_kudio_and_reading_a_wav_need_no_audioread(wav_file):
     code = ("import sys, kudio; kudio.file_load(sys.argv[1]); kudio.audio_info(sys.argv[1]); "
-            "kudio.file_load(sys.argv[1], sr=16000); "
+            "kudio.file_load(sys.argv[1], sr=16000); kudio.file_load(sys.argv[1], sr=8000); "
             "kudio.core.synth._load(sys.argv[1], None, 'clean'); "
-            "print([m for m in ('audioread', 'librosa') if m in sys.modules])")
+            "print([m for m in ('audioread', 'librosa', 'numba') if m in sys.modules])")
     done = subprocess.run([sys.executable, "-c", code, str(wav_file)], capture_output=True,
                           text=True, cwd=str(Path(kudio.__file__).parents[1]), timeout=300)
     assert done.stdout.strip() == "[]", done.stdout + done.stderr

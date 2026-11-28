@@ -126,11 +126,9 @@ def test_vad_frames_line_up_with_the_spectrogram(speech, hop):
     assert mask.dtype == bool and mask.shape == (spec.shape[0],)
 
 
-def test_vad_frames_uncentred_matches_librosa(speech):
-    import librosa
+def test_vad_frames_uncentred_are_the_frames_the_clip_holds(speech):
     mask = kudio.vad_frames(speech, SR, hop_length=256, n_fft=512, center=False)
-    frames = librosa.stft(speech, n_fft=512, hop_length=256, center=False)
-    assert len(mask) == frames.shape[1]
+    assert len(mask) == 1 + (len(speech) - 512) // 256
 
 
 def test_vad_frames_mark_the_bursts(speech):

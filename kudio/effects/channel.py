@@ -47,8 +47,8 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 
-from kudio._numbers import real, whole
-from kudio._samples import one_channel
+from kudio._numbers import flag, generator, real, whole
+from kudio._samples import finite, one_channel
 from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
@@ -91,9 +91,10 @@ def independent_burst(loss: float) -> float:
     >>> kudio.independent_burst(0.05)
     1.0526315789473684
     """
-    if not 0.0 <= loss < 1.0:
-        raise FeatureError(f"loss must be a fraction in [0, 1), got {loss}")
-    return 1.0 / (1.0 - loss)
+    rate = real(loss)
+    if rate is None or not 0.0 <= rate < 1.0:
+        raise FeatureError(f"loss must be a fraction in [0, 1), got {loss!r}")
+    return 1.0 / (1.0 - rate)
 
 
 def _packets(n: int, sr: int, packet_ms: float, loss: float) -> Tuple[int, int, int]:
@@ -113,6 +114,8 @@ def _run_lengths(packets: int, n_lost: int, burst: float,
     probability = 1.0 / burst
     while total < n_lost:
         length = int(rng.geometric(probability)) if probability < 1.0 else 1
+        if length < 1:                       # more than an integer holds, to numpy 1.24
+            length = n_lost
         length = min(length, n_lost - total)
         runs.append(length)
         total += length
@@ -262,7 +265,7 @@ def mu_law(y: np.ndarray, *, bits: int = 8) -> np.ndarray:
 
     >>> kudio.mu_law(speech)                                 # doctest: +SKIP
     """
-    y = _mono("mu_law", y)
+    y = finite(_mono("mu_law", y), "mu_law", FeatureError)
     bits = _bits(bits, "mu_law")
     y = np.clip(y, -1.0, 1.0)
 
@@ -283,7 +286,7 @@ def a_law(y: np.ndarray, *, bits: int = 8) -> np.ndarray:
     4.29%). The difference is audible only on very quiet material; it is here
     because a corpus recorded off a European line went through this one.
     """
-    y = _mono("a_law", y)
+    y = finite(_mono("a_law", y), "a_law", FeatureError)
     bits = _bits(bits, "a_law")
     y = np.clip(y, -1.0, 1.0)
 
@@ -318,7 +321,8 @@ def bit_depth(y: np.ndarray, bits: int = 8, *,
     A full-scale sine comes back at about ``6.02 * bits + 1.76`` dB of SNR,
     which is the textbook figure and what the tests assert.
     """
-    y = _mono("bit_depth", y)
+    dither = flag(dither, 'dither', 'bit_depth', FeatureError)
+    y = finite(_mono("bit_depth", y), "bit_depth", FeatureError)
     bits = _bits(bits, "bit_depth")
     y = np.clip(y, -1.0, 1.0)
 
@@ -326,7 +330,7 @@ def bit_depth(y: np.ndarray, bits: int = 8, *,
         # the grid's own step: _quantise has 2**(bits-1) - 1 levels each side
         # of zero, and 2 / 2**bits is half of that at 2 bits
         step = 1.0 / (2 ** (bits - 1) - 1)
-        rng = np.random.default_rng(seed)
+        rng = generator(seed, 'bit_depth', FeatureError)
         # triangular: the difference of two uniforms of one step each, two
         # steps peak to peak -- the width that takes the signal out of the
         # error's mean and power; one step only loosened the tie
@@ -371,6 +375,7 @@ def dropouts(y: np.ndarray, sr: int, *, loss: float = 0.05,
     >>> lossy, gaps = kudio.dropouts(speech, sr, loss=0.05, seed=0,
     ...                              return_spans=True)         # doctest: +SKIP
     """
+    return_spans = flag(return_spans, 'return_spans', 'dropouts', FeatureError)
     y = _mono("dropouts", y)
     sr = sample_rate(sr, "dropouts", FeatureError)
     loss = _loss(loss, "dropouts")
@@ -387,7 +392,7 @@ def dropouts(y: np.ndarray, sr: int, *, loss: float = 0.05,
     if n_lost == 0:
         return (out, spans) if return_spans else out
 
-    rng = np.random.default_rng(seed)
+    rng = generator(seed, 'dropouts', FeatureError)
     if burst is None:
         lost = np.sort(rng.choice(packets, size=n_lost, replace=False))
     else:
@@ -438,7 +443,12 @@ def telephone(y: np.ndarray, sr: int, *, codec: str = 'mu_law',
     from kudio.core.io import resample
     from kudio.effects.filters import bandpass
 
-    low, high = band
+    try:
+        low, high = band
+    except (TypeError, ValueError):
+        low = high = None
+    if real(low) is None or real(high) is None:
+        raise FeatureError(f"telephone(): band is a (low, high) pair in Hz, got {band!r}")
     # Band-limit at the original rate first: the anti-alias filter of the
     # resampler is not the telephone's passband, and doing it afterwards would
     # measure the resampler rather than the line.
@@ -535,6 +545,10 @@ def channel_spec(spec: Optional[Union[str, dict]]) -> dict:
     if out['codec'] not in ('mu_law', 'a_law', 'none'):
         raise FeatureError(
             f"unknown codec {out['codec']!r}; choose mu_law, a_law or none")
+    if not (isinstance(out['band'], (bool, np.bool_)) or out['band'] in (None, 0, 1)):
+        # any text is true, and 'no' was the telephone band
+        raise FeatureError(f"channel_spec(): band is True for the telephone band or False, got "
+                           f"{out['band']!r}")
     if out['conceal'] not in CONCEALMENT:
         raise FeatureError(
             f"unknown concealment {out['conceal']!r}; choose from "

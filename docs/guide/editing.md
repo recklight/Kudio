@@ -390,8 +390,9 @@ them.
 [`pitch_shift`][kudio.effects.augment.pitch_shift] moves the pitch by `n_steps`
 semitones and keeps the length;
 [`time_stretch`][kudio.effects.augment.time_stretch] changes the length by
-`rate` (above 1 is faster) and keeps the pitch. Both come from librosa. On a
-second of a 200 Hz harmonic tone that [`f0`][kudio.core.pitch.f0] reads as
+`rate` (above 1 is faster) and keeps the pitch. Both are librosa's phase
+vocoder, with the phases kept in float64 so that a long clip holds its pitch.
+On a second of a 200 Hz harmonic tone that [`f0`][kudio.core.pitch.f0] reads as
 200.5 Hz, `n_steps=2` gives 225.0 Hz in the same 16000 samples, two semitones
 up to the hundredth, and `rate=1.25` gives 12800 samples still at 200.5 Hz.
 

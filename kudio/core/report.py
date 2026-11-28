@@ -22,9 +22,10 @@ from typing import List, Tuple
 
 import numpy as np
 
+from kudio._numbers import count
 from kudio._samples import one_channel
 from kudio.core._framing import frame_view as _frame
-from kudio.core._policy import sample_rate
+from kudio.core._policy import sample_rate, warn
 from kudio.core.loudness import loudness
 from kudio.exceptions import FeatureError
 
@@ -477,9 +478,9 @@ def audio_report(y: np.ndarray, sr: int, *, clip_run: int = _CLIP_RUN) -> AudioR
     ...     print(problem)
     content stops at 3844 Hz, although a 16000 Hz file holds up to 8000 Hz — ...
 
-    A clip carrying NaN or inf is measured and counted rather than refused:
-    the count is the finding, reported first by :meth:`AudioReport.problems`.
-    The peak, RMS and loudness come out nan; the noise floor, the SNR estimate
+    A clip carrying NaN or inf is measured and counted rather than refused,
+    with a warning that says how many: the count is the finding, reported first
+    by :meth:`AudioReport.problems`. The peak, RMS and loudness come out nan; the noise floor, the SNR estimate
     and the silence share are taken over the frames that are finite. Inspecting
     a corpus is exactly when you want to be told which files are broken, not
     stopped at the first one.
@@ -504,9 +505,7 @@ def audio_report(y: np.ndarray, sr: int, *, clip_run: int = _CLIP_RUN) -> AudioR
         *clip_run* that is not a whole number of 1 or more.
     """
     sr = sample_rate(sr, 'audio_report', FeatureError)
-    if int(clip_run) != clip_run or clip_run < 1:
-        raise FeatureError(f"audio_report() needs a whole clip_run of 1 or more, "
-                           f"got {clip_run}")
+    clip_run = count(clip_run, 'clip_run', 'audio_report', FeatureError, ' of samples')
     y = one_channel(y, 'audio_report', FeatureError)
     y = np.ascontiguousarray(np.asarray(y, dtype=np.float64).squeeze())
     if y.ndim != 1:
@@ -515,6 +514,9 @@ def audio_report(y: np.ndarray, sr: int, *, clip_run: int = _CLIP_RUN) -> AudioR
         raise FeatureError("audio_report() got an empty waveform")
 
     non_finite = int(np.count_nonzero(~np.isfinite(y)))
+    if non_finite:
+        warn(f"audio_report(): {non_finite} of the {y.size} samples are not finite (NaN or "
+             f"inf); the peak, RMS and loudness are nan, the rest is of the finite frames")
     peak = float(np.max(np.abs(y)))
     rms = float(np.sqrt(np.mean(y ** 2)))
     clipped = _clipped_run_count(y, clip_run)
@@ -564,7 +566,7 @@ def audio_report(y: np.ndarray, sr: int, *, clip_run: int = _CLIP_RUN) -> AudioR
     step, bits = _sample_grid(y)
 
     return AudioReport(
-        sr=int(sr),
+        sr=sr,
         duration=len(y) / sr,
         peak_dbfs=_db(peak),
         rms_dbfs=_db(rms),

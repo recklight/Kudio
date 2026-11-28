@@ -6,7 +6,6 @@ and a hiss between them, over a quiet noise floor.
 """
 from __future__ import annotations
 
-import librosa
 import numpy as np
 
 import figstyle
@@ -68,7 +67,7 @@ def draw(fig, p) -> None:
     right.set_ylabel("Frequency (kHz, mel-spaced)")
 
     # label mel bands by the frequency at their centre, in kHz like the left
-    centres = librosa.mel_frequencies(N_MELS + 2, fmax=SR / 2)[1:-1] / 1000
+    centres = kudio.mel_band_hz(N_MELS, SR) / 1000
     marks = [0.25, 0.5, 1, 2, 4, 8]
     right.set_yticks([np.interp(f, centres, np.arange(N_MELS)) for f in marks[:-1]]
                      + [N_MELS - 0.5])

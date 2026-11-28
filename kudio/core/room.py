@@ -42,7 +42,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from kudio._samples import one_channel
+from kudio._numbers import flag, generator, within
+from kudio._samples import finite, one_channel
 from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
@@ -184,6 +185,9 @@ def rir(sr: int, rt60: float = 0.5, *, drr_db: float = 0.0,
         the decay well past the 35 dB that T30 needs.
     :param seed: makes the room reproducible, the way
         :class:`kudio.Synthesizer` makes a mixture reproducible.
+    :raises FeatureError: for an *rt60* or *seconds* that is not above 0, a
+        *drr_db* that is not finite or is below what the tail carries in the
+        direct sound's window, and a response under two samples.
 
     >>> ir = kudio.rir(16000, rt60=0.6, drr_db=6.0, seed=0)
     >>> room = kudio.rt60(ir, 16000)
@@ -191,17 +195,18 @@ def rir(sr: int, rt60: float = 0.5, *, drr_db: float = 0.0,
     (0.6, 6.0)
     """
     sr = sample_rate(sr, 'rir', FeatureError)
-    if rt60 <= 0:
-        raise FeatureError(f"rt60 must be positive, got {rt60}")
-
-    length = float(seconds) if seconds else rt60 * 1.5
+    rt60 = within(rt60, 'rt60', 'rir', FeatureError, above=0, of=' of seconds')
+    drr_db = within(drr_db, 'drr_db', 'rir', FeatureError, of=' of dB')
+    length = rt60 * 1.5 if seconds is None else within(
+        seconds, 'seconds', 'rir', FeatureError, above=0,
+        of=' of seconds (None is 1.5 times rt60)')
     n = int(round(length * sr))
     if n < 2:
         raise FeatureError(
             f"an impulse response of {length:g}s at {sr} Hz is {n} samples; "
             f"raise rt60 or pass a longer seconds=")
 
-    rng = np.random.default_rng(seed)
+    rng = generator(seed, 'rir', FeatureError)
     t = np.arange(n, dtype=np.float64) / sr
     # -60 dB of amplitude at t = rt60, which is what the name means
     envelope = 10.0 ** (-3.0 * t / rt60)
@@ -240,6 +245,8 @@ def apply_rir(y: np.ndarray, ir: np.ndarray, *,
         with a loud direct path has a gain, and an augmentation pipeline that
         also changes the level is measuring two things at once.
     """
+    trim = flag(trim, 'trim', 'apply_rir', FeatureError)
+    normalise = flag(normalise, 'normalise', 'apply_rir', FeatureError)
     y = _mono("apply_rir", y, "audio")
     ir = _mono("apply_rir", ir, "impulse response")
     if y.size == 0 or ir.size == 0:
@@ -291,7 +298,7 @@ def _mono(where: str, x, what: str) -> np.ndarray:
     if x.ndim != 1:
         raise FeatureError(f"{where}() takes mono {what}, got shape {x.shape}; "
                            f"pass one channel at a time")
-    return x
+    return finite(x, where, FeatureError)
 
 
 def _onset(ir: np.ndarray) -> int:
@@ -338,7 +345,7 @@ def _clarity(ir: np.ndarray, sr: int, split_ms: float) -> float:
     early = float(np.sum(ir[peak:edge] ** 2))
     late = float(np.sum(ir[edge:] ** 2))
     if late <= 0:
-        return float('inf')
+        return float('inf' if early > 0 else 'nan')
     return 10.0 * np.log10(max(early, _EPS) / late)
 
 
@@ -363,12 +370,18 @@ def rt60(ir: np.ndarray, sr: int) -> Reverberation:
     >>> room = kudio.rt60(ir, 16000)
     >>> room.seconds, room.reliable()                        # doctest: +SKIP
     (0.6, True)
+
+    :raises FeatureError: for a response of fewer than 2 samples, of samples that
+        are not finite, or of nothing but zeros.
     """
     sr = sample_rate(sr, 'rt60', FeatureError)
     ir = _mono("rt60", ir, "impulse response")
     if ir.size < 2:
         raise FeatureError(f"rt60() needs an impulse response, got {ir.size} "
                            f"sample(s)")
+    if not np.any(ir):
+        raise FeatureError("rt60(): the impulse response is all zeros, and with no energy in "
+                           "it there is no decay to time and no ratio to take")
     ir = ir[_onset(ir):]
 
     curve = schroeder_curve(ir)
@@ -382,9 +395,9 @@ def rt60(ir: np.ndarray, sr: int) -> Reverberation:
     direct = float(np.sum(ir[lo:hi] ** 2))
     reverberant = float(np.sum(ir ** 2) - direct)
     drr = (10.0 * np.log10(max(direct, _EPS) / reverberant)
-           if reverberant > 0 else float('inf'))
+           if reverberant > 0 else float('inf' if direct > 0 else 'nan'))
 
     return Reverberation(t20=t20, t30=t30, edt=edt,
                          c50=_clarity(ir, sr, _C50_MS),
                          c80=_clarity(ir, sr, _C80_MS),
-                         drr=drr, fit=fit, sr=int(sr))
+                         drr=drr, fit=fit, sr=sr)

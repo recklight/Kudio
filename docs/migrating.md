@@ -1,4 +1,4 @@
-# Migrating from v2 and 3.x
+# Migrating from v2, 3.x and 4.x
 
 kudio 3.0 was a cleanup release. It gave the feature functions descriptive
 names, moved plotting, dataframes and live audio out of the default install,
@@ -11,7 +11,8 @@ install no longer brings; and PESQ, which comes from a different package now.
 The later 3.x releases changed a few results for the same call, most of them
 fixes. They are listed at the end, because a v2 project upgrading today gets
 all of them at once. Code written for 3.7 or later needs only the
-[last section](#coming-from-3x-to-40).
+[last two sections](#coming-from-3x-to-40), and code written for 4.x
+[the last](#coming-from-4x-to-50).
 
 ## Upgrading
 
@@ -29,8 +30,8 @@ python -c "import kudio; print(kudio.__version__)"
 
 Your own code moves with it. 2.0 pinned numpy at 1.20 or older, scipy at
 1.5.4 or older and librosa at 0.7.2 or older; the current release needs numpy
-1.24 or newer and below 2.6, scipy 1.10 or newer and librosa 0.10 or newer,
-and reads files through soundfile.
+1.24 or newer, scipy 1.10 or newer and soxr 0.3.2 or newer, and reads files
+through soundfile.
 
 ## Finding the old names
 
@@ -368,6 +369,62 @@ nothing to score, or that is not a signal:
   no longer takes the sample rate: `INIT(ns_ps)` where it was
   `INIT(ns_ps, fs)`. `trad_enhance` gives the same output as before.
 
-`import kudio` loads librosa only when a feature needs it, so the metrics
-run where librosa is missing or will not import; [the changelog](changelog.md)
-has the rest.
+In 4.x `import kudio` loaded librosa only when a feature needed it, so the
+metrics ran where librosa was missing or would not import; 5.0 does not need it
+at all. [The changelog](changelog.md) has the rest.
+
+## Coming from 4.x to 5.0
+
+5.0 does without librosa. What kudio took from it, the resampling, the
+short-time transform, mel bands and MFCC, cutting at silence, pYIN and the time
+stretch, is kudio's own and gives librosa's numbers to the bit, the time stretch
+apart ([How the metrics are checked](validation.md#kudio-and-librosa) has the
+comparison). `pip install -U kudio` is the upgrade, and these are what a 4.x
+project can see differently:
+
+- librosa is not installed with kudio, and neither are numba, llvmlite,
+  scikit-learn, joblib and pooch, which came with it. Code of yours that imports
+  librosa needs it in its own requirements; nothing in kudio imports it. numpy
+  has no ceiling: the one below 2.6 was numba's.
+- m4a, aac, webm and the like take `pip install "kudio[compressed]"` and ffmpeg
+  on the PATH, on every Python. On 3.11 and earlier librosa 0.11 brought
+  audioread, so they were read there without asking. Without it now such a file
+  is an `AudioIOError` that says what to install.
+- Where librosa's `ParameterError` came out of kudio, a NaN to `resample` or a
+  plot of nothing, the error is a `ValueError` or a `FeatureError`, which is one
+  too, so `except librosa.ParameterError` there becomes `except ValueError`. A
+  `res_type` other than `soxr_vhq`, `soxr_hq`, `soxr_mq`, `soxr_lq`, `soxr_qq`,
+  `fft`, `scipy` and `polyphase` is a `ValueError`; the other names librosa
+  knows needed resampy or samplerate, which never came with kudio, and were a
+  `ModuleNotFoundError`.
+- `f0` on Python 3.12 and later voices some frames otherwise. librosa 1.0, which
+  pip installs there, left out of pYIN's search every move less likely than one
+  in ten thousand, and kudio searches all of them, as librosa 0.11 did on 3.11
+  and earlier, where the numbers stay as they were. At the default hop of 10 ms
+  that is 4 of 528 hard signals, a sweep at 22.05 and at 48 kHz in float32 and
+  in float64, by 1 frame at 22.05 kHz and 3 at 48 kHz. Of a minute of a voice
+  with pauses no frame is voiced otherwise up to a hop of 30 ms, and from 40 ms
+  more are: at 50 ms, 267 of 1201
+  ([How the metrics are checked](validation.md#kudio-and-librosa) has the table).
+- From a rate of the 11025 Hz family to 12, 24, 48, 96 or 192 kHz, a clip whose
+  length comes out whole is that long: a second of 44.1 kHz is 48000 samples at
+  48 kHz, where it was 48001 with the last one zero. Other pairs of rates are as
+  they were.
+- `time_stretch` and `pitch_shift` give other samples, as long as before: within
+  0.47 % of the peak of librosa 0.11's over two seconds of a voice and 4.3 parts in
+  a million of 1.0's, more at the end. The phases are kept in float64, so float32
+  audio keeps its pitch over a long clip, where librosa 0.11 left a tone of
+  3001.7 Hz 1.5 cents flat after five minutes.
+- What cannot be right is refused: a number in no array, three axes or more,
+  frames of no channel, a flag that is neither True nor False nor 0 or 1, and a
+  setting outside its range are a `ValueError`, or a `FeatureError`, that names
+  the function and the argument, where 4.3.0 gave an answer. The changelog lists
+  each one with what it came to. `audio_report` warns about samples that are not
+  finite, and `loudness_over_time`, `loudness_range` and `rt60` refuse them, or a
+  response of nothing, where they read them as silence.
+- A worker process that dies is an error: `map_waves`, `load_waves`,
+  `score_dataset` and `Synthesizer` raise one that names the items it had and its
+  exit code, where they waited for ever. On Windows before Python 3.13 a pool
+  holds 31 processes at most.
+- A signature made with 4.3.0 is not one made with 5.0: `pkg` names soxr where a
+  file was resampled, and no librosa.

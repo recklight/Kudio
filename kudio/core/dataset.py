@@ -19,9 +19,8 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path, PurePath
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
-import numpy as np
-
 from kudio import _textfile
+from kudio._numbers import generator
 from kudio._textfile import plain
 
 __all__ = ['Pair', 'save_manifest', 'load_manifest', 'split_pairs',
@@ -408,7 +407,7 @@ def split_pairs(pairs: Sequence[Pair], val_split: float = 0.1,
             f"got {val_split} + {test_split}")
 
     items = _distinct_examples(pairs)
-    rng = np.random.default_rng(seed)
+    rng = generator(seed, 'split_pairs')
     rng.shuffle(items)
 
     n = len(items)

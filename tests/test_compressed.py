@@ -327,7 +327,7 @@ def test_an_mp3_with_no_mp3_in_it_is_not_said_to_be_missing(tmp_path, audioread,
     said = _said(*READS[reader], path)
     assert "could not be decoded either" in said and "does not exist" not in said
     monkeypatch.setitem(sys.modules, "audioread", None)
-    assert "pip install audioread" in _said(*READS[reader], path)
+    assert 'pip install "kudio[compressed]"' in _said(*READS[reader], path)
 
 
 def test_the_header_of_such_a_file_is_not_taken_at_its_word(tmp_path, audioread):
@@ -373,7 +373,8 @@ def _said(call, error, path):
 def test_without_audioread_it_says_to_install_it(tmp_path, monkeypatch, name):
     monkeypatch.setitem(sys.modules, "audioread", None)
     said = _said(*READS[name], _encoded(tmp_path))
-    assert "audioread is not installed: pip install audioread" in said and "ffmpeg" in said
+    assert "decoded with audioread and ffmpeg" in said
+    assert 'audioread is not installed. Install it with: pip install "kudio[compressed]"' in said
 
 
 @pytest.mark.parametrize("name", READS)

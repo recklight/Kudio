@@ -171,10 +171,11 @@ PYSEPM_EVO_CSII = {
 @pytest.mark.parametrize("sr, kind", sorted(PYSEPM_EVO_CSII))
 def test_csii_matches_pysepm_evo(sr, kind):
     """To 1e-12, but for the log-MMSE output: kudio's enhancer returns
-    float32, whose last bits move with the numpy and scipy releases, and
-    that is enough to move CSII past 1e-12."""
+    float32, whose last bits move with the numpy and scipy releases. Every
+    sample moved by one of them, up or down at random, moves CSII by 4e-9,
+    and by 1.5e-8 at the most in 20 draws."""
     ref, deg = _degraded(kind, sr)
-    tolerance = 1e-9 if kind == 'log-MMSE' else 1e-12
+    tolerance = 2e-8 if kind == 'log-MMSE' else 1e-12
     got = csii(ref, deg, sr)
     for value, want in zip(got, PYSEPM_EVO_CSII[(sr, kind)]):
         assert value == pytest.approx(want, rel=tolerance, abs=tolerance), (got, kind)
@@ -635,16 +636,14 @@ def test_csii_does_not_depend_on_the_rate_when_30_ms_is_whole(sr):
 @pytest.mark.parametrize("sr", [11025, 22050, 44100, 48000, 16000.5])
 def test_ncm_refuses_other_rates_with_the_way_out(sr):
     y = _speech(8000, 1.0)
-    with pytest.raises(ValueError, match=r"^ncm\(\): .*kudio\.resample.*"
-                                         r"scipy\.signal\.resample_poly"):
+    with pytest.raises(ValueError, match=r"^ncm\(\): .*kudio\.resample\(y, sr, 16000\)"):
         ncm(y, y, sr)
 
 
 @pytest.mark.parametrize("sr", [7999, 4000])
 def test_csii_refuses_rates_under_8_khz_with_the_way_out(sr):
     y = _speech(8000, 1.0)
-    with pytest.raises(ValueError, match=r"^csii\(\): .*kudio\.resample.*"
-                                         r"scipy\.signal\.resample_poly"):
+    with pytest.raises(ValueError, match=r"^csii\(\): .*kudio\.resample\(y, sr, 16000\)"):
         csii(y, y, sr)
 
 

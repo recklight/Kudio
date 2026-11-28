@@ -1,4 +1,4 @@
-# 從 v2 與 3.x 遷移 {#migrating-from-v2-and-3x}
+# 從 v2、3.x 與 4.x 遷移 {#migrating-from-v2-3x-and-4x}
 
 kudio 3.0 是一個以整理為主的版本。它替特徵函式取了看名字就懂的名稱，把畫圖、
 dataframe 和即時音訊移出預設安裝，並移除了 v2 還留著的相容性模組。大部分 v2
@@ -9,7 +9,7 @@ dataframe 和即時音訊移出預設安裝，並移除了 v2 還留著的相容
 
 之後的 3.x 版本讓幾個呼叫在同樣的寫法下得到不同的結果，其中大多是修正。這些列在
 最後面，因為現在才從 v2 升級的專案，會一次全部碰到。為 3.7 以後寫的程式碼，只需要看
-[最後一節](#coming-from-3x-to-40)。
+[最後兩節](#coming-from-3x-to-40)；為 4.x 寫的，只需要看[最後一節](#coming-from-4x-to-50)。
 
 ## 升級 {#upgrading}
 
@@ -25,8 +25,8 @@ python -c "import kudio; print(kudio.__version__)"
 ```
 
 你自己的程式碼也會跟著搬過去。2.0 把 numpy 鎖在 1.20 或更舊、scipy 鎖在 1.5.4
-或更舊、librosa 鎖在 0.7.2 或更舊；目前的版本需要 numpy 1.24 以上且低於 2.6、
-scipy 1.10 以上、librosa 0.10 以上，並透過 soundfile 讀檔。
+或更舊、librosa 鎖在 0.7.2 或更舊；目前的版本需要 numpy 1.24 以上、scipy 1.10 以上和
+soxr 0.3.2 以上，並透過 soundfile 讀檔。
 
 ## 找出舊名稱 {#finding-the-old-names}
 
@@ -324,5 +324,47 @@ PESQ 拿到的是完整的兩段訊號，跟 ITU 程式讀兩個檔案一樣：`
   也不再接受取樣率：以前是 `INIT(ns_ps, fs)`，現在是 `INIT(ns_ps)`。`trad_enhance`
   的輸出和以前相同。
 
-`import kudio` 只在某個功能需要時才載入 librosa，所以在沒有 librosa、或 librosa 匯入
-失敗的環境裡，指標照樣能跑；其餘的變更見[更新紀錄](changelog.md)。
+4.x 的 `import kudio` 只在某個功能需要時才載入 librosa，所以在沒有 librosa、或 librosa
+匯入失敗的環境裡，指標照樣能跑；5.0 則完全不需要它。其餘的變更見[更新紀錄](changelog.md)。
+
+## 從 4.x 升級到 5.0 {#coming-from-4x-to-50}
+
+5.0 不再需要 librosa。kudio 原本從它拿來的重新取樣、短時傅立葉轉換、梅爾頻帶和 MFCC、
+靜音切割、pYIN 和時間伸縮，現在都是 kudio 自己的，除了時間伸縮之外，算出的都和 librosa
+逐位元相同（對照見[指標的驗證方式](validation.md#kudio-and-librosa)）。升級就是
+`pip install -U kudio`，4.x 的專案可能看到的不同是這些：
+
+- 安裝 kudio 不再帶入 librosa，也不再帶入跟著它來的 numba、llvmlite、scikit-learn、
+  joblib 和 pooch。你自己的程式碼如果匯入 librosa，請把它寫進自己的需求清單；kudio
+  裡沒有任何地方匯入它。numpy 沒有版本上限了：以前低於 2.6 的上限是 numba 的。
+- m4a、aac、webm 之類的格式，在每個 Python 上都要 `pip install "kudio[compressed]"`
+  和 PATH 上的 ffmpeg。Python 3.11 以下 librosa 0.11 會帶入 audioread，所以以前不用另外
+  裝就讀得到；現在沒有它，這種檔案會是一個說明要裝什麼的 `AudioIOError`。
+- 以前從 kudio 冒出 librosa 的 `ParameterError` 的地方，例如給 `resample` 一個 NaN，或
+  畫一張什麼都沒有的圖，現在是 `ValueError` 或 `FeatureError`（它也是 `ValueError`），
+  所以那裡的 `except librosa.ParameterError` 要改成 `except ValueError`。`res_type`
+  不是 `soxr_vhq`、`soxr_hq`、`soxr_mq`、`soxr_lq`、`soxr_qq`、`fft`、`scipy` 或
+  `polyphase` 時是 `ValueError`；librosa 認得的其他名稱需要 resampy 或 samplerate，
+  kudio 從來不裝這兩個，以前會是 `ModuleNotFoundError`。
+- Python 3.12 以上，`f0` 對一些音框的有聲判斷不同。pip 在那裡裝的 librosa 1.0，
+  pYIN 的搜尋會略過機率低於萬分之一的轉移；kudio 每一個都搜尋，和 Python 3.11 以下的
+  librosa 0.11 一樣，所以 3.11 以下的數字不變。預設 10 ms 的位移下，528 種困難訊號中
+  有 4 種不同，都是 22.05 和 48 kHz 的掃頻，float32 和 float64 各一：22.05 kHz 差 1 個
+  音框，48 kHz 差 3 個。一分鐘有停頓的人聲，位移到 30 ms 都沒有一幀不同，40 ms 起變多：
+  50 ms 時 1201 幀裡有 267 幀（表在[指標的驗證方式](validation.md#kudio-and-librosa)）。
+- 從 11025 Hz 這一族的取樣率轉到 12、24、48、96 或 192 kHz 時，長度剛好是整數的片段
+  就是那個長度：44.1 kHz 的一秒在 48 kHz 是 48000 個樣本，以前是 48001 個，最後一個是零。
+  其他的取樣率組合和以前一樣。
+- `time_stretch` 和 `pitch_shift` 給出的樣本不同，長度不變：兩秒的人聲，和 librosa 0.11
+  的差在峰值的 0.47 % 以內，和 1.0 的差在百萬分之 4.3 以內，結尾差得多一些。相位以 float64
+  累加，所以 float32 的音訊在長的片段裡音高不會漂；librosa 0.11 讓 3001.7 Hz 的純音在
+  五分鐘後低了 1.5 音分。
+- 不可能對的輸入會被拒絕：不在陣列裡的數字、三個軸以上、沒有聲道的音框、既不是 True／False
+  也不是 0／1 的旗標，以及超出範圍的設定，都是寫出函式和參數名稱的 `ValueError`（或
+  `FeatureError`），4.3.0 則會給出答案。更新紀錄逐項列出它們以前代表什麼。`audio_report`
+  遇到不是有限數的樣本會發出警告，`loudness_over_time`、`loudness_range` 和 `rt60` 則拒絕
+  它們，或拒絕什麼都沒有的響應，以前會把它們當成靜音。
+- 工作行程死掉會是一個錯誤：`map_waves`、`load_waves`、`score_dataset` 和 `Synthesizer`
+  會引發一個寫出它手上的項目和結束碼的錯誤，以前會一直等下去。Windows 上 Python 3.13 以前，
+  一個行程池最多 31 個行程。
+- 4.3.0 做出的簽章和 5.0 的不同：重新取樣過的檔案，`pkg` 寫的是 soxr，沒有 librosa。

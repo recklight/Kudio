@@ -231,3 +231,46 @@ def test_a_stereo_block_is_refused():
     enhancer = kudio.StreamEnhancer(16000)
     with pytest.raises(FeatureError, match="mono"):
         enhancer.process(np.zeros((1024, 2)))
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_a_block_that_is_not_finite_is_refused_and_forgotten(noisy_and_clean, bad):
+    """One NaN reached the noise estimate, and every block after it was NaN until
+    the next reset(). Refused, the stream goes on from where it was."""
+    noisy = np.asarray(noisy_and_clean[0], dtype=np.float32)[:16000]
+    through = kudio.StreamEnhancer(SR)
+    plain = [through.process(noisy[:8000]), through.process(noisy[8000:]), through.flush()]
+    stream = kudio.StreamEnhancer(SR)
+    out = [stream.process(noisy[:8000])]
+    block = noisy[8000:8256].copy()
+    block[5:7] = bad
+    with pytest.raises(kudio.FeatureError) as caught:
+        stream.process(block)
+    assert str(caught.value) == ("StreamEnhancer.process() got 2 sample(s) that are not finite "
+                                 "(NaN or inf); repair the block first, or feed zeros in its place")
+    out += [stream.process(noisy[8000:]), stream.flush()]
+    assert np.array_equal(np.concatenate(out), np.concatenate(plain))
+    assert np.isfinite(np.concatenate(out)).all()
+
+
+@pytest.mark.parametrize("value", [0, -1, 2.5, float('nan'), True, '512', None], ids=repr)
+def test_a_frame_that_is_not_a_number_of_samples_is_refused(value):
+    with pytest.raises(kudio.FeatureError) as caught:
+        kudio.StreamEnhancer(SR, n_fft=value)
+    assert str(caught.value) == (f"StreamEnhancer(): n_fft must be >= 1, a whole number of "
+                                 f"samples, got {value!r}")
+
+
+@pytest.mark.parametrize("value", [-1, 2.5, float('nan'), True, '128'], ids=repr)
+def test_a_hop_that_is_not_a_number_of_samples_is_refused(value):
+    with pytest.raises(kudio.FeatureError) as caught:
+        kudio.StreamEnhancer(SR, hop_length=value)
+    assert str(caught.value) == (f"StreamEnhancer(): hop_length must be >= 1, a whole number of "
+                                 f"samples, got {value!r}")
+
+
+def test_sizes_of_any_whole_type_are_that_size(noisy_and_clean):
+    noisy = noisy_and_clean[0][:8000]
+    want = kudio.StreamEnhancer(SR, n_fft=256, hop_length=64).process(noisy)
+    got = kudio.StreamEnhancer(SR, n_fft=np.float64(256), hop_length=64.0).process(noisy)
+    assert np.array_equal(got, want)

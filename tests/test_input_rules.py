@@ -162,16 +162,35 @@ def _flat(value):
     return [value]
 
 
+def _as_text(value):
+    """What str() writes of every number _flat gives, in a form compared at once: the
+    samples of an array as their float64 bits, every NaN the same one, the rest as str()
+    writes them. Two that are the same here write the same there, and writing out 19 200
+    samples seven times was most of what the test took."""
+    if isinstance(value, dict):
+        return tuple(_as_text(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return tuple(_as_text(v) for v in value)
+    if isinstance(value, np.ndarray):
+        x = value.astype(np.float64).ravel()
+        x[np.isnan(x)] = np.nan
+        return ('samples', x.tobytes())
+    return str(value)
+
+
 @pytest.mark.parametrize("name", RATED)
 def test_one_rate_of_any_type_is_the_same_answer(name):
     """Headers, configs and numpy hand it out as all of these."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        expected = _flat(RATED[name](SR))
+        out = RATED[name](SR)
+        expected, text = _flat(out), _as_text(out)
         for value in (16000.0, np.int32(SR), np.uint16(SR), np.float32(SR), np.float64(SR),
                       np.array(SR)):
-            got = _flat(RATED[name](value))
-            np.testing.assert_array_equal(np.array(got, dtype=object).astype(str),
+            got = RATED[name](value)
+            if _as_text(got) == text:
+                continue
+            np.testing.assert_array_equal(np.array(_flat(got), dtype=object).astype(str),
                                           np.array(expected, dtype=object).astype(str), repr(value))
 
 
@@ -353,16 +372,16 @@ def test_channels_first_is_refused(name):
 def test_a_row_is_one_channel(name):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        assert _flat(EVERY[name](Y[None])) == pytest.approx(_flat(EVERY[name](Y)), nan_ok=True,
-                                                            abs=0, rel=0)
+        _assert_close(_flat(EVERY[name](Y[None])), _flat(EVERY[name](Y)), nan_ok=True,
+                      abs=0, rel=0)
 
 
 @pytest.mark.parametrize("name", MONO)
 def test_a_column_is_one_channel(name):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        assert _flat(MONO[name](Y[:, None])) == pytest.approx(_flat(MONO[name](Y)), nan_ok=True,
-                                                              abs=0, rel=0)
+        _assert_close(_flat(MONO[name](Y[:, None])), _flat(MONO[name](Y)), nan_ok=True,
+                      abs=0, rel=0)
 
 
 def test_what_is_taken_for_channels_first():
@@ -370,8 +389,12 @@ def test_what_is_taken_for_channels_first():
     for shape in ((2, 3), (2, 16000), (8, 9), (100, 101)):
         with pytest.raises(ValueError, match="channels first"):
             channels_last(np.zeros(shape), 'f')
-    for shape in ((2, 2), (3, 2), (16000, 2), (16, 16), (0, 2), (0,), (5,), (5, 1), (2, 3, 4)):
+    for shape in ((2, 2), (3, 2), (16000, 2), (16, 16), (0, 2), (0,), (5,), (5, 1)):
         assert channels_last(np.zeros(shape), 'f').shape == shape
+    # a number, three axes and no channel are no clip
+    for shape in ((), (2, 3, 4), (5, 0)):
+        with pytest.raises(ValueError, match=r"f\(\) takes \(frames,\) or \(frames, channels\)"):
+            channels_last(np.zeros(shape), 'f')
     for shape in ((1, 1), (1, 2), (1, 16000), (1, 0)):
         assert channels_last(np.zeros(shape), 'f').shape == (shape[1],)
 
@@ -523,8 +546,38 @@ def test_full_scale_is_held_to_the_type_when_it_is_resampled(kind):
     out = kudio.resample(np.where(square, limits.max, limits.min).astype(kind), SR, 22050)
     plain = kudio.resample(np.where(square, 1.0, -1.0).astype(np.float32), SR, 22050)
     assert out.dtype == kind
-    assert (out.astype(np.float64) - middle) / full == pytest.approx(
-        np.clip(plain, -1.0, 1.0), abs=3 * 2.0 ** -7 if limits.bits == 8 else 1e-3)
+    _assert_close((out.astype(np.float64) - middle) / full, np.clip(plain, -1.0, 1.0),
+                  abs=3 * 2.0 ** -7 if limits.bits == 8 else 1e-3)
+
+
+def _floats(value):
+    """*value* as float64, if it is an array of floats or a list of nothing but floats."""
+    if isinstance(value, np.ndarray):
+        return value.astype(np.float64) if value.dtype.kind == 'f' else None
+    if isinstance(value, list) and all(type(x) is float for x in value):
+        return np.array(value, dtype=np.float64)
+    return None
+
+
+def _assert_close(got, expected, rel=None, abs=None, nan_ok=False):
+    """``assert got == pytest.approx(expected, rel=rel, abs=abs, nan_ok=nan_ok)``. approx
+    goes one number at a time in Python, 0.09 s for the 38 400 samples of a seam, so numpy
+    looks first, with approx's tolerance: where every number is within it, approx would say
+    so too. Whatever else is left to approx, and so is the message."""
+    a, e = _floats(got), _floats(expected)
+    if a is not None and e is not None and type(got) is type(expected) and a.shape == e.shape:
+        with np.errstate(invalid='ignore', over='ignore'):
+            if rel is None and abs is not None:
+                tolerance = abs
+            else:
+                tolerance = np.maximum((1e-6 if rel is None else rel) * np.abs(e),
+                                       1e-12 if abs is None else abs)
+            near = (a == e) | (np.isfinite(e) & (np.abs(e - a) <= tolerance))
+        if nan_ok:
+            near |= np.isnan(a) & np.isnan(e)
+        if near.all():
+            return
+    assert got == pytest.approx(expected, rel=rel, abs=abs, nan_ok=nan_ok)
 
 
 def _same_audio(got, expected):
@@ -534,10 +587,10 @@ def _same_audio(got, expected):
             _same_audio(a, b)
     elif isinstance(got, np.ndarray) and got.dtype == np.uint8:
         # rounded to a step of 1/128 and held to the type's range
-        assert (got.astype(np.float64) - 128.0) / 128.0 == pytest.approx(
-            np.clip(expected, -1.0, 127 / 128), abs=2 / 128)
+        _assert_close((got.astype(np.float64) - 128.0) / 128.0,
+                      np.clip(expected, -1.0, 127 / 128), abs=2 / 128)
     else:
-        assert _flat(got) == pytest.approx(_flat(expected), rel=1e-4, abs=2e-5, nan_ok=True)
+        _assert_close(_flat(got), _flat(expected), rel=1e-4, abs=2e-5, nan_ok=True)
 
 
 SEAM_TYPES = {
@@ -562,4 +615,4 @@ def test_a_seam_joins_two_types_at_the_level_each_was_recorded_at(first, second,
         assert joined.dtype == a.dtype
         scale = {'int16': 32768.0, 'int32': 2.0 ** 31, 'uint8': 128.0}.get(first, 1.0)
         heard = (joined.astype(np.float64) - (128 if first == 'uint8' else 0)) / scale
-        assert heard == pytest.approx(plain, abs=2 / 128)
+        _assert_close(heard, plain, abs=2 / 128)

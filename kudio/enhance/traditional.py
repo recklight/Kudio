@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from kudio._samples import one_channel
+from kudio._numbers import within
+from kudio._samples import finite, one_channel
 from kudio.core._policy import sample_rate
 from kudio.exceptions import FeatureError
 
@@ -30,6 +31,8 @@ def wavelet_low_pass_filter(y: np.ndarray, thres: float = 0.8,
     y = one_channel(y, 'wavelet_low_pass_filter', FeatureError)
     if y.ndim != 1:
         raise FeatureError(f"wavelet_low_pass_filter() takes mono audio, got shape {y.shape}")
+    finite(y, 'wavelet_low_pass_filter', FeatureError)
+    thres = within(thres, 'thres', 'wavelet_low_pass_filter', FeatureError, low=0)
     # the peak, not the signed maximum: a clip below zero throughout got a
     # negative threshold and came back unfiltered
     level = thres * float(np.nanmax(np.abs(y))) if y.size else 0.0
@@ -60,6 +63,7 @@ def trad_enhance(y: np.ndarray, sr: int) -> np.ndarray:
     y = np.asarray(one_channel(y, 'trad_enhance', FeatureError), dtype=np.float64)
     if y.ndim != 1:
         raise FeatureError(f"trad_enhance() takes mono audio, got shape {y.shape}")
+    finite(y, 'trad_enhance', FeatureError)
     if len(y) < 512:
         raise FeatureError(f"trad_enhance() needs at least one 512-sample frame, "
                            f"got {len(y)} samples")

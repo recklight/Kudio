@@ -926,7 +926,7 @@ table lists, since their packages cannot score a silent output; in
 than pulling them down. Every metric that takes a reference warns and
 refuses as described under [When the lengths differ](#when-the-lengths-differ).
 How the rule is tested is on
-[How the metrics are checked](../validation.md#the-input-rule-and-the-import-without-librosa).
+[How the metrics are checked](../validation.md#the-input-rule-and-the-import-without-optional-packages).
 
 ## A whole test set
 

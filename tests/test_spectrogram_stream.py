@@ -65,17 +65,17 @@ def test_to_stft_reports_the_geometry_it_used():
 def test_columns_match_an_uncentred_offline_stft():
     """The whole promise: live and offline see the same audio the same way.
 
-    Compared against ``center=False`` -- a stream cannot reflect-pad samples it
-    has not heard yet, so it is that convention and not the file default.
+    Compared against frames with nothing around the clip -- a stream cannot pad
+    what it has not heard yet, so it is that convention and not the file default.
     """
-    librosa = pytest.importorskip("librosa")
     y = voice(2.0)
     spec = kudio.SpectrogramStream(SR, n_fft=512, hop_length=256, seconds=10.0)
 
     live = spec.push(y)
-    offline = np.abs(librosa.stft(y, n_fft=512, hop_length=256,
-                                  window='hann', center=False)).T
-    scale = 2.0 / np.sum(np.hanning(513)[:-1])      # scipy's periodic hann
+    hann = np.hanning(513)[:-1]                     # scipy's periodic hann
+    frames = np.lib.stride_tricks.sliding_window_view(y, 512)[::256]
+    offline = np.abs(np.fft.rfft(hann * frames, axis=1))
+    scale = 2.0 / np.sum(hann)
     expected = np.maximum(20 * np.log10(np.maximum(offline * scale, 1e-10)),
                           spec.floor_db)
 
@@ -257,11 +257,7 @@ def test_a_bad_rate_is_refused():
 
 
 def test_mel_rows_are_labelled_with_their_band_centres():
-    """mel_frequencies(n_mels) runs from fmin to fmax inclusive; the filters
-    sit on the inner points of mel_frequencies(n_mels + 2)."""
-    import librosa
     import kudio
     view = kudio.SpectrogramStream(16000, n_mels=64)
-    expected = librosa.mel_frequencies(n_mels=66, fmin=0.0, fmax=8000.0)[1:-1]
-    assert np.allclose(view.freqs, expected)
+    assert np.array_equal(view.freqs, kudio.mel_band_hz(64, 16000))
     assert view.freqs[0] > 0 and view.freqs[-1] < 8000

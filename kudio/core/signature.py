@@ -30,8 +30,8 @@ What it records:
   segmental_snr's 512-sample frames are 32 ms long at the one rate and
   64 ms at the other.
 * ``resample``, when files at other rates were brought to ``sr`` as they
-  were read: :func:`kudio.resample`'s method, with librosa and soxr under
-  ``pkg``, since another resampler gives other samples.
+  were read: :func:`kudio.resample`'s method, with soxr under ``pkg``, since
+  another resampler gives other samples.
 * ``pair``, for the metrics that score a signal against a reference: whether
   the two were lined up with :func:`kudio.align` first, which only you can
   say, and what was done about their lengths. ``cut=shorter`` is kudio's
@@ -49,8 +49,8 @@ What it records:
   metric that nothing changes is its name alone.
 * ``pkg``, the version of every package that computes one of the metrics, as
   installed here, or ``missing``: pesq, pystoi, mir_eval and onnxruntime,
-  and the librosa and soxr that resample DNSMOS's input at any rate but
-  16 kHz. A DNSMOS field also names the model file, with the first 8 hex
+  and the soxr that resamples DNSMOS's input at any rate but 16 kHz. A
+  DNSMOS field also names the model file, with the first 8 hex
   digits of its SHA-256, where it can tell which file ran, and the
   polynomials that mapped the network's outputs onto the MOS scale by 8 hex
   digits of a SHA-256 of their coefficients, so that kudio's own, a
@@ -439,9 +439,9 @@ def _srmr(o, sr, name) -> _Run:
 
 def _resampled(sr) -> Tuple[str, ...]:
     """What DNSMOS's input goes through on its way to 16 kHz:
-    :func:`kudio.resample`, librosa's soxr_hq."""
+    :func:`kudio.resample`, which is soxr's."""
     from kudio.core.dnsmos import MODEL_SR
-    return () if sr == MODEL_SR else ('librosa', 'soxr')
+    return () if sr == MODEL_SR else ('soxr',)
 
 
 def _model(kind: str, o, name) -> Tuple[str, Optional[Path]]:
@@ -891,7 +891,7 @@ def signature(metrics: Union[str, Iterable[str], Mapping[str, Optional[Mapping[s
     for name in names:
         fields[name] = {key: _token(value) for key, value in runs[name].settings}
     packages = sorted({p for run in runs.values() for p in run.packages} |
-                      ({'librosa', 'soxr'} if resampled else set()))
+                      ({'soxr'} if resampled else set()))
     if packages:
         fields['pkg'] = {p: _installed(p) for p in packages}
     if n is not None:

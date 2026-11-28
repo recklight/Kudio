@@ -269,8 +269,7 @@ def _lpc_order(sr, name: str) -> int:
     sr = sample_rate(sr, name)
     if sr not in _LPC_ORDER:
         raise ValueError(f"{name}(): defined at 8 and 16 kHz only, not {sr} Hz; "
-                         f"resample to 16 kHz first, with kudio.resample or, "
-                         f"without librosa, scipy.signal.resample_poly(y, 16000, {sr})")
+                         f"resample to 16 kHz first, with kudio.resample(y, {sr}, 16000)")
     return _LPC_ORDER[sr]
 
 

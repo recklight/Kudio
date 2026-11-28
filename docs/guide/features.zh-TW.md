@@ -156,7 +156,7 @@ aligned = kudio.melspectrogram(y, sr=sr, n_frames=1,
   引發 [`FeatureError`][kudio.exceptions.FeatureError]。
 - 預設是 `n_fft=1024` 和 `hop_length=512`，不是頻譜圖的 512 和 256。像
   上面最後一行那樣兩個都傳，才會和 [`STFT`][kudio.core.stft.STFT] 一列
-  對一列。窗函數維持 librosa 預設的 Hann 窗；`melspectrogram` 沒有窗函數
+  對一列。窗函數和 librosa 一樣維持 Hann 窗；`melspectrogram` 沒有窗函數
   的參數。
 - 短於 `n_frames` 個音框的片段，會得到空的 `(0, n_mels * n_frames)`
   陣列，不會引發錯誤；[`frame_windows`][kudio.core.feature.frame_windows]
@@ -165,7 +165,7 @@ aligned = kudio.melspectrogram(y, sr=sr, n_frames=1,
 
 [`mfcc`][kudio.core.feature.mfcc] 接受陣列和它的取樣率，不接受路徑，
 回傳 `(1, mel_frames, n_mfcc)`；用 `[0]` 去掉批次軸。`n_fft`、`hop_length`、`n_mels` 和
-`fmax` 沒給時都是 librosa 的預設：Hann 窗、`n_fft=2048`、512 個樣本的位移和
+`fmax` 沒給時和 librosa 的預設相同：Hann 窗、`n_fft=2048`、512 個樣本的位移和
 128 個梅爾頻帶。係數比梅爾頻帶還多會引發
 [`FeatureError`][kudio.exceptions.FeatureError]，例如 `n_mels=32` 卻沒有調低
 預設 40 的 `n_mfcc`。要在頻譜圖的 256 樣本格點上算 MFCC：

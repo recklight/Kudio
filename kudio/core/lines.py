@@ -20,8 +20,9 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from kudio._numbers import whole, within
 from kudio._samples import one_channel
-from kudio.core._policy import sample_rate
+from kudio.core._policy import sample_rate, warn
 from kudio.exceptions import FeatureError
 
 __all__ = ['Line', 'Comb', 'TonalLines', 'tonal_lines']
@@ -210,12 +211,23 @@ def tonal_lines(y: np.ndarray, sr: int, *, min_prominence_db: float = 20.0,
         resolution its length gives.
     :param max_lines: the most prominent this many are kept.
     :raises FeatureError: on non-mono audio, samples that are not finite, a
-        rate that is not a positive number, a non-positive resolution.
+        rate that is not a positive number, a resolution that is not one or is
+        so coarse that no 64 bins are left, a prominence that is not a number, a
+        number of lines that is not a whole one.
     """
     sr = sample_rate(sr, 'tonal_lines', FeatureError)
-    if not resolution_hz > 0:
-        raise FeatureError(f"tonal_lines() needs a positive resolution_hz, got "
-                           f"{resolution_hz}")
+    min_prominence_db = within(min_prominence_db, 'min_prominence_db', 'tonal_lines',
+                               FeatureError, of=' of dB')
+    resolution_hz = within(resolution_hz, 'resolution_hz', 'tonal_lines', FeatureError,
+                           above=0, of=' of Hz')
+    most = whole(max_lines)
+    if most is None or most < 0:
+        raise FeatureError(f"tonal_lines(): max_lines is a whole number of lines, 0 or more, "
+                           f"got {max_lines!r}")
+    if sr / resolution_hz <= 32:
+        raise FeatureError(f"tonal_lines(): resolution_hz={resolution_hz:g} is too coarse at "
+                           f"{sr} Hz, where the segments would have under 64 samples and "
+                           f"nothing would stand out of them; ask for less than {sr / 32:g}")
     y = one_channel(y, 'tonal_lines', FeatureError)
     y = np.ascontiguousarray(np.asarray(y, dtype=np.float64).squeeze())
     if y.ndim != 1:
@@ -227,6 +239,9 @@ def tonal_lines(y: np.ndarray, sr: int, *, min_prominence_db: float = 20.0,
 
     wanted = 2 ** int(np.ceil(np.log2(sr / resolution_hz)))
     size = min(len(y), wanted)
+    if 0 < size < 64 and np.any(y):
+        warn(f"tonal_lines(): the clip has {len(y)} sample(s), too few to find a line in; it "
+             f"takes 64")
     if size < 64 or not np.any(y):
         return TonalLines((), (), float(sr) / max(size, 1), float(min_prominence_db))
 
@@ -255,8 +270,8 @@ def tonal_lines(y: np.ndarray, sr: int, *, min_prominence_db: float = 20.0,
                           # 'spectrum' scaling gives a sine of amplitude A as A**2 / 2
                           level_dbfs=float(top + 10.0 * np.log10(2.0)),
                           prominence_db=float(stand[p] + (top - db[p]))))
-    if len(lines) > max_lines:
-        lines = sorted(lines, key=lambda line: -line.prominence_db)[:max_lines]
+    if len(lines) > most:
+        lines = sorted(lines, key=lambda line: -line.prominence_db)[:most]
     lines.sort(key=lambda line: line.hz)
 
     def tolerance(f):

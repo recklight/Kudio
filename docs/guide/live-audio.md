@@ -280,8 +280,9 @@ anything is.
 `n_mels=64` puts the rows on a mel scale, bounded by `fmin` and `fmax`. Voiced
 speech puts most of its energy below 1 kHz, which is an eighth of a linear axis
 at 16 kHz; with 64 mel bands a third of the rows sit there. The mel values are
-not dBFS, though. The filters are librosa's, area-normalised, so a band's value
-depends on its width, and a full-scale sine reads well below 0 dB:
+not dBFS, though. The filters are Slaney's, area-normalised as librosa's are, so
+a band's value depends on its width, and a full-scale sine reads well below
+0 dB:
 
 | Full-scale sine | Linear axis | 64 mel bands |
 |---|---|---|
@@ -300,7 +301,7 @@ what is being said.
 
 The offline `STFT` pads the start so that column *k* is centred on sample
 *k* × hop. A stream cannot pad audio it has not heard yet, so here column *k*
-covers samples `[k*hop, k*hop + n_fft)`, librosa's `center=False` convention,
+covers samples `[k*hop, k*hop + n_fft)`, what librosa calls `center=False`,
 which the test suite checks the columns against. A live column is therefore
 half a frame later than the offline column with the same index.
 [`to_stft()`][kudio.core.spectrogram.SpectrogramStream.to_stft] gives the

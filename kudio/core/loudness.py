@@ -28,7 +28,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from kudio._samples import as_float, channels_last, to_float
+from kudio._numbers import count, within
+from kudio._samples import as_float, channels_last, finite, to_float
 from kudio.core._policy import sample_rate, warn
 from kudio.exceptions import FeatureError
 
@@ -225,6 +226,8 @@ def loudness(y: np.ndarray, sr: int, block_size: float = BLOCK_SIZE) -> float:
         raise FeatureError(f"loudness() handles up to {len(_CHANNEL_WEIGHTS)} "
                            f"channels, got {n_channels}")
 
+    block_size = within(block_size, 'block_size', 'loudness', FeatureError, above=0,
+                        of=' of seconds')
     block = int(round(block_size * sr))
     if block < 1 or data.shape[0] < block:
         raise FeatureError(
@@ -279,13 +282,21 @@ class LoudnessCurve:
 
     @property
     def max(self) -> float:
+        """The loudest window, ``-inf`` of silence and ``nan`` of a clip with
+        samples that are not finite and no window without them."""
         values = self.finite
-        return float(np.max(values)) if values.size else float('-inf')
+        return float(np.max(values)) if values.size else self._none
 
     @property
     def min(self) -> float:
+        """The quietest window that is not silence; as :attr:`max` without one."""
         values = self.finite
-        return float(np.min(values)) if values.size else float('-inf')
+        return float(np.min(values)) if values.size else self._none
+
+    @property
+    def _none(self) -> float:
+        # a corrupt clip is not a silent one
+        return float('nan' if _unmeasured(self.lufs) else '-inf')
 
     def loudest(self) -> Tuple[float, float]:
         """``(seconds, lufs)`` of the loudest window; ``nan`` if all silent."""
@@ -303,23 +314,31 @@ class LoudnessCurve:
     def _extreme(self, pick) -> Tuple[float, float]:
         mask = np.isfinite(self.lufs)
         if not mask.any():
-            return (float('nan'), float('-inf'))
+            return (float('nan'), self._none)
         index = np.flatnonzero(mask)[pick(self.lufs[mask])]
         return (float(self.times[index]), float(self.lufs[index]))
 
     def spans_below(self, lufs: float,
                     min_seconds: float = 0.0) -> List[Tuple[float, float]]:
-        """Where the curve sits below *lufs*, as ``(start, end)`` seconds."""
-        return self._spans(self.lufs < lufs, min_seconds)
+        """Where the curve sits below *lufs*, as ``(start, end)`` seconds. ``inf`` is
+        every window, digital silence too, and ``-inf`` none."""
+        lufs = within(lufs, 'lufs', 'LoudnessCurve.spans_below', FeatureError, of=' of LUFS',
+                      inf=True)
+        return self._spans(self.lufs < lufs, min_seconds, 'LoudnessCurve.spans_below')
 
     def spans_above(self, lufs: float,
                     min_seconds: float = 0.0) -> List[Tuple[float, float]]:
-        """Where the curve sits above *lufs*, as ``(start, end)`` seconds."""
-        return self._spans(np.isfinite(self.lufs) & (self.lufs > lufs),
-                           min_seconds)
+        """Where the curve sits above *lufs*, as ``(start, end)`` seconds. ``-inf``
+        is every window that is not digital silence, and ``inf`` none."""
+        lufs = within(lufs, 'lufs', 'LoudnessCurve.spans_above', FeatureError, of=' of LUFS',
+                      inf=True)
+        return self._spans(np.isfinite(self.lufs) & (self.lufs > lufs), min_seconds,
+                           'LoudnessCurve.spans_above')
 
-    def _spans(self, mask: np.ndarray,
-               min_seconds: float) -> List[Tuple[float, float]]:
+    def _spans(self, mask: np.ndarray, min_seconds: float,
+               where: str) -> List[Tuple[float, float]]:
+        min_seconds = within(min_seconds, 'min_seconds', where, FeatureError, low=0,
+                             of=' of seconds')
         if not len(self):
             return []
         spans: List[Tuple[float, float]] = []
@@ -349,8 +368,11 @@ class LoudnessCurve:
         which is what stops a single door slam from setting the answer.
 
         ``0.0`` when nothing survives the gates: a silent clip has no range
-        rather than an undefined one.
+        rather than an undefined one. ``nan`` when a window could not be
+        measured, of a clip with samples that are not finite.
         """
+        if _unmeasured(self.lufs):
+            return float('nan')
         values = self.lufs[self.lufs > _ABSOLUTE_GATE]
         if values.size == 0:
             return 0.0
@@ -418,12 +440,15 @@ def loudness_over_time(y: np.ndarray, sr: int, *,
     >>> curve = kudio.loudness_over_time(y, sr)              # doctest: +SKIP
     >>> curve.quietest()                                     # doctest: +SKIP
     (12.4, -38.2)
+
+    :raises FeatureError: for samples that are not finite, as every measurement
+        of a curve, its maximum, its range, its spans, would be of them.
     """
     sr = sample_rate(sr, 'loudness_over_time', FeatureError)
-    if window <= 0 or hop <= 0:
-        raise FeatureError(f"window and hop must be positive, got "
-                           f"window={window}, hop={hop}")
-    data = _as_channels(y, 'loudness_over_time')
+    window = within(window, 'window', 'loudness_over_time', FeatureError, above=0,
+                    of=' of seconds')
+    hop = within(hop, 'hop', 'loudness_over_time', FeatureError, above=0, of=' of seconds')
+    data = finite(_as_channels(y, 'loudness_over_time'), 'loudness_over_time', FeatureError)
     n_channels = data.shape[1]
     if n_channels > len(_CHANNEL_WEIGHTS):
         raise FeatureError(f"loudness_over_time() handles up to "
@@ -441,10 +466,9 @@ def loudness_over_time(y: np.ndarray, sr: int, *,
     weights = np.array(_CHANNEL_WEIGHTS[:n_channels])
     with np.errstate(divide='ignore'):
         values = _OFFSET + 10.0 * np.log10(power @ weights)
-    _corrupt(data, "loudness_over_time()")
     starts = np.arange(len(values)) * step
     times = (starts + block / 2.0) / sr
-    return LoudnessCurve(values, times, int(sr), float(window), float(hop))
+    return LoudnessCurve(values, times, sr, window, hop)
 
 
 def loudness_range(y: np.ndarray, sr: int) -> float:
@@ -463,7 +487,7 @@ def loudness_range(y: np.ndarray, sr: int) -> float:
 
     Returns ``0.0`` when nothing survives the gates; a silent or very short
     clip has no range rather than an undefined one. A clip with NaN or inf in
-    it returns ``nan``, with a warning.
+    it is refused, as :func:`loudness_over_time` refuses it.
 
     If you already have the short-term curve, read
     :attr:`LoudnessCurve.range_lu` instead -- this builds one and asks it, and
@@ -473,8 +497,9 @@ def loudness_range(y: np.ndarray, sr: int) -> float:
     5.7
     """
     sr = sample_rate(sr, 'loudness_range', FeatureError)
+    y = finite(_as_channels(y, 'loudness_range'), 'loudness_range', FeatureError)
     curve = loudness_over_time(y, sr, window=SHORT_TERM, hop=CURVE_HOP)
-    return float('nan') if _unmeasured(curve.lufs) else curve.range_lu
+    return curve.range_lu
 
 
 def true_peak(y: np.ndarray, sr: int, *,
@@ -502,10 +527,8 @@ def true_peak(y: np.ndarray, sr: int, *,
         return float('-inf')
     if _corrupt(data, "true_peak()", "true peak"):
         return float('nan')
-    factor = int(oversample) if oversample is not None else max(
-        1, int(np.ceil(_TRUE_PEAK_SR / sr)))
-    if factor < 1:
-        raise FeatureError(f"oversample must be >= 1, got {oversample}")
+    factor = max(1, int(np.ceil(_TRUE_PEAK_SR / sr))) if oversample is None else \
+        count(oversample, 'oversample', 'true_peak', FeatureError)
 
     peak = _oversampled_peak(data, factor)
     return 20.0 * float(np.log10(peak)) if peak > 0 else float('-inf')
@@ -553,6 +576,7 @@ def normalize_lufs(y: np.ndarray, sr: int, lufs: float = -23.0,
     >>> quiet = kudio.normalize_lufs(y, sr, lufs=-23.0)      # doctest: +SKIP
     """
     sr = sample_rate(sr, 'normalize_lufs', FeatureError)
+    lufs = within(lufs, 'lufs', 'normalize_lufs', FeatureError, of=' of LUFS')
     y = channels_last(y, 'normalize_lufs', FeatureError)
     x, back = to_float(y, 'normalize_lufs', FeatureError)
     current = loudness(y, sr, block_size=block_size)

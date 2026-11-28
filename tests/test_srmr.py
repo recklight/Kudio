@@ -4,10 +4,7 @@ and the clips the measure refuses or cannot score."""
 from __future__ import annotations
 
 import math
-import subprocess
 import sys
-import textwrap
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -455,9 +452,8 @@ def test_norm_holds_every_energy_within_30_db_of_the_peak_channel_average(sr, fa
 
 @pytest.mark.parametrize("sr", [11025, 22050, 44100, 48000])
 def test_rates_the_measure_was_not_validated_at_are_refused(sr):
-    """The way out names a resampler that needs no librosa as well."""
-    with pytest.raises(ValueError, match=rf"8 and 16 kHz.*kudio\.resample.*"
-                                         rf"scipy\.signal\.resample_poly\(y, 16000, {sr}\)"):
+    with pytest.raises(ValueError, match=rf"8 and 16 kHz.*"
+                                         rf"kudio\.resample\(y, {sr}, 16000\)"):
         srmr(np.random.default_rng(0).standard_normal(sr), sr)
 
 
@@ -494,23 +490,3 @@ def test_bands_the_measure_cannot_use_are_refused(kwargs, match):
     90% rule can return."""
     with pytest.raises(ValueError, match=match):
         srmr(_voice(16000, 1.0), 16000, **kwargs)
-
-
-def test_the_measure_never_reaches_into_librosa():
-    """numpy and scipy only: with every attribute of librosa raising, from
-    before kudio is imported, all four modes still score."""
-    code = textwrap.dedent("""
-        import sys, types
-        class Refuse(types.ModuleType):
-            def __getattr__(self, name):
-                raise AssertionError("srmr() reached for librosa." + name)
-        sys.modules["librosa"] = Refuse("librosa")
-        import numpy as np
-        from kudio.core.srmr import srmr
-        y = np.random.default_rng(0).standard_normal(8000)
-        for fast in (False, True):
-            for norm in (False, True):
-                assert np.isfinite(srmr(y, 8000, fast=fast, norm=norm))
-    """)
-    subprocess.check_call([sys.executable, "-c", code],
-                          cwd=str(Path(__file__).resolve().parents[1]))

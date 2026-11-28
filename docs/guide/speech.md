@@ -4,7 +4,7 @@ Two questions come before almost anything else I do with a speech recording:
 where in it somebody is talking, and what pitch they are on.
 [`vad`][kudio.core.vad.vad] (voice activity detection) and its relatives
 answer the first, with nothing beyond numpy. [`f0`][kudio.core.pitch.f0]
-answers the second: it tracks the fundamental frequency with librosa's pYIN
+answers the second: it tracks the fundamental frequency with pYIN
 (probabilistic YIN) and keeps the voiced/unvoiced decision next to the pitch.
 
 | To | Use |
@@ -306,10 +306,11 @@ can hold no span and one under 40 ms is a single frame.
 
 ## Pitch with f0
 
-[`f0`][kudio.core.pitch.f0] runs pYIN (Mauch & Dixon 2014)[^pyin] through librosa
-and returns a [`PitchTrack`][kudio.core.pitch.PitchTrack]. It costs far more
-than `vad`: on my machine a minute of 16 kHz audio takes 1.3 to 2.6 s through
-`f0` and 0.04 to 0.07 s through `vad`, so to ask whether a file has a voice in
+[`f0`][kudio.core.pitch.f0] runs pYIN (Mauch & Dixon 2014)[^pyin], to the bit what
+`librosa.pyin` gives with its whole search, and returns a
+[`PitchTrack`][kudio.core.pitch.PitchTrack]. It costs far more
+than `vad`: on my machine a minute of 16 kHz audio takes 0.8 s through `f0`
+and 0.04 to 0.07 s through `vad`, so to ask whether a file has a voice in
 it at all, [`speech_ratio`][kudio.core.vad.speech_ratio] is the quicker
 question.
 

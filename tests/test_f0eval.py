@@ -524,7 +524,6 @@ def test_a_track_from_kudio_f0_scores_against_the_f0_it_was_made_with():
     """pYIN's track goes in as kudio.f0 hands it back, nan and all: a second
     of a harmonic tone gliding 2 semitones either side of 150 Hz, against
     that glide read at the track's frame times."""
-    pytest.importorskip("librosa")
     from kudio.core.pitch import f0
     sr = 16000
     t = np.arange(sr) / sr

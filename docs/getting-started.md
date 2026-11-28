@@ -10,7 +10,7 @@ see when something goes wrong: the exceptions and the logging.
 pip install kudio
 ```
 
-The core install brings numpy, scipy, librosa, soundfile, PyYAML, tqdm and
+The core install brings numpy, scipy, soundfile, soxr, PyYAML, tqdm and
 PyWavelets. That is enough for files, features, effects, loudness, the
 reference-free report, denoising, dataset synthesis and the metrics that need
 no outside package. `import kudio` imports none of the optional packages
@@ -19,13 +19,9 @@ below, so a missing extra shows up when you call the function that needs it
 before.
 
 WAV, FLAC, OGG, MP3, AIFF and the other formats libsndfile knows are read with
-that. m4a, aac, webm and the like take audioread (`pip install audioread`) and
-ffmpeg on the PATH, neither of which comes with kudio
+that. m4a, aac, webm and the like take the `compressed` extra and ffmpeg on
+the PATH, which pip does not install
 ([Audio files](guide/audio-files.md#formats-soundfile-does-not-read)).
-
-numpy is held below 2.6. The limit is numba's, not mine: librosa depends on
-numba, numba caps numpy, and asking pip for a newer numpy than numba accepts
-only gives it a problem it cannot solve. The cap moves when numba's does.
 
 kudio needs Python 3.9 or newer. CI tests it on 3.9, 3.11 and 3.13, on Linux
 and on Windows.
@@ -48,7 +44,8 @@ pip install "kudio[eval,viz]"
 | `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos] and [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808], predicted P.835 and P.808 opinion scores with no clean reference |
 | `viz` | matplotlib | the plotting helpers in [`kudio.util.visual`][kudio.util.visual] |
 | `data` | pandas, openpyxl | [`AudioEvaluate.get_df`][kudio.core.evaluator.AudioEvaluate.get_df] and [`per_file`][kudio.core.evaluator.AudioEvaluate.per_file], [`data2xlsx`][kudio.util.conv.data2xlsx] |
-| `all` | `audio`, `eval`, `dnsmos`, `viz`, `data` | every runtime extra except `pesq` |
+| `compressed` | audioread | m4a, aac, webm and whatever else ffmpeg decodes, wherever kudio reads a file ([Audio files](guide/audio-files.md#formats-soundfile-does-not-read)); ffmpeg itself has to be on the PATH |
+| `all` | `audio`, `eval`, `dnsmos`, `viz`, `data`, `compressed` | every runtime extra except `pesq` |
 
 `[dev]`, `[check]` and `[docs]` are for working on kudio rather than with it,
 and `[all]` leaves them out as well. Four of the others have a catch:

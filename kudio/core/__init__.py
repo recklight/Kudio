@@ -25,6 +25,7 @@ from kudio.core.feature import (
     file_to_spectrogram,
     frame_windows,
     logspec_from_files,
+    mel_band_hz,
     melspectrogram,
     mfcc,
     mfcc_from_files,
@@ -215,8 +216,8 @@ __all__ = [
     # feature (canonical)
     'STFT', 'Standardizer', 'stack_context', 'ContextFrames', 'frame_windows',
     'denoise_spec2wav', 'denoise_wav2spec', 'features2matrix',
-    'file_to_spectrogram', 'logspec_from_files', 'melspectrogram', 'mfcc',
-    'mfcc_from_files', 'save_spectrogram_as_wave', 'spectrogram_to_waveform',
+    'file_to_spectrogram', 'logspec_from_files', 'mel_band_hz', 'melspectrogram',
+    'mfcc', 'mfcc_from_files', 'save_spectrogram_as_wave', 'spectrogram_to_waveform',
     'waveform_to_spectrogram', 'wave_separate', 'wave_slicing',
     # feature (deprecated aliases)
     'concat_logspec', 'concat_logspec_', 'concat_mfcc', 'concat_mfcc_',

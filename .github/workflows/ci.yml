@@ -35,6 +35,64 @@ jobs:
       - name: Run tests
         run: pytest -q
 
+  oldest:
+    # Every floor pyproject.toml names, all at once. pip leaves a release that
+    # is there already alone, so someone with an old scientific stack runs on
+    # these, and a floor nobody runs is a claim.
+    runs-on: ubuntu-24.04            # the last with a Python 3.9
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.9"
+      - name: Install the oldest of everything
+        run: |
+          python -m pip install --upgrade pip
+          pip install "numpy==1.24.*" "scipy==1.10.*" "soundfile==0.12.*" \
+                      "soxr==0.3.2" "PyYAML==6.0" "tqdm==4.60.*" "PyWavelets==1.4.*" \
+                      "matplotlib==3.7.*" "pandas==2.0.*" "openpyxl==3.1.*"
+          pip install -e .[dev,viz]
+      - name: What is installed is what was asked for
+        run: |
+          pip list
+          python -c "import numpy, scipy; assert numpy.__version__.startswith('1.24.') and scipy.__version__.startswith('1.10.')"
+      - name: Run tests
+        run: pytest -q
+
+  librosa:
+    # tests/test_against_librosa.py, which holds what kudio computes against what
+    # librosa does: to the bit, for the most part. kudio does not use librosa,
+    # and on the other legs but backends these tests skip.
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONUTF8: "1"
+      # with no librosa, or with another, the run stops: a job of nothing but
+      # skips would pass and prove nothing
+      KUDIO_REQUIRE_LIBROSA: ${{ matrix.librosa }}
+      # every case before a release, and a sample of them on a push
+      KUDIO_LIBROSA_CASES: ${{ startsWith(github.ref, 'refs/tags/v') && 'all' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python-version: "3.11", librosa: "0.11"}
+          - {os: ubuntu-latest, python-version: "3.13", librosa: "1.0"}
+          - {os: windows-latest, python-version: "3.13", librosa: "1.0"}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install with librosa ${{ matrix.librosa }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev,viz,check] "librosa==${{ matrix.librosa }}.*"
+      - name: Compare
+        run: pytest -rs tests/test_against_librosa.py
+
   backends:
     # The one leg where the optional metric back-ends are really installed.
     # [dev] is deliberately small, so on the legs above, the mir_eval and
@@ -64,8 +122,7 @@ jobs:
   compressed:
     # m4a, aac, webm and the rest of what soundfile does not read, against a
     # real ffmpeg. On the legs above the tests of it run on a stand-in for
-    # audioread alone. Python 3.13 because librosa 1.0, which installs there,
-    # does not bring audioread: what pip installs here is all there is.
+    # audioread alone.
     runs-on: ubuntu-latest
     env:
       # a test that skips for want of ffmpeg or audioread fails instead: a job
@@ -83,7 +140,7 @@ jobs:
       - name: Install with audioread
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[dev,viz] audioread
+          pip install -e .[dev,viz,compressed]
       - name: Read every compressed format (they must run, not skip)
         run: pytest -rs tests/test_compressed.py
 
@@ -135,7 +192,7 @@ jobs:
 
   publish:
     # build sdist+wheel and upload to PyPI when a v* tag is pushed
-    needs: [test, backends, compressed]
+    needs: [test, oldest, librosa, backends, compressed]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: pypi

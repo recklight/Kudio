@@ -9,19 +9,15 @@
 pip install kudio
 ```
 
-核心安裝會帶入 numpy、scipy、librosa、soundfile、PyYAML、tqdm 和 PyWavelets。
+核心安裝會帶入 numpy、scipy、soundfile、soxr、PyYAML、tqdm 和 PyWavelets。
 這樣就夠處理檔案、特徵、效果、響度、不需參考訊號的檢查報告、降噪、資料集合成，以及
 不需要外部套件的那些指標。`import kudio` 不會匯入下面任何一個選用套件，所以缺少某個
 選用套件組時，要到你呼叫需要它的函式時才會發現（畫圖工具則是在匯入
 `kudio.util.visual` 的時候），不會提早。
 
 WAV、FLAC、OGG、MP3、AIFF 和 libsndfile 認得的其他格式，這樣就能讀。m4a、aac、webm
-之類的格式還要 audioread（`pip install audioread`）和 PATH 上的 ffmpeg，兩樣都不隨 kudio
-安裝（[音訊檔案](guide/audio-files.md#formats-soundfile-does-not-read)）。
-
-numpy 的版本上限是 2.6 以下。這個限制來自 numba，不是我：librosa 相依於 numba，
-numba 限制了 numpy 的版本，要求 pip 裝一個比 numba 能接受的還新的 numpy，只會給它
-一個解不開的問題。numba 的上限往上調時，這裡也會跟著調。
+之類的格式還要 `compressed` 這組選用套件，以及 PATH 上的 ffmpeg，ffmpeg 不是 pip
+裝得了的（[音訊檔案](guide/audio-files.md#formats-soundfile-does-not-read)）。
 
 kudio 需要 Python 3.9 以上。CI 在 Linux 和 Windows 上用 3.9、3.11 和 3.13 測試。
 
@@ -42,7 +38,8 @@ pip install "kudio[eval,viz]"
 | `dnsmos` | onnxruntime | [`dnsmos`][kudio.core.dnsmos.dnsmos] 和 [`dnsmos_p808`][kudio.core.dnsmos.dnsmos_p808]，不需乾淨參考訊號的 P.835 和 P.808 主觀分數預測 |
 | `viz` | matplotlib | [`kudio.util.visual`][kudio.util.visual] 裡的畫圖工具 |
 | `data` | pandas、openpyxl | [`AudioEvaluate.get_df`][kudio.core.evaluator.AudioEvaluate.get_df] 和 [`per_file`][kudio.core.evaluator.AudioEvaluate.per_file]、[`data2xlsx`][kudio.util.conv.data2xlsx] |
-| `all` | `audio`、`eval`、`dnsmos`、`viz`、`data` | 除了 `pesq` 以外的所有執行期套件組 |
+| `compressed` | audioread | m4a、aac、webm，以及其他 ffmpeg 解得開的格式，kudio 每個讀檔的地方都一樣（[音訊檔案](guide/audio-files.md#formats-soundfile-does-not-read)）；ffmpeg 本身要在 PATH 上 |
+| `all` | `audio`、`eval`、`dnsmos`、`viz`、`data`、`compressed` | 除了 `pesq` 以外的所有執行期套件組 |
 
 `[dev]`、`[check]` 和 `[docs]` 是開發 kudio 本身用的，不是拿 kudio 來做事用的，
 `[all]` 也不包含它們。其餘當中有四組要特別注意：

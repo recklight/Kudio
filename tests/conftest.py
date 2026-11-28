@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import os
+
 import numpy as np
 import pytest
 from scipy.io import wavfile
@@ -42,6 +44,31 @@ def make_speech(sr: int = SR, seconds: float = 6.0, seed: int = 0) -> np.ndarray
     y[sr:2 * sr] += burst(sr, 120.0)
     y[int(3.5 * sr):int(4.8 * sr)] += burst(int(1.3 * sr), 150.0)
     return y
+
+
+def pytest_sessionstart(session):
+    """Stop a run that is there to hold kudio against librosa and cannot:
+    ``KUDIO_REQUIRE_LIBROSA=0.11`` with no librosa, or with another one. Every
+    such test skips where librosa is missing, and a CI job of nothing but skips
+    passes."""
+    wanted = os.environ.get("KUDIO_REQUIRE_LIBROSA")
+    if not wanted:
+        return
+    try:
+        import librosa
+    except ImportError as e:
+        raise pytest.UsageError(f"KUDIO_REQUIRE_LIBROSA={wanted}, and librosa does not "
+                                f"import: {e}") from e
+    found = librosa.__version__
+    if found != wanted and not found.startswith(f"{wanted}."):
+        raise pytest.UsageError(f"KUDIO_REQUIRE_LIBROSA={wanted}, and librosa {found} is "
+                                f"installed")
+
+
+@pytest.fixture(scope="session")
+def librosa():
+    """librosa, for a test that compares with it; skipped without."""
+    return pytest.importorskip("librosa")
 
 
 @pytest.fixture

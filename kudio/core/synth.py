@@ -33,6 +33,7 @@ import contextlib
 import itertools
 import logging
 import math
+import operator
 import os
 import secrets
 import shutil
@@ -42,19 +43,19 @@ import time
 import zlib
 import warnings
 from functools import lru_cache, partial
-from multiprocessing import Pool
 from pathlib import Path, PurePath
 from typing import (Any, Dict, Iterable, Iterator, List, NamedTuple, Optional, Sequence, Set,
                     Tuple, Union)
 
 import numpy as np
 
-from kudio import _optional
-from kudio._progress import tqdm, trange
+from kudio._numbers import flag, whole, within
+from kudio._progress import tqdm
+from kudio._workers import Workers, chunk_of
 from kudio.core.dataset import Pair
 from kudio.core.io import (PathLike, _abspath, _check_rate, _is_fixed_point, _read_mono,
-                           _reason, _relative, _resampled_length, _source_root, audio_info,
-                           check_input, resample, save_wave)
+                           _reason, _relative, _resampled_length, _source_root, _soxr,
+                           audio_info, check_input, resample, save_wave)
 from kudio.exceptions import AudioIOError, DependencyError, FeatureError, SynthesisError
 
 __all__ = ['Synthesizer']
@@ -123,7 +124,7 @@ def _file_seed(base: int, out, root) -> int:
 
 def _load(path, sr: Optional[int], what: str) -> Tuple[np.ndarray, int]:
     """One input file, or a SynthesisError that names it and says what is
-    wrong with it: unreadable, or NaN or inf in the samples. A missing librosa
+    wrong with it: unreadable, or NaN or inf in the samples. A missing soxr
     is not a bad file, so it is passed on as it is."""
     try:
         y, rate = _read_mono(path)
@@ -359,6 +360,7 @@ class Synthesizer:
                  write_targets: bool = False,
                  root: Optional[PathLike] = None,
                  subtype: str = 'PCM_16'):
+        write_targets = flag(write_targets, 'write_targets', 'Synthesizer', ValueError)
         for what, given in (('clean', clean), ('noise', noise)):
             if isinstance(given, (str, PurePath)) and not Path(given).exists():
                 raise FileNotFoundError(f"{what} input not found: {str(given)!r}")
@@ -447,6 +449,7 @@ class Synthesizer:
     def waveform(self, is_pool: bool = False
                  ) -> Tuple[List[Tuple[np.ndarray, int]], List[Tuple[np.ndarray, int]]]:
         """Load the clean and noise file lists into waveform data."""
+        is_pool = flag(is_pool, 'is_pool', 'Synthesizer.waveform', ValueError)
         from kudio.core.io import load_waves
         return (load_waves(self.cleanWaves, use_pool=is_pool),
                 load_waves(self.noiseWaves, use_pool=is_pool))
@@ -502,6 +505,11 @@ class Synthesizer:
             -- and records it in :attr:`seed`. The global RNG is never
             reseeded.
         """
+        mkdir_parents = flag(mkdir_parents, 'mkdir_parents', 'Synthesizer.syn', ValueError)
+        is_add_clean = flag(is_add_clean, 'is_add_clean', 'Synthesizer.syn', ValueError)
+        overwrite = flag(overwrite, 'overwrite', 'Synthesizer.syn', ValueError)
+        is_pool = flag(is_pool, 'is_pool', 'Synthesizer.syn', ValueError)
+        is_silence = flag(is_silence, 'is_silence', 'Synthesizer.syn', ValueError)
         if mode in ('max', 'extra'):
             raise ValueError("Use 'syn_extra_mode' to run extra mode.")
         if mode not in ('reg', 'regular', 'inc', 'increment'):
@@ -539,6 +547,13 @@ class Synthesizer:
         base = self._base_seed(seed)
         rng = np.random.default_rng(base)
 
+        if is_silence:
+            p_silence = within(p_silence, 'p_silence', 'Synthesizer.syn', low=0, high=1)
+        wanted = whole(rdn_choice_num)
+        if wanted is None or wanted < 0:
+            raise ValueError(f"Synthesizer.syn(): rdn_choice_num is a whole number of clean files, "
+                             f"or 0 for all of them, got {rdn_choice_num!r}")
+        rdn_choice_num = wanted
         # optionally sample N clean files at random
         if rdn_choice_num > len(self.cleanWaves):
             warnings.warn(f"rdn_choice_num={rdn_choice_num} asks for more clean "
@@ -611,7 +626,7 @@ class Synthesizer:
         entries = self._one_clean_per_name(entries, mkdir_parents)
         self._warn_collisions([out for out, *_ in entries], mkdir_parents)
         silent: Set[Path] = set()
-        if is_silence and 0 < p_silence < 1:
+        if is_silence and p_silence > 0:
             extra = self._silence_share(entries, rng, p_silence)
             silent = {out for out, *_ in extra}
             entries += extra
@@ -724,6 +739,7 @@ class Synthesizer:
             more than 200 files. A pool needs the calling script's top level
             behind ``if __name__ == '__main__':`` on Windows and macOS.
         """
+        is_pool = flag(is_pool, 'is_pool', 'Synthesizer.syn_extra_mode', ValueError)
         if isinstance(background_snr, str):
             raise TypeError("background_snr can't be str")
         bgSNR = list(background_snr) if hasattr(background_snr, '__iter__') else [background_snr]
@@ -744,7 +760,7 @@ class Synthesizer:
                  for what, files in (('clean', cleanWaves), ('noise', self.noiseWaves),
                                      ('background', bgNoiseWaves)) for f in files}
         if len(rates) > 1:
-            _optional.librosa()
+            _soxr()                              # asked for before anything is emptied
 
         def name(cln, nos, snr) -> str:
             tag = f"n{_snr_text(snr)}" if float(snr) < 0 else _snr_text(snr)
@@ -810,12 +826,17 @@ class Synthesizer:
 
     @staticmethod
     def _base_seed(seed: Optional[int]) -> int:
-        if seed is not None and int(seed) < 0:
-            raise ValueError(f"seed must be >= 0, got {seed}")
         # drawn from, never written to: a caller's own np.random.seed() still
         # decides it, and nothing the caller draws afterwards moves
-        return int(seed) if seed is not None else \
-            int(np.random.randint(0, 2 ** 31 - 1))
+        if seed is None:
+            return int(np.random.randint(0, 2 ** 31 - 1))
+        try:
+            base = int(operator.index(seed))          # a long one keeps all its digits
+        except TypeError:
+            base = whole(seed)
+        if base is None or base < 0:
+            raise ValueError(f"seed must be >= 0, a whole number, got {seed!r}")
+        return base
 
     @staticmethod
     def _check_any(*lists: Sequence) -> None:
@@ -865,7 +886,7 @@ class Synthesizer:
                 if not _room_fits(sr, rt60_s, drr_db, room_seed):
                     rir(sr, rt60=rt60_s, drr_db=drr_db, seed=room_seed)
         if resampled:
-            _optional.librosa()
+            _soxr()                              # asked for before anything is emptied
 
         spec = channel_spec(self.channel) if channels else {}
         if spec:
@@ -1110,8 +1131,8 @@ class Synthesizer:
         if not wanted:
             yield None
             return
-        with Pool(8) as pool:
-            pool.apply(int)
+        with Workers(8, 'Synthesizer', SynthesisError) as pool:
+            pool.answer()
             yield pool
 
     @staticmethod
@@ -1128,7 +1149,9 @@ class Synthesizer:
                       silent=silent or None, subtype=subtype)
         if pool is not None:
             fcn = partial(Synthesizer.syn_waves, entries, False, sr, **kwargs)
-            return pool.map(fcn, trange(len(entries), desc="[kudio] Audio synthesis"))
+            n = len(entries)
+            return list(tqdm(pool.imap(fcn, range(n), chunk_of(n, pool.n)), total=n,
+                             desc="[kudio] Audio synthesis"))
         return [Synthesizer.syn_waves(wave, False, sr, **kwargs)
                 for wave in tqdm(entries, desc="[kudio] Audio synthesis")]
 

@@ -1306,7 +1306,9 @@ def score_dataset(deg: Union[PathLike, Mapping[str, PathLike]], *,
         ``id speaker`` per line, as a Kaldi utt2spk), a compiled regular
         expression whose first group is taken from the id, a dict from id to
         speaker, or a function of the id.
-    :param jobs: items scored at once, each in a process of its own.
+    :param jobs: items scored at once, each in a process of its own; on Windows
+        before Python 3.13 31 at most, and the BLAS threads are shared out among
+        the processes there are.
     :param confidence: the level of every interval, as
         :func:`kudio.bootstrap_ci` takes it.
     :param n_resamples: the resamples of every interval, and the most sign
@@ -1397,7 +1399,8 @@ def _score_dataset(deg, reference, baseline, metrics, sr, pesq_mode, pesq_scale,
             if name in names:
                 models[name] = str(find_dnsmos_model(dnsmos_dir, model=kind))
     _check_rates(names, rate, pesq_mode, pesq_scale, models, sr is not None)
-    workers = min(int(jobs), len(ids))
+    from kudio._workers import most
+    workers = most(min(int(jobs), len(ids)))
     _open_models(models, keep=workers <= 1)
 
     plan = _Plan(sr=rate, resample=sr is not None,
@@ -1479,12 +1482,12 @@ def _run(tasks: List[Tuple[Any, ...]], workers: int) -> List[Dict[str, Any]]:
     from kudio._progress import tqdm
     desc = "[kudio] Scoring"
     if workers > 1:
-        import multiprocessing
+        from kudio._workers import Workers
         chunk = max(1, min(16, len(tasks) // (workers * 4)))
         # the workers read the variables as they import numpy, which they do
         # as the pool starts them
         with _worker_threads(workers), \
-                multiprocessing.get_context('spawn').Pool(workers) as pool:
-            return list(tqdm(pool.imap(_score_item, tasks, chunksize=chunk),
+                Workers(workers, 'score_dataset()', method='spawn') as pool:
+            return list(tqdm(pool.imap(_score_item, tasks, chunk),
                              total=len(tasks), desc=desc))
     return [_score_item(task) for task in tqdm(tasks, desc=desc)]
